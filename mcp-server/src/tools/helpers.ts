@@ -57,7 +57,14 @@ export function enrichRecipeList(
         : {};
 
     const hasJeiDescription = Array.isArray(rec.description) && rec.description.length > 0;
-    const parsedCleanly = Boolean(nativeParsed || builtinModResult.parsed || hasJeiDescription);
+    const hasUnparsed = Boolean(
+      nativeParsed?.hasUnparsedFields || builtinModResult.parsed?.hasUnparsedFields,
+    );
+    const parsedCleanly = Boolean(
+      ((nativeParsed && !nativeParsed.hasUnparsedFields) ||
+        (builtinModResult.parsed && !builtinModResult.parsed.hasUnparsedFields) ||
+        hasJeiDescription),
+    );
 
     return {
       origin,
@@ -72,7 +79,7 @@ export function enrichRecipeList(
       modParsed: builtinModResult.parsed ?? undefined,
       parserVersionMismatch: builtinModResult.versionMismatch ?? undefined,
       description: hasJeiDescription ? rec.description : undefined,
-      rawJson: !parsedCleanly || includeRaw ? rec.rawJson : undefined,
+      rawJson: !parsedCleanly || hasUnparsed || includeRaw ? rec.rawJson : undefined,
       pojoSnapshot: rec.pojoSnapshot,
       jeiIngredients:
         origin === 'jei'

@@ -41,18 +41,21 @@ export function parseWithBuiltinModParser(
   rawJson: unknown,
   loadedVersions?: LoadedModsVersionMap,
 ): ModParserResult {
+  let firstMismatch: ModParserResult['versionMismatch'];
+
   for (const parser of BUILTIN_MOD_PARSERS) {
     if (!parserAcceptsType(parser, recipeType)) continue;
 
     if (!matchesModVersion(parser.modId, parser.modVersionRange, loadedVersions)) {
-      return {
-        versionMismatch: {
+      if (!firstMismatch) {
+        firstMismatch = {
           parserId: parser.id,
           modId: parser.modId,
           expectedRange: parser.modVersionRange,
           actualVersion: loadedVersions?.get(parser.modId) ?? 'unknown',
-        },
-      };
+        };
+      }
+      continue;
     }
 
     const parsed = parser.parse(recipeType, rawJson);
@@ -60,13 +63,14 @@ export function parseWithBuiltinModParser(
       return { parsed };
     }
   }
-  return {};
+
+  return firstMismatch ? { versionMismatch: firstMismatch } : {};
 }
 
 export function listBuiltinModParsers(loadedVersions?: LoadedModsVersionMap) {
   return BUILTIN_MOD_PARSERS.map((p) => {
     const loadedVersion = loadedVersions?.get(p.modId);
-    const modLoaded = loadedVersions ? loadedVersions.has(p.modId) : undefined;
+    const modLoaded = loadedVersions ? loadedVersions.has(p.modId) : false;
     const versionCompatible = matchesModVersion(p.modId, p.modVersionRange, loadedVersions);
     return {
       id: p.id,

@@ -3,6 +3,7 @@ export interface ModIngredient {
   id: string;
   amount?: number;
   chance?: number;
+  components?: unknown;
   slotOrRole?: string;
 }
 
@@ -17,9 +18,11 @@ export interface ModParsedRecipe {
   catalysts?: ModIngredient[];
   durationTicks?: number;
   energy?: number;
+  energyUnit?: string;
   conditions?: string[];
   steps?: string[];
   extra?: Record<string, unknown>;
+  hasUnparsedFields?: boolean;
 }
 
 export interface BuiltinModParser {
@@ -88,29 +91,55 @@ export function extractModIngredient(
         ? raw.amount
         : defaultAmount;
   const chance = typeof raw.chance === 'number' ? raw.chance : undefined;
+  const components = raw.components;
+
+  // Create 6 fluid tag input: { type: "fluid_tag", fluid_tag: "c:...", amount: 250 }
+  if (typeof raw.fluid_tag === 'string') {
+    const tagId = raw.fluid_tag.startsWith('#') ? raw.fluid_tag : `#${raw.fluid_tag}`;
+    return [{ kind: forcedKind === 'auto' ? 'fluid' : forcedKind, id: tagId, amount, chance, components, slotOrRole }];
+  }
 
   if (typeof raw.chemical === 'string') {
-    return [{ kind: forcedKind === 'auto' ? 'chemical' : forcedKind, id: raw.chemical, amount, chance, slotOrRole }];
+    return [{ kind: forcedKind === 'auto' ? 'chemical' : forcedKind, id: raw.chemical, amount, chance, components, slotOrRole }];
   }
   if (typeof raw.fluid === 'string') {
-    return [{ kind: forcedKind === 'auto' ? 'fluid' : forcedKind, id: raw.fluid, amount, chance, slotOrRole }];
+    return [{ kind: forcedKind === 'auto' ? 'fluid' : forcedKind, id: raw.fluid, amount, chance, components, slotOrRole }];
   }
   if (isRecord(raw.fluid)) {
-    return extractModIngredient(raw.fluid, 'fluid', slotOrRole, amount).map((i) => ({ ...i, chance: chance ?? i.chance }));
+    return extractModIngredient(raw.fluid, 'fluid', slotOrRole, amount).map((i) => ({
+      ...i,
+      chance: chance ?? i.chance,
+      components: components ?? i.components,
+    }));
   }
   if (typeof raw.tag === 'string') {
     const tagId = raw.tag.startsWith('#') ? raw.tag : `#${raw.tag}`;
-    return [{ kind: forcedKind === 'auto' ? 'tag' : forcedKind, id: tagId, amount, chance, slotOrRole }];
+    return [{ kind: forcedKind === 'auto' ? 'tag' : forcedKind, id: tagId, amount, chance, components, slotOrRole }];
   }
 
   const idStr = typeof raw.item === 'string' ? raw.item : typeof raw.id === 'string' ? raw.id : undefined;
   if (idStr) {
-    const kind: ModIngredient['kind'] =
-      forcedKind !== 'auto' ? forcedKind : idStr.startsWith('#') ? 'tag' : 'item';
-    return [{ kind, id: idStr, amount, chance, slotOrRole }];
+    const inferredKind: ModIngredient['kind'] =
+      forcedKind !== 'auto'
+        ? forcedKind
+        : idStr.startsWith('#')
+          ? 'tag'
+          : typeof raw.amount === 'number' && raw.count === undefined && raw.type === 'fluid_stack'
+            ? 'fluid'
+            : 'item';
+    return [{ kind: inferredKind, id: idStr, amount, chance, components, slotOrRole }];
   }
 
-  return [{ kind: forcedKind === 'auto' ? 'custom' : forcedKind, id: JSON.stringify(raw), amount, chance, slotOrRole }];
+  return [
+    {
+      kind: forcedKind === 'auto' ? 'custom' : forcedKind,
+      id: JSON.stringify(raw),
+      amount,
+      chance,
+      components,
+      slotOrRole,
+    },
+  ];
 }
 
 export function extractShapedPatternInputs(rawJson: Record<string, unknown>): ModIngredient[] {

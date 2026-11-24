@@ -35,7 +35,7 @@ export const farmersDelightParser: BuiltinModParser = {
     if (recipeType === 'farmersdelight:cutting') {
       const catalysts: ModIngredient[] = [];
       if (rawJson.tool !== undefined) {
-        catalysts.push(...extractModIngredient(rawJson.tool, 'custom', 'tool'));
+        catalysts.push(...extractModIngredient(rawJson.tool, 'auto', 'tool'));
       }
       return {
         parserId: this.id,

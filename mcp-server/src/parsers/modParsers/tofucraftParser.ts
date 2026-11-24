@@ -22,6 +22,7 @@ export const tofucraftParser: BuiltinModParser = {
   recipeTypeExamples: [
     'tofucraft:bittern',
     'tofucraft:harder',
+    'tofucraft:harden',
     'tofucraft:tofu_pot_shapeless',
     'tofucraft:tf_craft_shapeless',
     'tofucraft:tf_craft_shaped',
@@ -87,6 +88,7 @@ export const tofucraftParser: BuiltinModParser = {
         outputs: extractModIngredient(rawJson.result, 'item', 'result'),
         durationTicks: typeof rawJson.cook_time === 'number' ? rawJson.cook_time : undefined,
         energy: typeof rawJson.tf === 'number' ? rawJson.tf : undefined,
+        energyUnit: typeof rawJson.tf === 'number' ? 'TF' : undefined,
       };
     }
 

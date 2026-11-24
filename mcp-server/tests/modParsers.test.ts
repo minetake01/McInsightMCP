@@ -56,7 +56,7 @@ describe('modParsers (version-scoped built-in major mod parsers)', () => {
       compatibleVersions,
     );
     expect(seq.parsed?.steps).toHaveLength(2);
-    expect(seq.parsed?.conditions).toEqual(['loops: 5']);
+    expect(seq.parsed?.conditions).toEqual(['loops: 5 (per-step inputs repeat each loop)']);
   });
 
   it('parses Mekanism 10.7 purifying, enriching, and dissolution recipes', () => {

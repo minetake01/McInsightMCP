@@ -115,7 +115,8 @@ describe('nativeParsers', () => {
     });
 
     expect(loot).not.toBeNull();
-    expect(loot?.pools[0]?.entries.map((e) => e.name).filter(Boolean)).toEqual([
+    expect(loot?.pools[0]?.entries[0]?.type).toBe('minecraft:alternatives');
+    expect(loot?.pools[0]?.entries[0]?.children?.map((e) => e.name)).toEqual([
       'minecraft:iron_ore',
       'minecraft:raw_iron',
     ]);
@@ -133,7 +134,12 @@ describe('nativeParsers', () => {
       targetLootTables: ['minecraft:chests/shipwreck_treasure'],
       injectedTable: 'tofucraft:injections/tofustick',
       items: undefined,
-      conditions: ['neoforge:loot_table_id'],
+      conditions: [
+        {
+          condition: 'neoforge:loot_table_id',
+          params: { loot_table_id: 'minecraft:chests/shipwreck_treasure' },
+        },
+      ],
     });
 
     const bm = parseNativeBiomeModifier('ars_nouveau:whirlisprig_spawn', {

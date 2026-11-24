@@ -157,21 +157,24 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
               hasMore: raw.hasMore,
               entries: raw.entries.map((entry) => {
                 const nativeParsed = parseNativeLootTable(entry.id, entry.rawJson) ?? undefined;
+                const keepRaw = !nativeParsed || nativeParsed.hasUnparsedFields || includeRaw;
                 return {
                   id: entry.id,
                   modId: entry.modId,
                   source: entry.source,
                   nativeParsed,
-                  rawJson: !nativeParsed || includeRaw ? entry.rawJson : undefined,
+                  rawJson: keepRaw ? entry.rawJson : undefined,
                 };
               }),
               lootModifiers: raw.lootModifiers?.map((m) => {
-                const parsed = parseNativeLootModifier(m.id, m.rawJson) ?? undefined;
+                const meta = m as { id: string; modId: string; type?: string; injectedTable?: string; targetTables?: string[]; rawJson?: unknown };
+                const nativeParsed = parseNativeLootModifier(m.id, m.rawJson, meta) ?? undefined;
+                const keepRaw = !nativeParsed || nativeParsed.hasUnparsedFields || includeRaw;
                 return {
                   id: m.id,
                   modId: m.modId,
-                  parsed,
-                  rawJson: !parsed || includeRaw ? m.rawJson : undefined,
+                  nativeParsed,
+                  rawJson: keepRaw ? m.rawJson : undefined,
                 };
               }),
             };
@@ -328,21 +331,24 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
 
         const enriched = raw.entries.map((entry) => {
           const nativeParsed = parseNativeLootTable(entry.id, entry.rawJson) ?? undefined;
+          const keepRaw = !nativeParsed || nativeParsed.hasUnparsedFields || includeRaw;
           return {
             id: entry.id,
             modId: entry.modId,
             source: entry.source,
             nativeParsed,
-            rawJson: !nativeParsed || includeRaw ? entry.rawJson : undefined,
+            rawJson: keepRaw ? entry.rawJson : undefined,
           };
         });
         const enrichedModifiers = raw.lootModifiers?.map((m) => {
-          const parsed = parseNativeLootModifier(m.id, m.rawJson) ?? undefined;
+          const meta = m as { id: string; modId: string; type?: string; injectedTable?: string; targetTables?: string[]; rawJson?: unknown };
+          const nativeParsed = parseNativeLootModifier(m.id, m.rawJson, meta) ?? undefined;
+          const keepRaw = !nativeParsed || nativeParsed.hasUnparsedFields || includeRaw;
           return {
             id: m.id,
             modId: m.modId,
-            parsed,
-            rawJson: !parsed || includeRaw ? m.rawJson : undefined,
+            nativeParsed,
+            rawJson: keepRaw ? m.rawJson : undefined,
           };
         });
         return jsonText({
@@ -417,12 +423,13 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
 
       const enriched = raw.entries.map((entry) => {
         const nativeParsed = parseNativeWorldgen(entry.kind, entry.id, entry.rawJson) ?? undefined;
+        const keepRaw = !nativeParsed || nativeParsed.hasUnparsedFields || includeRaw;
         return {
           id: entry.id,
           modId: entry.modId,
           kind: entry.kind,
           nativeParsed,
-          rawJson: !nativeParsed || includeRaw ? entry.rawJson : undefined,
+          rawJson: keepRaw ? entry.rawJson : undefined,
         };
       });
       return jsonText({

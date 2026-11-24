@@ -23,6 +23,35 @@ const PROCESSING_MECHANISMS: Record<string, string> = {
   'create:item_application': 'Create Item Application (world block click / Deployer)',
 };
 
+function extractCreateResults(raw: unknown, role: string): ModIngredient[] {
+  if (raw === undefined || raw === null) return [];
+  const arr = Array.isArray(raw) ? raw : [raw];
+  const out: ModIngredient[] = [];
+  for (const el of arr) {
+    if (isRecord(el) && typeof el.id === 'string' && typeof el.amount === 'number' && el.count === undefined) {
+      out.push({
+        kind: 'fluid',
+        id: el.id,
+        amount: el.amount,
+        chance: typeof el.chance === 'number' ? el.chance : undefined,
+        components: el.components,
+        slotOrRole: role,
+      });
+    } else {
+      out.push(...extractModIngredient(el, 'auto', role));
+    }
+  }
+  return out;
+}
+
+function getIngredientPrimaryId(raw: unknown): string | undefined {
+  if (!isRecord(raw)) return undefined;
+  if (typeof raw.id === 'string') return raw.id;
+  if (typeof raw.item === 'string') return raw.item;
+  if (typeof raw.fluid === 'string') return raw.fluid;
+  return undefined;
+}
+
 export const createParser: BuiltinModParser = {
   id: 'builtin_create_6',
   name: 'Create 6.x Processing & Assembly',
@@ -56,21 +85,42 @@ export const createParser: BuiltinModParser = {
 
     if (recipeType === 'create:sequenced_assembly') {
       const sequence = Array.isArray(rawJson.sequence) ? rawJson.sequence : [];
+      const transitionalId = getIngredientPrimaryId(rawJson.transitional_item);
+      const loops = typeof rawJson.loops === 'number' ? rawJson.loops : 1;
       const steps: string[] = [];
       const extraStepInputs: ModIngredient[] = [];
+      const stepDetails: Array<Record<string, unknown>> = [];
+
       for (let i = 0; i < sequence.length; i++) {
         const step = sequence[i];
         if (!isRecord(step)) continue;
         const stepType = typeof step.type === 'string' ? step.type : 'unknown';
-        const stepIngs = Array.isArray(step.ingredients)
-          ? step.ingredients.slice(1).flatMap((x) => extractModIngredient(x, 'auto', `step_${i + 1}`))
-          : [];
+        const rawStepIngs = Array.isArray(step.ingredients) ? step.ingredients : [];
+        // Exclude the transitional item placeholder without blindly dropping index 0 if absent
+        const filteredIngs = rawStepIngs.filter((x) => {
+          const xId = getIngredientPrimaryId(x);
+          return !transitionalId || xId !== transitionalId;
+        });
+        const stepIngs = filteredIngs.flatMap((x) => extractModIngredient(x, 'auto', `step_${i + 1}`));
         extraStepInputs.push(...stepIngs);
+
+        const stepExtras: string[] = [];
+        if (typeof step.processing_time === 'number') stepExtras.push(`${step.processing_time}t`);
+        if (step.keep_held_item === true) stepExtras.push('keep_held_item');
+
         const ingDesc = stepIngs.map((x) => `${x.id}${x.amount ? `x${x.amount}` : ''}`).join(', ');
-        steps.push(`Step ${i + 1}: ${stepType}${ingDesc ? ` (+ ${ingDesc})` : ''}`);
+        const extraDesc = stepExtras.length > 0 ? ` [${stepExtras.join(', ')}]` : '';
+        steps.push(`Step ${i + 1}: ${stepType}${ingDesc ? ` (+ ${ingDesc})` : ''}${extraDesc}`);
+        stepDetails.push({
+          step: i + 1,
+          type: stepType,
+          inputs: stepIngs,
+          outputs: extractCreateResults(step.results, `step_${i + 1}_result`),
+          processingTime: typeof step.processing_time === 'number' ? step.processing_time : undefined,
+          keepHeldItem: step.keep_held_item === true ? true : undefined,
+        });
       }
 
-      const loops = typeof rawJson.loops === 'number' ? rawJson.loops : 1;
       const inputs = [
         ...extractModIngredient(rawJson.ingredient, 'auto', 'base_ingredient'),
         ...extraStepInputs,
@@ -83,11 +133,13 @@ export const createParser: BuiltinModParser = {
         recipeType,
         mechanism: `Create Sequenced Assembly (${loops} loop${loops === 1 ? '' : 's'})`,
         inputs,
-        outputs: extractModIngredient(rawJson.results, 'auto', 'weighted_result'),
+        outputs: extractCreateResults(rawJson.results, 'weighted_result'),
         steps,
-        conditions: loops > 1 ? [`loops: ${loops}`] : undefined,
+        conditions: loops > 1 ? [`loops: ${loops} (per-step inputs repeat each loop)`] : undefined,
         extra: {
           transitionalItem: rawJson.transitional_item,
+          loops,
+          stepDetails,
           note: 'In create:sequenced_assembly, output chance values represent relative weights, not 0..1 probabilities.',
         },
       };
@@ -97,7 +149,7 @@ export const createParser: BuiltinModParser = {
     if (!mech) return null;
 
     const inputs = extractModIngredient(rawJson.ingredients, 'auto', 'ingredient');
-    const outputs = extractModIngredient(rawJson.results, 'auto', 'result');
+    const outputs = extractCreateResults(rawJson.results, 'result');
     const conditions: string[] = [];
     if (typeof rawJson.heat_requirement === 'string' && rawJson.heat_requirement !== 'none') {
       conditions.push(`heat_requirement: ${rawJson.heat_requirement}`);

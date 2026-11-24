@@ -26,8 +26,22 @@ const MEKANISM_MECHANISMS: Record<string, string> = {
   'mekanism:pigment_extracting': 'Mekanism Pigment Extractor',
   'mekanism:pigment_mixing': 'Mekanism Pigment Mixer',
   'mekanism:energy_conversion': 'Mekanism Energy Conversion',
-  'mekanism:gas_conversion': 'Mekanism Chemical Conversion',
+  'mekanism:chemical_conversion': 'Mekanism Chemical Conversion',
 };
+
+const CHEMICAL_OUTPUT_TYPES = new Set([
+  'mekanism:oxidizing',
+  'mekanism:chemical_infusing',
+  'mekanism:activating',
+  'mekanism:centrifuging',
+  'mekanism:dissolution',
+  'mekanism:washing',
+  'mekanism:pigment_extracting',
+  'mekanism:pigment_mixing',
+  'mekanism:chemical_conversion',
+]);
+
+const FLUID_OUTPUT_TYPES = new Set(['mekanism:evaporating']);
 
 export const mekanismParser: BuiltinModParser = {
   id: 'builtin_mekanism_10_7',
@@ -41,6 +55,54 @@ export const mekanismParser: BuiltinModParser = {
     if (!isRecord(rawJson)) return null;
     const mechanism = MEKANISM_MECHANISMS[recipeType];
     if (!mechanism) return null;
+
+    if (recipeType === 'mekanism:energy_conversion') {
+      const inputs = extractModIngredient(rawJson.input, 'auto', 'input');
+      const energyOut = typeof rawJson.output === 'number' ? rawJson.output : undefined;
+      const outputs: ModIngredient[] =
+        energyOut !== undefined
+          ? [{ kind: 'energy', id: 'mekanism:energy', amount: energyOut, slotOrRole: 'output' }]
+          : [];
+      return {
+        parserId: this.id,
+        modId: this.modId,
+        modVersionRange: this.modVersionRange,
+        recipeType,
+        mechanism,
+        inputs,
+        outputs,
+        energy: energyOut,
+        energyUnit: 'J',
+        hasUnparsedFields: energyOut === undefined,
+      };
+    }
+
+    if (recipeType === 'mekanism:rotary') {
+      const inputs: ModIngredient[] = [];
+      const outputs: ModIngredient[] = [];
+      if (rawJson.fluid_input !== undefined) {
+        inputs.push(...extractModIngredient(rawJson.fluid_input, 'fluid', 'condensentrating_fluid_input'));
+      }
+      if (rawJson.chemical_output !== undefined) {
+        outputs.push(...extractModIngredient(rawJson.chemical_output, 'chemical', 'condensentrating_chemical_output'));
+      }
+      if (rawJson.chemical_input !== undefined) {
+        inputs.push(...extractModIngredient(rawJson.chemical_input, 'chemical', 'decondensentrating_chemical_input'));
+      }
+      if (rawJson.fluid_output !== undefined) {
+        outputs.push(...extractModIngredient(rawJson.fluid_output, 'fluid', 'decondensentrating_fluid_output'));
+      }
+      return {
+        parserId: this.id,
+        modId: this.modId,
+        modVersionRange: this.modVersionRange,
+        recipeType,
+        mechanism,
+        inputs,
+        outputs,
+        conditions: ['bidirectional: fluid -> chemical (decondensentrating) or chemical -> fluid (condensentrating)'],
+      };
+    }
 
     const inputs: ModIngredient[] = [];
     const inputFields: Array<[string, ModIngredient['kind'] | 'auto', string]> = [
@@ -62,10 +124,17 @@ export const mekanismParser: BuiltinModParser = {
       }
     }
 
+    const defaultOutputKind: ModIngredient['kind'] | 'auto' = CHEMICAL_OUTPUT_TYPES.has(recipeType)
+      ? 'chemical'
+      : FLUID_OUTPUT_TYPES.has(recipeType)
+        ? 'fluid'
+        : 'auto';
+
     const outputs: ModIngredient[] = [];
     const outputFields: Array<[string, ModIngredient['kind'] | 'auto', string]> = [
-      ['output', 'auto', 'output'],
-      ['main_output', 'auto', 'main_output'],
+      ['output', defaultOutputKind, 'output'],
+      ['main_output', defaultOutputKind, 'main_output'],
+      ['item_output', 'item', 'item_output'],
       ['output_item', 'item', 'output_item'],
       ['output_fluid', 'fluid', 'output_fluid'],
       ['output_chemical', 'chemical', 'output_chemical'],
@@ -92,6 +161,11 @@ export const mekanismParser: BuiltinModParser = {
       conditions.push('chemical/gas input consumed per tick');
     }
 
+    const extra: Record<string, unknown> = {};
+    if (typeof rawJson.energy_multiplier === 'number') {
+      extra.energyMultiplier = rawJson.energy_multiplier;
+    }
+
     return {
       parserId: this.id,
       modId: this.modId,
@@ -102,7 +176,9 @@ export const mekanismParser: BuiltinModParser = {
       outputs,
       durationTicks: typeof rawJson.duration === 'number' ? rawJson.duration : undefined,
       energy: typeof rawJson.energy_required === 'number' ? rawJson.energy_required : undefined,
+      energyUnit: typeof rawJson.energy_required === 'number' ? 'J' : undefined,
       conditions: conditions.length > 0 ? conditions : undefined,
+      extra: Object.keys(extra).length > 0 ? extra : undefined,
     };
   },
 };
