@@ -9,22 +9,29 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
 import com.mojang.serialization.DataResult;
 import com.mojang.serialization.JsonOps;
+import java.io.ByteArrayOutputStream;
+import java.io.OutputStreamWriter;
 import java.lang.reflect.Array;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.component.DataComponentPatch;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtOps;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.RegistryOps;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.tags.TagKey;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
@@ -37,7 +44,51 @@ public final class JsonUtil {
     private static final int MAX_COLLECTION_ELEMENTS = 32;
     private static final int MAX_FIELDS_PER_OBJECT = 48;
 
+    private static final ConcurrentHashMap<Item, List<String>> ITEM_TAG_CACHE = new ConcurrentHashMap<>();
+
+    private static final ClassValue<Field[]> SNAPSHOT_FIELDS = new ClassValue<>() {
+        @Override
+        protected Field[] computeValue(Class<?> type) {
+            List<Field> fields = new ArrayList<>();
+            for (Class<?> c = type; c != null && c != Object.class && fields.size() < MAX_FIELDS_PER_OBJECT; c = c.getSuperclass()) {
+                String pkg = c.getPackageName();
+                if (pkg.startsWith("java.") || pkg.startsWith("sun.") || pkg.startsWith("jdk.")) {
+                    break;
+                }
+                for (Field f : c.getDeclaredFields()) {
+                    if (fields.size() >= MAX_FIELDS_PER_OBJECT) break;
+                    int mods = f.getModifiers();
+                    if (Modifier.isStatic(mods) || Modifier.isTransient(mods) || f.isSynthetic()) {
+                        continue;
+                    }
+                    try {
+                        if (f.trySetAccessible()) {
+                            fields.add(f);
+                        }
+                    } catch (Exception ignored) {
+                        // Inaccessible module field; skip safely.
+                    }
+                }
+            }
+            return fields.toArray(Field[]::new);
+        }
+    };
+
     private JsonUtil() {}
+
+    public static void invalidateTagCache() {
+        ITEM_TAG_CACHE.clear();
+    }
+
+    public static byte[] toUtf8Bytes(JsonObject body) {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream(4096);
+        try (OutputStreamWriter writer = new OutputStreamWriter(baos, StandardCharsets.UTF_8)) {
+            GSON.toJson(body, writer);
+        } catch (Exception e) {
+            return GSON.toJson(body).getBytes(StandardCharsets.UTF_8);
+        }
+        return baos.toByteArray();
+    }
 
     public static JsonObject errorObject(String code, String message) {
         JsonObject obj = new JsonObject();
@@ -48,12 +99,20 @@ public final class JsonUtil {
     }
 
     public static JsonObject serializeItemStack(ItemStack stack, HolderLookup.Provider registries) {
+        RegistryOps<JsonElement> ops = registries != null
+            ? registries.createSerializationContext(JsonOps.INSTANCE)
+            : null;
+        return serializeItemStack(stack, ops);
+    }
+
+    public static JsonObject serializeItemStack(ItemStack stack, RegistryOps<JsonElement> ops) {
         JsonObject obj = new JsonObject();
         if (stack == null || stack.isEmpty()) {
             obj.addProperty("empty", true);
             return obj;
         }
-        ResourceLocation id = BuiltInRegistries.ITEM.getKey(stack.getItem());
+        Item item = stack.getItem();
+        ResourceLocation id = BuiltInRegistries.ITEM.getKey(item);
         obj.addProperty("id", id.toString());
         obj.addProperty("modId", id.getNamespace());
         obj.addProperty("displayName", stack.getHoverName().getString());
@@ -64,16 +123,21 @@ public final class JsonUtil {
             obj.addProperty("maxDamage", stack.getMaxDamage());
         }
 
-        JsonArray tags = new JsonArray();
-        stack.getTags().map(t -> t.location().toString()).sorted().forEach(tags::add);
-        if (!tags.isEmpty()) {
+        List<String> cachedTags = ITEM_TAG_CACHE.computeIfAbsent(item, it ->
+            BuiltInRegistries.ITEM.wrapAsHolder(it).tags().map(t -> t.location().toString()).sorted().toList()
+        );
+        if (!cachedTags.isEmpty()) {
+            JsonArray tags = new JsonArray(cachedTags.size());
+            for (String t : cachedTags) {
+                tags.add(t);
+            }
             obj.add("tags", tags);
         }
 
-        if (registries != null && !stack.getComponentsPatch().isEmpty()) {
+        if (ops != null && !stack.getComponentsPatch().isEmpty()) {
             try {
                 DataResult<JsonElement> encoded = DataComponentPatch.CODEC.encodeStart(
-                    registries.createSerializationContext(JsonOps.INSTANCE),
+                    ops,
                     stack.getComponentsPatch()
                 );
                 encoded.result().ifPresent(el -> obj.add("components", el));
@@ -133,12 +197,12 @@ public final class JsonUtil {
             return new JsonPrimitive("#" + tag.location());
         }
         if (obj instanceof ItemStack stack) {
-            return serializeItemStack(stack, null);
+            return serializeItemStack(stack, (RegistryOps<JsonElement>) null);
         }
         if (obj instanceof Block block) {
             return new JsonPrimitive(BuiltInRegistries.BLOCK.getKey(block).toString());
         }
-        if (obj instanceof net.minecraft.world.item.Item item) {
+        if (obj instanceof Item item) {
             return new JsonPrimitive(BuiltInRegistries.ITEM.getKey(item).toString());
         }
         if (obj instanceof Fluid fluid) {
@@ -187,28 +251,15 @@ public final class JsonUtil {
 
             JsonObject out = new JsonObject();
             out.addProperty("_class", obj.getClass().getName());
-            int fieldCount = 0;
-            for (Class<?> c = obj.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
-                String pkg = c.getPackageName();
-                if (pkg.startsWith("java.") || pkg.startsWith("sun.") || pkg.startsWith("jdk.")) {
-                    break;
-                }
-                for (Field f : c.getDeclaredFields()) {
-                    if (fieldCount >= MAX_FIELDS_PER_OBJECT) break;
-                    int mods = f.getModifiers();
-                    if (Modifier.isStatic(mods) || Modifier.isTransient(mods) || f.isSynthetic()) {
-                        continue;
+            Field[] fields = SNAPSHOT_FIELDS.get(obj.getClass());
+            for (Field f : fields) {
+                try {
+                    Object val = f.get(obj);
+                    if (val != null) {
+                        out.add(f.getName(), snapshotObject(val, depth - 1, visited));
                     }
-                    try {
-                        if (!f.trySetAccessible()) continue;
-                        Object val = f.get(obj);
-                        if (val != null) {
-                            out.add(f.getName(), snapshotObject(val, depth - 1, visited));
-                            fieldCount++;
-                        }
-                    } catch (Exception ignored) {
-                        // Inaccessible module field or getter issue; skip safely.
-                    }
+                } catch (Exception ignored) {
+                    // Skip field safely.
                 }
             }
             return out;

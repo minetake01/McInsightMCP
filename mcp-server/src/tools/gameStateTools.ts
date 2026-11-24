@@ -5,9 +5,37 @@ import { KnowledgeStore } from '../knowledge/store.js';
 
 export function jsonText(data: unknown) {
   return {
-    content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
+    content: [{ type: 'text' as const, text: JSON.stringify(data) }],
   };
 }
+
+const STATUS_SCHEMA = z.object({
+  includeMods: z.boolean().optional().default(false).describe('Include full list of loaded mods and jar paths'),
+  modFilter: z.string().optional().describe('Optional case-insensitive substring filter on mod id or name'),
+});
+
+const EMPTY_SCHEMA = z.object({});
+
+const LOOKING_AT_SCHEMA = z.object({
+  maxDistance: z.number().min(1).max(64).optional().default(16),
+});
+
+const SCAN_AREA_SCHEMA = z.object({
+  radius: z.number().int().min(1).max(32).optional().default(8),
+  filter: z.string().optional().describe('Optional substring filter on block ID or display name'),
+});
+
+const SEARCH_REGISTRY_SCHEMA = z.object({
+  kind: z.enum(['item', 'block', 'fluid', 'entity', 'tag']).optional().default('item'),
+  query: z.string().optional().describe('Substring match on ID or display name'),
+  modId: z.string().optional().describe('Filter by mod namespace'),
+  limit: z.number().int().min(1).max(200).optional().default(50),
+  offset: z.number().int().min(0).optional().default(0),
+});
+
+const INSPECT_ITEM_SCHEMA = z.object({
+  itemId: z.string().describe('Namespaced item ID, e.g. minecraft:iron_ingot or tofucraft:blocktofukinu'),
+});
 
 export function registerGameStateTools(
   server: McpServer,
@@ -21,10 +49,7 @@ export function registerGameStateTools(
       description:
         'Check connection to the running McInsight mod (NeoForge/Fabric 1.21.1), active world state, JEI/guide integrations, and loaded mod list.',
       annotations: { readOnlyHint: true, idempotentHint: true },
-      inputSchema: z.object({
-        includeMods: z.boolean().optional().default(false).describe('Include full list of loaded mods and jar paths'),
-        modFilter: z.string().optional().describe('Optional case-insensitive substring filter on mod id or name'),
-      }),
+      inputSchema: STATUS_SCHEMA,
     },
     async ({ includeMods, modFilter }) => {
       const status = await mcClient.get<McStatusResponse>('/api/v1/status', {
@@ -47,7 +72,7 @@ export function registerGameStateTools(
       description:
         'Get current player position, dimension, biome, health/food/XP, active effects, held items, full inventory, and open screen/container slots.',
       annotations: { readOnlyHint: true },
-      inputSchema: z.object({}),
+      inputSchema: EMPTY_SCHEMA,
     },
     async () => {
       const data = await mcClient.get('/api/v1/player');
@@ -62,13 +87,13 @@ export function registerGameStateTools(
       description:
         'Raycast what the player is currently looking at (block, blockstate properties, BlockEntity NBT & Java class, or entity), enriched with matching AI knowledge notes.',
       annotations: { readOnlyHint: true },
-      inputSchema: z.object({
-        maxDistance: z.number().min(1).max(64).optional().default(16),
-      }),
+      inputSchema: LOOKING_AT_SCHEMA,
     },
     async ({ maxDistance }) => {
-      const data = await mcClient.get<Record<string, unknown>>('/api/v1/looking-at', { maxDistance });
-      const versions = await mcClient.tryGetLoadedModVersions();
+      const [data, versions] = await Promise.all([
+        mcClient.get<Record<string, unknown>>('/api/v1/looking-at', { maxDistance }),
+        mcClient.tryGetLoadedModVersions(),
+      ]);
       const id = typeof data.id === 'string' ? data.id : undefined;
       const modId = typeof data.modId === 'string' ? data.modId : undefined;
       if (id || modId) {
@@ -88,10 +113,7 @@ export function registerGameStateTools(
       description:
         'Scan blocks, block entities (with NBT & Java class names), and entities around the player within a given radius.',
       annotations: { readOnlyHint: true },
-      inputSchema: z.object({
-        radius: z.number().int().min(1).max(32).optional().default(8),
-        filter: z.string().optional().describe('Optional substring filter on block ID or display name'),
-      }),
+      inputSchema: SCAN_AREA_SCHEMA,
     },
     async ({ radius, filter }) => {
       const data = await mcClient.get('/api/v1/scan', { radius, filter });
@@ -105,13 +127,7 @@ export function registerGameStateTools(
       title: 'Search Minecraft Registries',
       description: 'Search registered items, blocks, fluids, entities, or item tags across all loaded mods.',
       annotations: { readOnlyHint: true, idempotentHint: true },
-      inputSchema: z.object({
-        kind: z.enum(['item', 'block', 'fluid', 'entity', 'tag']).optional().default('item'),
-        query: z.string().optional().describe('Substring match on ID or display name'),
-        modId: z.string().optional().describe('Filter by mod namespace'),
-        limit: z.number().int().min(1).max(200).optional().default(50),
-        offset: z.number().int().min(0).optional().default(0),
-      }),
+      inputSchema: SEARCH_REGISTRY_SCHEMA,
     },
     async ({ kind, query, modId, limit, offset }) => {
       const data = await mcClient.get('/api/v1/registry/search', {
@@ -132,13 +148,13 @@ export function registerGameStateTools(
       description:
         'Get detailed metadata for a specific item ID (tags, food properties, Java classes, associated Block/EntityBlock class) and any saved AI knowledge notes.',
       annotations: { readOnlyHint: true, idempotentHint: true },
-      inputSchema: z.object({
-        itemId: z.string().describe('Namespaced item ID, e.g. minecraft:iron_ingot or tofucraft:blocktofukinu'),
-      }),
+      inputSchema: INSPECT_ITEM_SCHEMA,
     },
     async ({ itemId }) => {
-      const data = await mcClient.get<Record<string, unknown>>('/api/v1/registry/item', { id: itemId });
-      const versions = await mcClient.tryGetLoadedModVersions();
+      const [data, versions] = await Promise.all([
+        mcClient.get<Record<string, unknown>>('/api/v1/registry/item', { id: itemId }),
+        mcClient.tryGetLoadedModVersions(),
+      ]);
       const modId = typeof data.modId === 'string' ? data.modId : itemId.split(':')[0];
       const notes = await knowledge.findNotesByIds([itemId, modId ?? ''], versions);
       if (notes.length > 0) {

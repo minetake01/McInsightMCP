@@ -21,6 +21,10 @@ public interface IPlatformHelper {
 
     List<ModMetadata> getLoadedMods();
 
+    default int getLoadedModCount() {
+        return getLoadedMods().size();
+    }
+
     Path getGameDir();
 
     Path getModsDir();

@@ -29,6 +29,35 @@ interface RawRecipeRecord {
   catalysts?: unknown[];
 }
 
+const EMPTY_SCHEMA = z.object({});
+
+const QUERY_RECIPES_SCHEMA = z.object({
+  item: z.string().optional().describe('Item/fluid/tag ID or display name substring, e.g. minecraft:iron_ingot'),
+  role: z.enum(['any', 'output', 'input', 'catalyst']).optional().default('any'),
+  type: z.string().optional().describe('RecipeType or JEI category UID, e.g. tofucraft:bittern'),
+  modId: z.string().optional().describe('Filter by mod namespace'),
+  source: z.enum(['all', 'vanilla', 'jei']).optional().default('all'),
+  includeRaw: z.boolean().optional().default(false).describe('Include rawJson even when parsed cleanly'),
+  limit: z.number().int().min(1).max(200).optional().default(40),
+  offset: z.number().int().min(0).optional().default(0),
+});
+
+const QUERY_WORLDGEN_SCHEMA = z.object({
+  kind: z
+    .enum(['summary', 'placed_feature', 'configured_feature', 'biome', 'structure', 'dimension_type'])
+    .optional()
+    .default('placed_feature'),
+  query: z.string().optional().describe('Substring filter on feature/biome/structure ID'),
+  modId: z.string().optional().describe('Filter by mod namespace'),
+  limit: z.number().int().min(1).max(100).optional().default(25),
+});
+
+const QUERY_LOOT_SCHEMA = z.object({
+  query: z.string().optional().describe('Substring filter on loot table ID, e.g. iron_ore or chests/'),
+  modId: z.string().optional().describe('Filter by mod namespace'),
+  limit: z.number().int().min(1).max(100).optional().default(25),
+});
+
 export function registerNativeSystemTools(
   server: McpServer,
   mcClient: McHttpClient,
@@ -41,7 +70,7 @@ export function registerNativeSystemTools(
       description:
         'List all registered RecipeManager recipe types with counts, JEI categories with catalysts, and active version-scoped built-in mod parsers.',
       annotations: { readOnlyHint: true, idempotentHint: true },
-      inputSchema: z.object({}),
+      inputSchema: EMPTY_SCHEMA,
     },
     async () => {
       const [data, versions] = await Promise.all([
@@ -60,33 +89,36 @@ export function registerNativeSystemTools(
       description:
         'Query recipes from RecipeManager and JEI. Priority: (1) Vanilla native parser, (2) AI-registered sandboxed extractor, (3) version-scoped built-in major mod parser, (4) verbatim rawJson/JEI/POJO snapshot + matching AI knowledge notes.',
       annotations: { readOnlyHint: true, idempotentHint: true },
-      inputSchema: z.object({
-        item: z.string().optional().describe('Item/fluid/tag ID or display name substring, e.g. minecraft:iron_ingot'),
-        role: z.enum(['any', 'output', 'input', 'catalyst']).optional().default('any'),
-        type: z.string().optional().describe('RecipeType or JEI category UID, e.g. tofucraft:bittern'),
-        modId: z.string().optional().describe('Filter by mod namespace'),
-        source: z.enum(['all', 'vanilla', 'jei']).optional().default('all'),
-        includeRaw: z.boolean().optional().default(false).describe('Include rawJson even when parsed cleanly'),
-        limit: z.number().int().min(1).max(200).optional().default(40),
-        offset: z.number().int().min(0).optional().default(0),
-      }),
+      inputSchema: QUERY_RECIPES_SCHEMA,
     },
     async ({ item, role, type, modId, source, includeRaw, limit, offset }) => {
-      const rawRes = await mcClient.get<{
-        ok: boolean;
-        vanilla?: { returned: number; hasMore: boolean; recipes: RawRecipeRecord[] };
-        jei?: { returned: number; hasMore: boolean; recipes: RawRecipeRecord[] };
-      }>('/api/v1/recipes/query', {
-        item,
-        role,
-        type,
-        mod: modId,
-        source,
-        limit,
-        offset,
-      });
+      const [rawRes, versions] = await Promise.all([
+        mcClient.get<{
+          ok: boolean;
+          vanilla?: { returned: number; hasMore: boolean; recipes: RawRecipeRecord[] };
+          jei?: { returned: number; hasMore: boolean; recipes: RawRecipeRecord[] };
+        }>('/api/v1/recipes/query', {
+          item,
+          role,
+          type,
+          mod: modId,
+          source,
+          limit,
+          offset,
+        }),
+        mcClient.tryGetLoadedModVersions(),
+      ]);
 
-      const versions = await mcClient.tryGetLoadedModVersions();
+      const notesCache = new Map<string, ReturnType<KnowledgeStore['findNotesByIds']>>();
+      const getNotesCached = (lookupIds: string[]) => {
+        const key = lookupIds.join('\0');
+        let p = notesCache.get(key);
+        if (!p) {
+          p = knowledge.findNotesByIds(lookupIds, versions);
+          notesCache.set(key, p);
+        }
+        return p;
+      };
 
       const enrichList = async (list: RawRecipeRecord[] | undefined, origin: 'recipe_manager' | 'jei') => {
         if (!list) return [];
@@ -127,7 +159,7 @@ export function registerNativeSystemTools(
               : {};
 
           const lookupIds = [rType, effectiveType, rec.modId ?? '', item ?? ''].filter(Boolean);
-          const notes = await knowledge.findNotesByIds(lookupIds, versions);
+          const notes = await getNotesCached(lookupIds);
           const parsedCleanly = Boolean(nativeParsed || customExtracted || builtinModResult.parsed);
 
           out.push({
@@ -178,15 +210,7 @@ export function registerNativeSystemTools(
       description:
         'Query Minecraft dynamic worldgen registries (or resource pack fallback) with mechanical parsing for native ore targets, vein size, height ranges, counts, and raw JSON.',
       annotations: { readOnlyHint: true, idempotentHint: true },
-      inputSchema: z.object({
-        kind: z
-          .enum(['summary', 'placed_feature', 'configured_feature', 'biome', 'structure', 'dimension_type'])
-          .optional()
-          .default('placed_feature'),
-        query: z.string().optional().describe('Substring filter on feature/biome/structure ID'),
-        modId: z.string().optional().describe('Filter by mod namespace'),
-        limit: z.number().int().min(1).max(100).optional().default(25),
-      }),
+      inputSchema: QUERY_WORLDGEN_SCHEMA,
     },
     async ({ kind, query, modId, limit }) => {
       if (kind === 'summary') {
@@ -226,11 +250,7 @@ export function registerNativeSystemTools(
       description:
         'Query Minecraft loot tables (blocks, chests, entities) with mechanical parsing of pools, rolls, entries, conditions (e.g. silk touch), and functions, plus raw JSON.',
       annotations: { readOnlyHint: true, idempotentHint: true },
-      inputSchema: z.object({
-        query: z.string().optional().describe('Substring filter on loot table ID, e.g. iron_ore or chests/'),
-        modId: z.string().optional().describe('Filter by mod namespace'),
-        limit: z.number().int().min(1).max(100).optional().default(25),
-      }),
+      inputSchema: QUERY_LOOT_SCHEMA,
     },
     async ({ query, modId, limit }) => {
       const raw = await mcClient.get<{

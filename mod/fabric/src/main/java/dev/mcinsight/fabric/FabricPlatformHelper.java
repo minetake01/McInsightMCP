@@ -12,6 +12,8 @@ import net.fabricmc.loader.api.metadata.ModOrigin;
 
 public final class FabricPlatformHelper implements IPlatformHelper {
 
+    private volatile List<IPlatformHelper.ModMetadata> cachedMods;
+
     @Override
     public String getLoaderName() {
         return "fabric";
@@ -31,6 +33,10 @@ public final class FabricPlatformHelper implements IPlatformHelper {
 
     @Override
     public List<IPlatformHelper.ModMetadata> getLoadedMods() {
+        List<IPlatformHelper.ModMetadata> existing = cachedMods;
+        if (existing != null) {
+            return existing;
+        }
         List<IPlatformHelper.ModMetadata> out = new ArrayList<>();
         for (ModContainer container : FabricLoader.getInstance().getAllMods()) {
             net.fabricmc.loader.api.metadata.ModMetadata meta = container.getMetadata();
@@ -50,7 +56,9 @@ public final class FabricPlatformHelper implements IPlatformHelper {
             ));
         }
         out.sort(Comparator.comparing(IPlatformHelper.ModMetadata::id));
-        return out;
+        List<IPlatformHelper.ModMetadata> frozen = List.copyOf(out);
+        cachedMods = frozen;
+        return frozen;
     }
 
     @Override

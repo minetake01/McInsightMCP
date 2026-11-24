@@ -48,6 +48,13 @@ All endpoints bind strictly to `127.0.0.1` using `com.sun.net.httpserver.HttpSer
 | `/api/v1/guides/search` | GET | Case-insensitive search across guide/quest/ponder/lang entries (`q`, `lang`, `limit`) |
 | `/api/v1/guides/page` | GET | Full raw content of a guide/quest page (`id`) |
 | `/api/v1/introspect/class` | GET | Runtime class reflection (`name=fqcn`) |
+| `/api/v1/metrics` | GET | Server MSPT/TPS snapshot (`MinecraftServer.getTickTimesNanos()`) and per-endpoint latency/main-thread/cache stats |
+
+All HTTP responses include `X-McInsight-MainThread-Us`, `X-McInsight-Total-Us`, and `X-McInsight-Cache` (`hit`/`miss`) diagnostic headers.
+
+### 2.1 Threading & Caching Architecture
+- **Static & Reload-Scoped Data (0ms Warm Main-Thread Overhead)**: `RecipeCollector`, `RegistryCollector`, `WorldgenAndLootCollector`, `ResourceGuideCollector`, `StatusCollector`, and `ClassIntrospector` perform indexing, Codec encoding, file I/O, and filtering on HTTP worker threads using generation-stamped caches (`InsightCacheManager`) invalidated automatically on datapack/resource reloads and world lifecycle transitions.
+- **Live World & Player Data (Two-Phase Collection)**: `WorldTargetCollector` and `PlayerStateCollector` acquire minimal raw snapshots (`LevelChunkSection` direct reads skipping `hasOnlyAir()` sections, chunk-level `getBlockEntities()`, copied `ItemStack`s) on the owning game thread, then run sorting, NBT conversion, tag lookup, and Gson serialization off-thread.
 
 ---
 

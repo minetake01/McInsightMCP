@@ -14,6 +14,7 @@ import dev.mcinsight.introspect.StatusCollector;
 import dev.mcinsight.introspect.WorldTargetCollector;
 import dev.mcinsight.introspect.WorldgenAndLootCollector;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -23,6 +24,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public final class InsightHttpServer {
 
@@ -51,10 +53,12 @@ public final class InsightHttpServer {
         for (int i = 0; i < config.portRangeSize; i++) {
             int candidate = config.port + i;
             try {
-                HttpServer srv = HttpServer.create(new InetSocketAddress(loopback, candidate), 32);
+                HttpServer srv = HttpServer.create(new InetSocketAddress(loopback, candidate), 64);
                 srv.createContext("/api/v1/", this::handleRequest);
-                httpPool = Executors.newFixedThreadPool(4, r -> {
-                    Thread t = new Thread(r, "McInsight-HTTP");
+                int threads = Math.max(4, Math.min(8, Runtime.getRuntime().availableProcessors()));
+                AtomicInteger threadNum = new AtomicInteger(1);
+                httpPool = Executors.newFixedThreadPool(threads, r -> {
+                    Thread t = new Thread(r, "McInsight-HTTP-" + threadNum.getAndIncrement());
                     t.setDaemon(true);
                     return t;
                 });
@@ -94,17 +98,19 @@ public final class InsightHttpServer {
     }
 
     private void handleRequest(HttpExchange exchange) throws IOException {
+        String path = exchange.getRequestURI().getPath();
+        PerfMetrics.RequestTrace trace = PerfMetrics.beginRequest(path);
         try {
+            drainRequestBody(exchange);
             if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
-                sendJson(exchange, 405, JsonUtil.errorObject("METHOD_NOT_ALLOWED", "Only GET is supported."));
+                sendJson(exchange, 405, JsonUtil.errorObject("METHOD_NOT_ALLOWED", "Only GET is supported."), trace);
                 return;
             }
             if (!isAuthorized(exchange)) {
-                sendJson(exchange, 401, JsonUtil.errorObject("UNAUTHORIZED", "Invalid or missing bearer token."));
+                sendJson(exchange, 401, JsonUtil.errorObject("UNAUTHORIZED", "Invalid or missing bearer token."), trace);
                 return;
             }
 
-            String path = exchange.getRequestURI().getPath();
             Map<String, String> query = parseQuery(exchange.getRequestURI().getRawQuery());
 
             JsonObject response = switch (path) {
@@ -114,6 +120,7 @@ public final class InsightHttpServer {
                     "true".equalsIgnoreCase(query.get("includeMods"))
                 );
                 case "/api/v1/mods" -> StatusCollector.collectMods();
+                case "/api/v1/metrics" -> PerfMetrics.collectMetricsJson(executor);
                 case "/api/v1/player" -> PlayerStateCollector.collect(executor);
                 case "/api/v1/looking-at" -> WorldTargetCollector.collectLookingAt(
                     executor,
@@ -176,15 +183,26 @@ public final class InsightHttpServer {
             };
 
             if (response == null) {
-                sendJson(exchange, 404, JsonUtil.errorObject("NOT_FOUND", "Unknown endpoint: " + path));
+                sendJson(exchange, 404, JsonUtil.errorObject("NOT_FOUND", "Unknown endpoint: " + path), trace);
                 return;
             }
             int status = (response.has("ok") && !response.get("ok").getAsBoolean()) ? 400 : 200;
-            sendJson(exchange, status, response);
+            sendJson(exchange, status, response, trace);
         } catch (Exception e) {
             McInsightConstants.LOG.warn("Error handling HTTP request {}: {}", exchange.getRequestURI(), e.getMessage());
-            sendJson(exchange, 500, JsonUtil.errorObject("INTERNAL_ERROR", e.getMessage()));
+            sendJson(exchange, 500, JsonUtil.errorObject("INTERNAL_ERROR", e.getMessage()), trace);
+        } finally {
+            PerfMetrics.finishRequest(trace);
         }
+    }
+
+    private static void drainRequestBody(HttpExchange exchange) {
+        try (InputStream is = exchange.getRequestBody()) {
+            byte[] skipBuf = new byte[256];
+            while (is.read(skipBuf) != -1) {
+                // Drain so Keep-Alive connections can be reused cleanly
+            }
+        } catch (IOException ignored) {}
     }
 
     private boolean isAuthorized(HttpExchange exchange) {
@@ -195,10 +213,20 @@ public final class InsightHttpServer {
         return auth != null && auth.equals("Bearer " + config.authToken);
     }
 
-    private static void sendJson(HttpExchange exchange, int statusCode, JsonObject body) throws IOException {
-        byte[] bytes = JsonUtil.GSON.toJson(body).getBytes(StandardCharsets.UTF_8);
-        exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
-        exchange.getResponseHeaders().set("Cache-Control", "no-store");
+    private static void sendJson(
+        HttpExchange exchange,
+        int statusCode,
+        JsonObject body,
+        PerfMetrics.RequestTrace trace
+    ) throws IOException {
+        byte[] bytes = JsonUtil.toUtf8Bytes(body);
+        long totalUs = Math.max(0L, (System.nanoTime() - trace.startNs) / 1_000L);
+        var headers = exchange.getResponseHeaders();
+        headers.set("Content-Type", "application/json; charset=utf-8");
+        headers.set("Cache-Control", "no-store");
+        headers.set("X-McInsight-MainThread-Us", Long.toString(trace.getMainThreadUs()));
+        headers.set("X-McInsight-Total-Us", Long.toString(totalUs));
+        headers.set("X-McInsight-Cache", trace.isCacheHit() ? "hit" : "miss");
         exchange.sendResponseHeaders(statusCode, bytes.length);
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
@@ -210,17 +238,34 @@ public final class InsightHttpServer {
         if (rawQuery == null || rawQuery.isBlank()) {
             return map;
         }
-        for (String pair : rawQuery.split("&")) {
-            if (pair.isEmpty()) continue;
-            int idx = pair.indexOf('=');
-            String key = idx >= 0 ? pair.substring(0, idx) : pair;
-            String val = idx >= 0 ? pair.substring(idx + 1) : "";
-            map.put(
-                URLDecoder.decode(key, StandardCharsets.UTF_8),
-                URLDecoder.decode(val, StandardCharsets.UTF_8)
-            );
+        int len = rawQuery.length();
+        int start = 0;
+        while (start < len) {
+            int amp = rawQuery.indexOf('&', start);
+            int end = amp >= 0 ? amp : len;
+            if (end > start) {
+                int eq = rawQuery.indexOf('=', start);
+                String keyRaw;
+                String valRaw;
+                if (eq >= 0 && eq < end) {
+                    keyRaw = rawQuery.substring(start, eq);
+                    valRaw = rawQuery.substring(eq + 1, end);
+                } else {
+                    keyRaw = rawQuery.substring(start, end);
+                    valRaw = "";
+                }
+                map.put(decodeComponent(keyRaw), decodeComponent(valRaw));
+            }
+            start = end + 1;
         }
         return map;
+    }
+
+    private static String decodeComponent(String raw) {
+        if (raw.indexOf('%') < 0 && raw.indexOf('+') < 0) {
+            return raw;
+        }
+        return URLDecoder.decode(raw, StandardCharsets.UTF_8);
     }
 
     private static int parseInt(String raw, int fallback) {

@@ -3,6 +3,8 @@ package dev.mcinsight.client;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import dev.mcinsight.server.JsonUtil;
+import java.util.ArrayList;
+import java.util.List;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
@@ -12,6 +14,7 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.ProjectileUtil;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.Slot;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.EntityHitResult;
@@ -25,6 +28,18 @@ import net.minecraft.world.phys.Vec3;
 public final class ClientStateAccessor {
 
     private ClientStateAccessor() {}
+
+    public static boolean isOnRenderThread() {
+        return Minecraft.getInstance().isSameThread();
+    }
+
+    public static String getLanguageCode() {
+        try {
+            return Minecraft.getInstance().getLanguageManager().getSelected();
+        } catch (Exception e) {
+            return "en_us";
+        }
+    }
 
     public static Level getLevel() {
         return Minecraft.getInstance().level;
@@ -40,6 +55,41 @@ public final class ClientStateAccessor {
 
     public static boolean isLocalServerRunning() {
         return Minecraft.getInstance().getSingleplayerServer() != null;
+    }
+
+    public record ScreenSlotSample(int slotIndex, String containerClass, ItemStack stack) {}
+
+    public record ScreenSnapshot(
+        String screenClass,
+        String title,
+        String menuClass,
+        List<ScreenSlotSample> slots
+    ) {}
+
+    public static ScreenSnapshot captureOpenScreenSnapshot() {
+        Minecraft mc = Minecraft.getInstance();
+        Screen screen = mc.screen;
+        if (screen == null) {
+            return null;
+        }
+        String screenClass = screen.getClass().getName();
+        String title = screen.getTitle().getString();
+        if (screen instanceof AbstractContainerScreen<?> containerScreen) {
+            AbstractContainerMenu menu = containerScreen.getMenu();
+            List<ScreenSlotSample> slots = new ArrayList<>();
+            for (int i = 0; i < menu.slots.size(); i++) {
+                Slot slot = menu.slots.get(i);
+                if (slot.hasItem()) {
+                    slots.add(new ScreenSlotSample(
+                        i,
+                        slot.container.getClass().getSimpleName(),
+                        slot.getItem().copy()
+                    ));
+                }
+            }
+            return new ScreenSnapshot(screenClass, title, menu.getClass().getName(), slots);
+        }
+        return new ScreenSnapshot(screenClass, title, null, List.of());
     }
 
     public static JsonObject getOpenScreenInfo(HolderLookup.Provider registries) {

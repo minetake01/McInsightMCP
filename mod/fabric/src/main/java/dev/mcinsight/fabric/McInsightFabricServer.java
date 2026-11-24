@@ -15,5 +15,11 @@ public final class McInsightFabricServer implements DedicatedServerModInitialize
             McInsightCommon.detachServer(server);
             McInsightCommon.shutdown();
         });
+        ServerLifecycleEvents.END_DATA_PACK_RELOAD.register((server, resourceManager, success) -> {
+            if (success) {
+                McInsightCommon.invalidateDataCaches();
+                McInsightCommon.invalidateResourceCaches();
+            }
+        });
     }
 }

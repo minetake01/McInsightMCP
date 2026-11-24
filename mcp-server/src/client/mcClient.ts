@@ -52,15 +52,27 @@ export interface McClientOptions {
   portStart?: number;
   portEnd?: number;
   timeoutMs?: number;
+  metadataTtlMs?: number;
 }
+
+const DEFAULT_METADATA_TTL_MS = 60_000;
 
 export class McHttpClient {
   private discoveredUrl: string | undefined;
+  private probeInFlight: Promise<string> | undefined;
+
+  private cachedModVersions: { expiresAt: number; map: Map<string, string> } | undefined;
+  private modVersionsInFlight: Promise<Map<string, string> | undefined> | undefined;
+
+  private cachedPaths: { expiresAt: number; modsDir?: string; gameDir?: string } | undefined;
+  private pathsInFlight: Promise<{ modsDir?: string; gameDir?: string } | undefined> | undefined;
+
   private readonly explicitUrl?: string;
   private readonly authToken?: string;
   private readonly portStart: number;
   private readonly portEnd: number;
   private readonly timeoutMs: number;
+  private readonly metadataTtlMs: number;
 
   constructor(opts: McClientOptions = {}) {
     this.explicitUrl = opts.baseUrl;
@@ -68,6 +80,48 @@ export class McHttpClient {
     this.portStart = opts.portStart ?? 25580;
     this.portEnd = opts.portEnd ?? 25599;
     this.timeoutMs = opts.timeoutMs ?? 12000;
+    this.metadataTtlMs = opts.metadataTtlMs ?? DEFAULT_METADATA_TTL_MS;
+  }
+
+  invalidateCache(): void {
+    this.cachedModVersions = undefined;
+    this.cachedPaths = undefined;
+  }
+
+  private async probeHostParallel(host: string): Promise<string | null> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 500);
+    const probes: Array<Promise<string>> = [];
+
+    for (let port = this.portStart; port <= this.portEnd; port++) {
+      const candidate = `http://${host}:${port}`;
+      probes.push(
+        (async () => {
+          const res = await fetch(`${candidate}/api/v1/status`, {
+            headers: this.buildHeaders(),
+            signal: controller.signal,
+          });
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`);
+          }
+          const data = (await res.json()) as { modId?: string };
+          if (data?.modId !== 'mcinsight') {
+            throw new Error('Not mcinsight');
+          }
+          return candidate;
+        })(),
+      );
+    }
+
+    try {
+      const winner = await Promise.any(probes);
+      controller.abort();
+      return winner;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   private async probeBaseUrl(): Promise<string> {
@@ -77,31 +131,34 @@ export class McHttpClient {
     if (this.discoveredUrl) {
       return this.discoveredUrl;
     }
-
-    for (let port = this.portStart; port <= this.portEnd; port++) {
-      for (const host of ['127.0.0.1', '[::1]']) {
-        const candidate = `http://${host}:${port}`;
-        try {
-          const res = await fetch(`${candidate}/api/v1/status`, {
-            headers: this.buildHeaders(),
-            signal: AbortSignal.timeout(400),
-          });
-          if (res.ok) {
-            const data = (await res.json()) as { modId?: string };
-            if (data?.modId === 'mcinsight') {
-              this.discoveredUrl = candidate;
-              return candidate;
-            }
-          }
-        } catch {
-          // Host/port not listening; continue probing
-        }
-      }
+    if (this.probeInFlight) {
+      return this.probeInFlight;
     }
 
-    throw new McConnectionError(
-      `Could not find a running McInsight mod on 127.0.0.1:${this.portStart}-${this.portEnd}. Ensure Minecraft with the McInsight mod is running (or pass --mc-url / MCINSIGHT_URL).`,
-    );
+    const promise = (async () => {
+      const ipv4Hit = await this.probeHostParallel('127.0.0.1');
+      if (ipv4Hit) {
+        this.discoveredUrl = ipv4Hit;
+        return ipv4Hit;
+      }
+      const ipv6Hit = await this.probeHostParallel('[::1]');
+      if (ipv6Hit) {
+        this.discoveredUrl = ipv6Hit;
+        return ipv6Hit;
+      }
+      throw new McConnectionError(
+        `Could not find a running McInsight mod on 127.0.0.1:${this.portStart}-${this.portEnd}. Ensure Minecraft with the McInsight mod is running (or pass --mc-url / MCINSIGHT_URL).`,
+      );
+    })();
+
+    this.probeInFlight = promise;
+    try {
+      return await promise;
+    } finally {
+      if (this.probeInFlight === promise) {
+        this.probeInFlight = undefined;
+      }
+    }
   }
 
   private buildHeaders(): Record<string, string> {
@@ -133,9 +190,10 @@ export class McHttpClient {
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (err) {
-      // Clear cached port and retry discovery once if explicit URL wasn't pinned
+      // Clear cached port/metadata and retry discovery once if explicit URL wasn't pinned
       if (!this.explicitUrl && this.discoveredUrl) {
         this.discoveredUrl = undefined;
+        this.invalidateCache();
         const freshBase = await this.probeBaseUrl();
         const retryUrl = new URL(`${freshBase}${endpoint}`);
         retryUrl.search = url.search;
@@ -161,25 +219,81 @@ export class McHttpClient {
     return body as T;
   }
 
-  async tryGetModsDir(): Promise<string | undefined> {
+  private async fetchAndCachePaths(): Promise<{ modsDir?: string; gameDir?: string } | undefined> {
+    const now = Date.now();
+    if (this.cachedPaths && this.cachedPaths.expiresAt > now) {
+      return this.cachedPaths;
+    }
+    if (this.pathsInFlight) {
+      return this.pathsInFlight;
+    }
+
+    const promise = (async () => {
+      try {
+        const status = await this.get<McStatusResponse>('/api/v1/status');
+        const entry = {
+          expiresAt: Date.now() + this.metadataTtlMs,
+          modsDir: status.modsDir,
+          gameDir: status.gameDir,
+        };
+        this.cachedPaths = entry;
+        return entry;
+      } catch {
+        return undefined;
+      }
+    })();
+
+    this.pathsInFlight = promise;
     try {
-      const status = await this.get<McStatusResponse>('/api/v1/status');
-      return status.modsDir;
-    } catch {
-      return undefined;
+      return await promise;
+    } finally {
+      if (this.pathsInFlight === promise) {
+        this.pathsInFlight = undefined;
+      }
     }
   }
 
+  async tryGetModsDir(): Promise<string | undefined> {
+    return (await this.fetchAndCachePaths())?.modsDir;
+  }
+
+  async tryGetGameDir(): Promise<string | undefined> {
+    return (await this.fetchAndCachePaths())?.gameDir;
+  }
+
   async tryGetLoadedModVersions(): Promise<Map<string, string> | undefined> {
-    try {
-      const res = await this.get<{ mods: McModInfo[] }>('/api/v1/mods');
-      const map = new Map<string, string>();
-      for (const m of res.mods ?? []) {
-        map.set(m.id, m.version);
+    const now = Date.now();
+    if (this.cachedModVersions && this.cachedModVersions.expiresAt > now) {
+      return this.cachedModVersions.map;
+    }
+    if (this.modVersionsInFlight) {
+      return this.modVersionsInFlight;
+    }
+
+    const promise = (async () => {
+      try {
+        const res = await this.get<{ mods: McModInfo[] }>('/api/v1/mods');
+        const map = new Map<string, string>();
+        for (const m of res.mods ?? []) {
+          map.set(m.id, m.version);
+        }
+        this.cachedModVersions = {
+          expiresAt: Date.now() + this.metadataTtlMs,
+          map,
+        };
+        return map;
+      } catch {
+        return undefined;
       }
-      return map;
-    } catch {
-      return undefined;
+    })();
+
+    this.modVersionsInFlight = promise;
+    try {
+      return await promise;
+    } finally {
+      if (this.modVersionsInFlight === promise) {
+        this.modVersionsInFlight = undefined;
+      }
     }
   }
 }

@@ -12,6 +12,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import mezz.jei.api.constants.VanillaTypes;
 import mezz.jei.api.helpers.IJeiHelpers;
 import mezz.jei.api.ingredients.IIngredientHelper;
@@ -29,6 +30,7 @@ import mezz.jei.api.runtime.IIngredientManager;
 import mezz.jei.api.runtime.IJeiRuntime;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.RegistryOps;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -38,6 +40,8 @@ import net.minecraft.world.item.crafting.RecipeHolder;
 public final class JeiBridgeImpl implements IRecipeViewerBridge {
 
     private final IJeiRuntime runtime;
+    private volatile JsonObject cachedCategories;
+    private final ConcurrentHashMap<ResourceLocation, List<JsonObject>> cachedCatalysts = new ConcurrentHashMap<>();
 
     public JeiBridgeImpl(IJeiRuntime runtime) {
         this.runtime = runtime;
@@ -55,6 +59,10 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
 
     @Override
     public JsonObject listCategories() {
+        JsonObject existing = cachedCategories;
+        if (existing != null) {
+            return existing;
+        }
         IRecipeManager recipeManager = runtime.getRecipeManager();
         IIngredientManager ingredientManager = runtime.getIngredientManager();
         JsonArray categories = new JsonArray();
@@ -84,6 +92,7 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
         out.addProperty("viewer", "jei");
         out.addProperty("count", categories.size());
         out.add("categories", categories);
+        cachedCategories = out;
         return out;
     }
 
@@ -100,6 +109,9 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
         IRecipeManager recipeManager = runtime.getRecipeManager();
         IIngredientManager ingredientManager = runtime.getIngredientManager();
         IJeiHelpers helpers = runtime.getJeiHelpers();
+        RegistryOps<JsonElement> jsonOps = registries != null
+            ? registries.createSerializationContext(JsonOps.INSTANCE)
+            : null;
 
         List<IFocus<?>> focusList = buildFocusList(itemQuery, role, helpers);
         IRecipeCategoriesLookup catLookup = recipeManager.createRecipeCategoryLookup();
@@ -128,11 +140,14 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
                 continue;
             }
 
-            List<JsonObject> catalysts = new ArrayList<>();
-            try {
-                recipeManager.createRecipeCatalystLookup(rawCategory.getRecipeType()).get()
-                    .forEach(ti -> catalysts.add(serializeTypedIngredient(ti, ingredientManager, registries)));
-            } catch (Exception ignored) {}
+            List<JsonObject> catalysts = cachedCatalysts.computeIfAbsent(catId, k -> {
+                List<JsonObject> list = new ArrayList<>();
+                try {
+                    recipeManager.createRecipeCatalystLookup(rawCategory.getRecipeType()).get()
+                        .forEach(ti -> list.add(serializeTypedIngredient(ti, ingredientManager, jsonOps)));
+                } catch (Exception ignored) {}
+                return List.copyOf(list);
+            });
 
             int[] result = processCategory(
                 rawCategory,
@@ -142,7 +157,7 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
                 catalysts,
                 normItem,
                 normRole,
-                registries,
+                jsonOps,
                 items,
                 matched,
                 offset,
@@ -170,7 +185,7 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
         List<JsonObject> catalysts,
         String normItem,
         String normRole,
-        HolderLookup.Provider registries,
+        RegistryOps<JsonElement> jsonOps,
         JsonArray outItems,
         int matchedSoFar,
         int offset,
@@ -213,7 +228,7 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
                         extraCatalysts,
                         catalysts,
                         ingredientManager,
-                        registries
+                        jsonOps
                     ));
                     matched++;
                 } catch (Exception ignored) {
@@ -234,7 +249,7 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
         List<ITypedIngredient<?>> recipeCatalysts,
         List<JsonObject> categoryCatalysts,
         IIngredientManager ingredientManager,
-        HolderLookup.Provider registries
+        RegistryOps<JsonElement> jsonOps
     ) {
         JsonObject obj = new JsonObject();
         ResourceLocation catUid = category.getRecipeType().getUid();
@@ -266,19 +281,19 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
 
         JsonArray inArr = new JsonArray();
         for (ITypedIngredient<?> ti : inputs) {
-            inArr.add(serializeTypedIngredient(ti, ingredientManager, registries));
+            inArr.add(serializeTypedIngredient(ti, ingredientManager, jsonOps));
         }
         obj.add("inputs", inArr);
 
         JsonArray outArr = new JsonArray();
         for (ITypedIngredient<?> ti : outputs) {
-            outArr.add(serializeTypedIngredient(ti, ingredientManager, registries));
+            outArr.add(serializeTypedIngredient(ti, ingredientManager, jsonOps));
         }
         obj.add("outputs", outArr);
 
         JsonArray catArr = new JsonArray();
         for (ITypedIngredient<?> ti : recipeCatalysts) {
-            catArr.add(serializeTypedIngredient(ti, ingredientManager, registries));
+            catArr.add(serializeTypedIngredient(ti, ingredientManager, jsonOps));
         }
         for (JsonObject c : categoryCatalysts) {
             catArr.add(c);
@@ -295,12 +310,9 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
             mcRecipe = direct;
         }
 
-        if (mcRecipe != null && registries != null) {
+        if (mcRecipe != null && jsonOps != null) {
             try {
-                DataResult<JsonElement> encoded = Recipe.CODEC.encodeStart(
-                    registries.createSerializationContext(JsonOps.INSTANCE),
-                    mcRecipe
-                );
+                DataResult<JsonElement> encoded = Recipe.CODEC.encodeStart(jsonOps, mcRecipe);
                 encoded.result().ifPresent(el -> obj.add("rawJson", el));
             } catch (Exception ignored) {}
         } else {
@@ -401,7 +413,7 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
     private <V> JsonObject serializeTypedIngredient(
         ITypedIngredient<V> typed,
         IIngredientManager ingredientManager,
-        HolderLookup.Provider registries
+        RegistryOps<JsonElement> jsonOps
     ) {
         JsonObject obj = new JsonObject();
         IIngredientType<V> type = typed.getType();
@@ -426,7 +438,7 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
 
         Optional<ItemStack> maybeStack = typed.getItemStack();
         if (maybeStack.isPresent() && !maybeStack.get().isEmpty()) {
-            JsonObject itemJson = JsonUtil.serializeItemStack(maybeStack.get(), registries);
+            JsonObject itemJson = JsonUtil.serializeItemStack(maybeStack.get(), jsonOps);
             if (itemJson.has("tags")) {
                 obj.add("tags", itemJson.get("tags"));
             }

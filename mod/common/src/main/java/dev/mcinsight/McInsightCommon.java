@@ -1,6 +1,7 @@
 package dev.mcinsight;
 
 import dev.mcinsight.config.McInsightConfig;
+import dev.mcinsight.introspect.InsightCacheManager;
 import dev.mcinsight.platform.Services;
 import dev.mcinsight.server.InsightHttpServer;
 import dev.mcinsight.server.MainThreadExecutor;
@@ -31,21 +32,33 @@ public final class McInsightCommon {
 
     public static void attachClientExecutor(Executor clientExecutor) {
         EXECUTOR.setClientExecutor(clientExecutor);
+        InsightCacheManager.invalidateAll();
     }
 
     public static void attachServer(MinecraftServer server) {
         EXECUTOR.setActiveServer(server);
+        InsightCacheManager.invalidateAll();
     }
 
     public static void detachServer(MinecraftServer server) {
         if (EXECUTOR.getActiveServer() == server) {
             EXECUTOR.setActiveServer(null);
+            InsightCacheManager.invalidateAll();
         }
+    }
+
+    public static void invalidateDataCaches() {
+        InsightCacheManager.invalidateDataCaches();
+    }
+
+    public static void invalidateResourceCaches() {
+        InsightCacheManager.invalidateResourceCaches();
     }
 
     public static synchronized void shutdown() {
         EXECUTOR.setClientExecutor(null);
         EXECUTOR.setActiveServer(null);
+        InsightCacheManager.invalidateAll();
         if (httpServer != null) {
             httpServer.stop();
             httpServer = null;

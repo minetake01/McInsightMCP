@@ -18,3 +18,5 @@ mcp-server/.tools/
 *.log
 .env
 .env.*
+bench/results/
+bench/fixtures/

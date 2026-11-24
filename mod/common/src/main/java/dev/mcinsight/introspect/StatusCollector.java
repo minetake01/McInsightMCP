@@ -9,10 +9,17 @@ import dev.mcinsight.compat.IntegrationRegistry;
 import dev.mcinsight.platform.IPlatformHelper;
 import dev.mcinsight.platform.Services;
 import dev.mcinsight.server.MainThreadExecutor;
+import dev.mcinsight.server.PerfMetrics;
 import java.util.List;
 import net.minecraft.world.level.Level;
 
 public final class StatusCollector {
+
+    private static volatile JsonArray cachedModsArray;
+    private static volatile JsonObject cachedModsResponse;
+    private static volatile String cachedGameDir;
+    private static volatile String cachedModsDir;
+    private static volatile String cachedConfigDir;
 
     private StatusCollector() {}
 
@@ -26,9 +33,9 @@ public final class StatusCollector {
         out.addProperty("loaderVersion", Services.PLATFORM.getLoaderVersion());
         out.addProperty("port", port);
         out.addProperty("side", Services.PLATFORM.isClientSide() ? "client" : "server");
-        out.addProperty("gameDir", Services.PLATFORM.getGameDir().toAbsolutePath().toString());
-        out.addProperty("modsDir", Services.PLATFORM.getModsDir().toAbsolutePath().toString());
-        out.addProperty("configDir", Services.PLATFORM.getConfigDir().toAbsolutePath().toString());
+        out.addProperty("gameDir", getGameDir());
+        out.addProperty("modsDir", getModsDir());
+        out.addProperty("configDir", getConfigDir());
 
         boolean hasIntegrated = executor.getActiveServer() != null;
         out.addProperty("integratedOrDedicatedServerActive", hasIntegrated);
@@ -60,26 +67,36 @@ public final class StatusCollector {
         integrations.addProperty("jadeLoaded", Services.PLATFORM.isModLoaded("jade"));
         out.add("integrations", integrations);
 
-        List<IPlatformHelper.ModMetadata> mods = Services.PLATFORM.getLoadedMods();
-        out.addProperty("modCount", mods.size());
+        out.addProperty("modCount", Services.PLATFORM.getLoadedModCount());
         if (includeMods) {
-            out.add("mods", toModArray(mods));
+            out.add("mods", getCachedModArray());
         }
         return out;
     }
 
     public static JsonObject collectMods() {
-        List<IPlatformHelper.ModMetadata> mods = Services.PLATFORM.getLoadedMods();
+        JsonObject existing = cachedModsResponse;
+        if (existing != null) {
+            PerfMetrics.markCacheHit();
+            return existing;
+        }
+        JsonArray arr = getCachedModArray();
         JsonObject out = new JsonObject();
         out.addProperty("ok", true);
-        out.addProperty("modsDir", Services.PLATFORM.getModsDir().toAbsolutePath().toString());
-        out.addProperty("count", mods.size());
-        out.add("mods", toModArray(mods));
+        out.addProperty("modsDir", getModsDir());
+        out.addProperty("count", arr.size());
+        out.add("mods", arr);
+        cachedModsResponse = out;
         return out;
     }
 
-    private static JsonArray toModArray(List<IPlatformHelper.ModMetadata> mods) {
-        JsonArray arr = new JsonArray();
+    private static JsonArray getCachedModArray() {
+        JsonArray existing = cachedModsArray;
+        if (existing != null) {
+            return existing;
+        }
+        List<IPlatformHelper.ModMetadata> mods = Services.PLATFORM.getLoadedMods();
+        JsonArray arr = new JsonArray(mods.size());
         for (IPlatformHelper.ModMetadata m : mods) {
             JsonObject obj = new JsonObject();
             obj.addProperty("id", m.id());
@@ -93,6 +110,34 @@ public final class StatusCollector {
             }
             arr.add(obj);
         }
+        cachedModsArray = arr;
         return arr;
+    }
+
+    private static String getGameDir() {
+        String s = cachedGameDir;
+        if (s == null) {
+            s = Services.PLATFORM.getGameDir().toAbsolutePath().toString();
+            cachedGameDir = s;
+        }
+        return s;
+    }
+
+    private static String getModsDir() {
+        String s = cachedModsDir;
+        if (s == null) {
+            s = Services.PLATFORM.getModsDir().toAbsolutePath().toString();
+            cachedModsDir = s;
+        }
+        return s;
+    }
+
+    private static String getConfigDir() {
+        String s = cachedConfigDir;
+        if (s == null) {
+            s = Services.PLATFORM.getConfigDir().toAbsolutePath().toString();
+            cachedConfigDir = s;
+        }
+        return s;
     }
 }

@@ -11,6 +11,33 @@ export interface IntrospectDeps {
   defaultGameDir?: string;
 }
 
+const INSPECT_CLASS_SCHEMA = z.object({
+  className: z.string().min(1).describe('Fully qualified Java class name, e.g. baguchan.tofucraft.block.KinuTofuBlock'),
+});
+
+const SEARCH_JARS_SCHEMA = z.object({
+  query: z.string().min(1).describe('Case-insensitive substring to search for'),
+  scope: z.enum(['jars', 'pack_scripts', 'both']).optional().default('jars'),
+  modIdOrJar: z.string().optional().describe('Limit JAR search to a specific mod ID or JAR filename'),
+  limit: z.number().int().min(1).max(200).optional().default(50),
+  modsDir: z.string().optional(),
+  gameDir: z.string().optional(),
+});
+
+const READ_JAR_RESOURCE_SCHEMA = z.object({
+  modIdOrJar: z.string().min(1).describe('Mod ID (e.g. tofucraft, mekanism) or exact JAR filename'),
+  internalPath: z.string().optional().describe('Exact path inside JAR to read; omit to list entries under prefix'),
+  prefix: z.string().optional().default('').describe('Path prefix when listing entries (e.g. data/tofucraft/recipe/)'),
+  limit: z.number().int().min(1).max(300).optional().default(100),
+  modsDir: z.string().optional(),
+});
+
+const DECOMPILE_CLASS_SCHEMA = z.object({
+  className: z.string().min(1).describe('Fully qualified Java class name'),
+  mode: z.enum(['vineflower', 'javap']).optional().default('vineflower'),
+  modsDir: z.string().optional(),
+});
+
 async function resolveModsDir(deps: IntrospectDeps, override?: string): Promise<string> {
   if (override) return override;
   const live = await deps.mcClient.tryGetModsDir();
@@ -21,12 +48,8 @@ async function resolveModsDir(deps: IntrospectDeps, override?: string): Promise<
 
 async function resolveGameDir(deps: IntrospectDeps, override?: string): Promise<string> {
   if (override) return override;
-  try {
-    const st = await deps.mcClient.get<{ gameDir?: string }>('/api/v1/status');
-    if (st.gameDir) return st.gameDir;
-  } catch {
-    // Fall back to defaultGameDir
-  }
+  const live = await deps.mcClient.tryGetGameDir();
+  if (live) return live;
   if (deps.defaultGameDir) return deps.defaultGameDir;
   throw new Error('Could not determine game directory. Pass --game-dir or start Minecraft with McInsight.');
 }
@@ -39,9 +62,7 @@ export function registerIntrospectTools(server: McpServer, deps: IntrospectDeps)
       description:
         'Reflect a loaded Java class inside the running Minecraft JVM (superclass, interfaces, fields, methods, source JAR path).',
       annotations: { readOnlyHint: true, idempotentHint: true },
-      inputSchema: z.object({
-        className: z.string().min(1).describe('Fully qualified Java class name, e.g. baguchan.tofucraft.block.KinuTofuBlock'),
-      }),
+      inputSchema: INSPECT_CLASS_SCHEMA,
     },
     async ({ className }) => {
       return jsonText(await deps.mcClient.get('/api/v1/introspect/class', { name: className }));
@@ -55,27 +76,30 @@ export function registerIntrospectTools(server: McpServer, deps: IntrospectDeps)
       description:
         'Search .class names, data/assets entries inside mods/*.jar, or search KubeJS/globalpacks/FTB Quests files in the game directory.',
       annotations: { readOnlyHint: true, idempotentHint: true },
-      inputSchema: z.object({
-        query: z.string().min(1).describe('Case-insensitive substring to search for'),
-        scope: z.enum(['jars', 'pack_scripts', 'both']).optional().default('jars'),
-        modIdOrJar: z.string().optional().describe('Limit JAR search to a specific mod ID or JAR filename'),
-        limit: z.number().int().min(1).max(200).optional().default(50),
-        modsDir: z.string().optional(),
-        gameDir: z.string().optional(),
-      }),
+      inputSchema: SEARCH_JARS_SCHEMA,
     },
     async ({ query, scope, modIdOrJar, limit, modsDir, gameDir }) => {
       const out: Record<string, unknown> = { ok: true, query };
+      const tasks: Array<Promise<void>> = [];
       if (scope === 'jars' || scope === 'both') {
-        const resolvedMods = await resolveModsDir(deps, modsDir);
-        out.modsDir = resolvedMods;
-        out.jarHits = await deps.jarInspector.searchJarEntries(resolvedMods, query, modIdOrJar, limit);
+        tasks.push(
+          (async () => {
+            const resolvedMods = await resolveModsDir(deps, modsDir);
+            out.modsDir = resolvedMods;
+            out.jarHits = await deps.jarInspector.searchJarEntries(resolvedMods, query, modIdOrJar, limit);
+          })(),
+        );
       }
       if (scope === 'pack_scripts' || scope === 'both') {
-        const resolvedGame = await resolveGameDir(deps, gameDir);
-        out.gameDir = resolvedGame;
-        out.packHits = await deps.jarInspector.searchPackFiles(resolvedGame, query, limit);
+        tasks.push(
+          (async () => {
+            const resolvedGame = await resolveGameDir(deps, gameDir);
+            out.gameDir = resolvedGame;
+            out.packHits = await deps.jarInspector.searchPackFiles(resolvedGame, query, limit);
+          })(),
+        );
       }
+      await Promise.all(tasks);
       return jsonText(out);
     },
   );
@@ -86,13 +110,7 @@ export function registerIntrospectTools(server: McpServer, deps: IntrospectDeps)
       title: 'Read or List Resource Inside a Mod JAR',
       description: 'Read a JSON, Markdown, SNBT, or lang file directly from inside a mod JAR, or list entries under a prefix.',
       annotations: { readOnlyHint: true, idempotentHint: true },
-      inputSchema: z.object({
-        modIdOrJar: z.string().min(1).describe('Mod ID (e.g. tofucraft, mekanism) or exact JAR filename'),
-        internalPath: z.string().optional().describe('Exact path inside JAR to read; omit to list entries under prefix'),
-        prefix: z.string().optional().default('').describe('Path prefix when listing entries (e.g. data/tofucraft/recipe/)'),
-        limit: z.number().int().min(1).max(300).optional().default(100),
-        modsDir: z.string().optional(),
-      }),
+      inputSchema: READ_JAR_RESOURCE_SCHEMA,
     },
     async ({ modIdOrJar, internalPath, prefix, limit, modsDir }) => {
       const resolvedMods = await resolveModsDir(deps, modsDir);
@@ -110,11 +128,7 @@ export function registerIntrospectTools(server: McpServer, deps: IntrospectDeps)
       description:
         'Decompile any modded Java class (and its inner classes) from mods/*.jar using Vineflower 1.12.0 or JDK javap so the AI can understand undocumented mod behavior, multiblocks, or tick logic.',
       annotations: { readOnlyHint: true, idempotentHint: true },
-      inputSchema: z.object({
-        className: z.string().min(1).describe('Fully qualified Java class name'),
-        mode: z.enum(['vineflower', 'javap']).optional().default('vineflower'),
-        modsDir: z.string().optional(),
-      }),
+      inputSchema: DECOMPILE_CLASS_SCHEMA,
     },
     async ({ className, mode, modsDir }) => {
       const resolvedMods = await resolveModsDir(deps, modsDir);

@@ -13,6 +13,8 @@ import net.neoforged.neoforgespi.language.IModInfo;
 
 public final class NeoForgePlatformHelper implements IPlatformHelper {
 
+    private volatile List<ModMetadata> cachedMods;
+
     @Override
     public String getLoaderName() {
         return "neoforge";
@@ -32,6 +34,10 @@ public final class NeoForgePlatformHelper implements IPlatformHelper {
 
     @Override
     public List<ModMetadata> getLoadedMods() {
+        List<ModMetadata> existing = cachedMods;
+        if (existing != null) {
+            return existing;
+        }
         List<ModMetadata> out = new ArrayList<>();
         for (IModInfo info : ModList.get().getMods()) {
             String jarPath = "";
@@ -50,7 +56,9 @@ public final class NeoForgePlatformHelper implements IPlatformHelper {
             ));
         }
         out.sort(Comparator.comparing(ModMetadata::id));
-        return out;
+        List<ModMetadata> frozen = List.copyOf(out);
+        cachedMods = frozen;
+        return frozen;
     }
 
     @Override
