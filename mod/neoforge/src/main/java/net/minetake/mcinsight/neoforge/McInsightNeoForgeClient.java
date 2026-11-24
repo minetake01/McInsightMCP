@@ -8,6 +8,7 @@ import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 import net.neoforged.neoforge.client.event.RegisterClientReloadListenersEvent;
 import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
  * Client-only NeoForge event bindings, isolated so dedicated servers never load client classes.
@@ -17,6 +18,14 @@ public final class McInsightNeoForgeClient {
     private McInsightNeoForgeClient() {}
 
     public static void register(IEventBus modEventBus) {
+        NeoForgePlatformHelper.setClientPacketSender(payload -> {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.getConnection() == null || !mc.getConnection().hasChannel(payload.type())) {
+                return false;
+            }
+            PacketDistributor.sendToServer(payload);
+            return true;
+        });
         modEventBus.addListener(McInsightNeoForgeClient::onClientSetup);
         modEventBus.addListener(McInsightNeoForgeClient::onRegisterClientReloadListeners);
         NeoForge.EVENT_BUS.addListener(McInsightNeoForgeClient::onClientLogin);
@@ -36,6 +45,6 @@ public final class McInsightNeoForgeClient {
     }
 
     private static void onClientLogout(ClientPlayerNetworkEvent.LoggingOut event) {
-        McInsightCommon.invalidateDataCaches();
+        McInsightCommon.onClientDisconnect();
     }
 }

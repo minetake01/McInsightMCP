@@ -6,6 +6,7 @@ import net.minetake.mcinsight.McInsightConstants;
 import net.minetake.mcinsight.client.ClientStateAccessor;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
 import net.minetake.mcinsight.compat.IntegrationRegistry;
+import net.minetake.mcinsight.network.RemoteServerBridge;
 import net.minetake.mcinsight.platform.IPlatformHelper;
 import net.minetake.mcinsight.platform.Services;
 import net.minetake.mcinsight.server.MainThreadExecutor;
@@ -101,6 +102,10 @@ public final class StatusCollector {
             activeViewers.add(b.getViewerName());
         }
         integrations.add("activeRecipeViewers", activeViewers);
+        integrations.addProperty("remoteServerBridgeReady", RemoteServerBridge.isAvailable());
+        if (RemoteServerBridge.isAvailable() && RemoteServerBridge.getRemoteLoader() != null) {
+            integrations.addProperty("remoteServerLoader", RemoteServerBridge.getRemoteLoader());
+        }
         integrations.addProperty("patchouliLoaded", Services.PLATFORM.isModLoaded("patchouli"));
         integrations.addProperty("guidemeLoaded", Services.PLATFORM.isModLoaded("guideme"));
         integrations.addProperty("ftbQuestsLoaded", Services.PLATFORM.isModLoaded("ftbquests"));

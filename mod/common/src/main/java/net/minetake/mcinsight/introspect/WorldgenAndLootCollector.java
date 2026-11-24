@@ -8,6 +8,7 @@ import com.mojang.serialization.Codec;
 import com.mojang.serialization.DataResult;
 import com.mojang.serialization.JsonOps;
 import net.minetake.mcinsight.McInsightConstants;
+import net.minetake.mcinsight.network.RemoteServerBridge;
 import net.minetake.mcinsight.platform.Services;
 import net.minetake.mcinsight.server.JsonUtil;
 import net.minetake.mcinsight.server.MainThreadExecutor;
@@ -183,6 +184,12 @@ public final class WorldgenAndLootCollector {
     }
 
     public static JsonObject getWorldgenSummary(MainThreadExecutor executor) throws Exception {
+        if (executor.getActiveServer() == null && RemoteServerBridge.isAvailable()) {
+            JsonObject params = new JsonObject();
+            params.addProperty("kind", "summary");
+            return RemoteServerBridge.request("worldgen", params, 10000);
+        }
+
         DataSnapshot snap = getOrCreateSnapshot(executor);
         if (snap.cachedSummary != null) {
             return snap.cachedSummary;
@@ -243,6 +250,20 @@ public final class WorldgenAndLootCollector {
         int maxAllowed = (summaryOnly && "biome".equals(normKind)) ? 250 : 100;
         int clampedLimit = Math.max(1, Math.min(limit, maxAllowed));
         int clampedOffset = Math.max(0, offset);
+
+        if (executor.getActiveServer() == null && RemoteServerBridge.isAvailable()) {
+            JsonObject params = new JsonObject();
+            params.addProperty("kind", normKind);
+            if (!normQ.isEmpty()) params.addProperty("q", query);
+            if (!normMod.isEmpty()) params.addProperty("mod", modId);
+            params.addProperty("searchContent", searchContent);
+            if (minTemp != null) params.addProperty("minTemp", minTemp);
+            if (maxTemp != null) params.addProperty("maxTemp", maxTemp);
+            params.addProperty("summaryOnly", summaryOnly);
+            params.addProperty("limit", clampedLimit);
+            params.addProperty("offset", clampedOffset);
+            return RemoteServerBridge.request("worldgen", params, 10000);
+        }
 
         DataSnapshot snap = getOrCreateSnapshot(executor);
 
@@ -317,6 +338,17 @@ public final class WorldgenAndLootCollector {
         String normMod = modId == null ? "" : modId.trim().toLowerCase(Locale.ROOT);
         int clampedLimit = Math.max(1, Math.min(limit, 100));
         int clampedOffset = Math.max(0, offset);
+
+        if (executor.getActiveServer() == null && RemoteServerBridge.isAvailable()) {
+            JsonObject params = new JsonObject();
+            if (!normQ.isEmpty()) params.addProperty("q", query);
+            if (!normItem.isEmpty()) params.addProperty("item", itemFilter);
+            if (!normMod.isEmpty()) params.addProperty("mod", modId);
+            params.addProperty("includeModifiers", includeModifiers);
+            params.addProperty("limit", clampedLimit);
+            params.addProperty("offset", clampedOffset);
+            return RemoteServerBridge.request("loot", params, 10000);
+        }
 
         DataSnapshot snap = getOrCreateSnapshot(executor);
         LootIndex lootIndex = getOrBuildLootIndex(snap);
@@ -461,18 +493,29 @@ public final class WorldgenAndLootCollector {
         int limit,
         int offset
     ) throws Exception {
+        String normQ = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+        String normReg = registryFilter == null ? "" : registryFilter.trim().toLowerCase(Locale.ROOT);
+        String normMod = modId == null ? "" : modId.trim().toLowerCase(Locale.ROOT);
+        int clampedLimit = Math.max(1, Math.min(limit, 100));
+        int clampedOffset = Math.max(0, offset);
+
+        if (executor.getActiveServer() == null && RemoteServerBridge.isAvailable()) {
+            JsonObject params = new JsonObject();
+            if (!normQ.isEmpty()) params.addProperty("q", query);
+            if (!normReg.isEmpty()) params.addProperty("registry", registryFilter);
+            if (!normMod.isEmpty()) params.addProperty("mod", modId);
+            params.addProperty("includeRaw", includeRaw);
+            params.addProperty("limit", clampedLimit);
+            params.addProperty("offset", clampedOffset);
+            return RemoteServerBridge.request("datamaps", params, 10000);
+        }
+
         if (!isNeoForgeLoader()) {
             return JsonUtil.errorObject(
                 "UNSUPPORTED_ON_LOADER",
                 "NeoForge data_maps are unsupported on loader '" + Services.PLATFORM.getLoaderName() + "'."
             );
         }
-
-        String normQ = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
-        String normReg = registryFilter == null ? "" : registryFilter.trim().toLowerCase(Locale.ROOT);
-        String normMod = modId == null ? "" : modId.trim().toLowerCase(Locale.ROOT);
-        int clampedLimit = Math.max(1, Math.min(limit, 100));
-        int clampedOffset = Math.max(0, offset);
 
         DataSnapshot snap = getOrCreateSnapshot(executor);
         if (snap.dataRm == null) {

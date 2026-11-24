@@ -16,6 +16,9 @@
   "icon": "mcinsight.png",
   "environment": "*",
   "entrypoints": {
+    "main": [
+      "net.minetake.mcinsight.fabric.McInsightFabricCommon"
+    ],
     "client": [
       "net.minetake.mcinsight.fabric.McInsightFabricClient"
     ],

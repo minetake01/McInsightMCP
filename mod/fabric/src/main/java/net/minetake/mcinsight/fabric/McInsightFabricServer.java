@@ -8,19 +8,11 @@ public final class McInsightFabricServer implements DedicatedServerModInitialize
 
     @Override
     public void onInitializeServer() {
-        McInsightCommon.init();
+        McInsightCommon.initServer();
 
-        ServerLifecycleEvents.SERVER_STARTED.register(McInsightCommon::attachServer);
-        ServerLifecycleEvents.SERVER_STOPPING.register(McInsightCommon::detachServer);
         ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
             McInsightCommon.detachServer(server);
             McInsightCommon.shutdown();
-        });
-        ServerLifecycleEvents.END_DATA_PACK_RELOAD.register((server, resourceManager, success) -> {
-            if (success) {
-                McInsightCommon.invalidateDataCaches();
-                McInsightCommon.invalidateResourceCaches();
-            }
         });
     }
 }

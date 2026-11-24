@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import net.minetake.mcinsight.client.ClientStateAccessor;
+import net.minetake.mcinsight.network.RemoteServerBridge;
 import net.minetake.mcinsight.platform.Services;
 import net.minetake.mcinsight.server.JsonUtil;
 import net.minetake.mcinsight.server.MainThreadExecutor;
@@ -56,6 +57,17 @@ public final class AdvancementCollector {
         String normStatus = statusFilter == null ? "all" : statusFilter.trim().toLowerCase(Locale.ROOT);
         int clampedLimit = Math.max(1, Math.min(limit, 200));
         int clampedOffset = Math.max(0, offset);
+
+        if (executor.getActiveServer() == null && RemoteServerBridge.isAvailable()) {
+            JsonObject params = new JsonObject();
+            if (query != null && !query.isBlank()) params.addProperty("q", query);
+            if (modId != null && !modId.isBlank()) params.addProperty("mod", modId);
+            params.addProperty("status", normStatus);
+            params.addProperty("includeRecipes", includeRecipes);
+            params.addProperty("limit", clampedLimit);
+            params.addProperty("offset", clampedOffset);
+            return RemoteServerBridge.request("advancements", params, 8000);
+        }
 
         // Phase 1: Lightweight capture on owning game thread
         SnapshotResult snapshot = captureSnapshot(executor);

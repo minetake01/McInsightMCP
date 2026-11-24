@@ -5,6 +5,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mojang.serialization.JsonOps;
 import net.minetake.mcinsight.client.ClientStateAccessor;
+import net.minetake.mcinsight.network.RemoteServerBridge;
 import net.minetake.mcinsight.platform.Services;
 import net.minetake.mcinsight.server.JsonUtil;
 import net.minetake.mcinsight.server.MainThreadExecutor;
@@ -25,6 +26,7 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.item.ItemEntity;
@@ -160,8 +162,10 @@ public final class WorldTargetCollector {
         MinecraftServer server = executor.getActiveServer();
         if ("block".equals(target.hitType())) {
             final BlockPos pos = target.blockPos();
+            record ClientBlockSnap(RawBlockSnapshot snap, boolean withinSyncRange) {}
             RawBlockSnapshot snap;
             boolean authoritative;
+            boolean syncEligible = false;
             if (server != null) {
                 authoritative = true;
                 snap = executor.supplyOnServerThread(() -> {
@@ -171,11 +175,18 @@ public final class WorldTargetCollector {
                 }, 5000);
             } else {
                 authoritative = false;
-                snap = executor.supplyOnClientThread(() -> {
+                ClientBlockSnap cs = executor.supplyOnClientThread(() -> {
                     Level level = ClientStateAccessor.getLevel();
                     if (level == null) return null;
-                    return captureBlockSnapshot(pos, level.getBlockState(pos), level.getBlockEntity(pos), level.registryAccess());
+                    Player cp = ClientStateAccessor.getPlayer();
+                    boolean inRange = cp != null && cp.blockPosition().distSqr(pos) <= 16.0 * 16.0;
+                    return new ClientBlockSnap(
+                        captureBlockSnapshot(pos, level.getBlockState(pos), level.getBlockEntity(pos), level.registryAccess()),
+                        inRange
+                    );
                 }, 5000);
+                snap = cs != null ? cs.snap() : null;
+                syncEligible = cs != null && cs.withinSyncRange();
             }
             if (snap == null) {
                 return JsonUtil.errorObject("NO_WORLD", "Target dimension is no longer loaded.");
@@ -184,6 +195,19 @@ public final class WorldTargetCollector {
             out.addProperty("ok", true);
             out.addProperty("hitType", "block");
             out.addProperty("face", target.face());
+            if (!authoritative && syncEligible && RemoteServerBridge.isAvailable()) {
+                JsonObject params = new JsonObject();
+                params.addProperty("x", pos.getX());
+                params.addProperty("y", pos.getY());
+                params.addProperty("z", pos.getZ());
+                JsonObject remote = RemoteServerBridge.request("looking_at_block_entity", params, 3000);
+                if (remote != null && remote.has("ok") && remote.get("ok").getAsBoolean()) {
+                    if (remote.has("blockEntity")) {
+                        out.add("blockEntity", remote.get("blockEntity"));
+                    }
+                    authoritative = true;
+                }
+            }
             out.addProperty("hasAuthoritativeServerData", authoritative);
             return out;
         } else {
@@ -290,18 +314,43 @@ public final class WorldTargetCollector {
         out.addProperty("ok", true);
         out.addProperty("radius", r);
         out.addProperty("dimension", snap.dimensionId());
-        out.addProperty("hasAuthoritativeServerData", snap.authoritative());
+        boolean authoritative = snap.authoritative();
         out.add("blockSummary", summary);
         out.addProperty("totalBlockTypes", sortedCounts.size());
         if (sortedCounts.size() > summaryLimit) {
             out.addProperty("blockSummaryTruncated", true);
         }
 
-        out.add("blockEntities", blockEntities);
-        out.addProperty("totalBlockEntities", snap.totalBlockEntities());
-        if (snap.totalBlockEntities() > blockEntities.size()) {
-            out.addProperty("blockEntitiesTruncated", true);
+        if (!authoritative && RemoteServerBridge.isAvailable()) {
+            int syncRadius = Math.min(r, 16);
+            JsonObject params = new JsonObject();
+            params.addProperty("radius", syncRadius);
+            if (!normFilter.isEmpty()) {
+                params.addProperty("filter", normFilter);
+            }
+            JsonObject remote = RemoteServerBridge.request("scan_block_entities", params, 5000);
+            if (remote != null && remote.has("ok") && remote.get("ok").getAsBoolean() && remote.has("blockEntities")) {
+                out.add("blockEntities", remote.get("blockEntities"));
+                if (remote.has("totalBlockEntities")) {
+                    out.add("totalBlockEntities", remote.get("totalBlockEntities"));
+                }
+                if (remote.has("blockEntitiesTruncated")) {
+                    out.add("blockEntitiesTruncated", remote.get("blockEntitiesTruncated"));
+                }
+                if (r > 16) {
+                    out.addProperty("serverBlockEntityRadius", syncRadius);
+                }
+                authoritative = true;
+            }
         }
+        if (!out.has("blockEntities")) {
+            out.add("blockEntities", blockEntities);
+            out.addProperty("totalBlockEntities", snap.totalBlockEntities());
+            if (snap.totalBlockEntities() > blockEntities.size()) {
+                out.addProperty("blockEntitiesTruncated", true);
+            }
+        }
+        out.addProperty("hasAuthoritativeServerData", authoritative);
 
         if (!normFilter.isEmpty()) {
             JsonArray matchedBlocks = new JsonArray(snap.matchedBlocks().size());
@@ -635,5 +684,104 @@ public final class WorldTargetCollector {
             obj.add("nbt", JsonUtil.nbtToJson(e.nbt()));
         }
         return obj;
+    }
+
+    public static JsonObject collectNearbyBlockEntitiesForPlayer(
+        MainThreadExecutor executor,
+        ServerPlayer sender,
+        int radius,
+        String filter
+    ) throws Exception {
+        if (sender == null) {
+            return JsonUtil.errorObject("NO_PLAYER", "Missing player context.");
+        }
+        int r = Math.max(1, Math.min(radius, 16));
+        String normFilter = filter == null ? "" : filter.trim().toLowerCase(Locale.ROOT);
+
+        record BeScanResult(List<RawBlockSnapshot> snapshots, int totalCount) {}
+        BeScanResult res = executor.supplyOnServerThread(() -> {
+            Level level = sender.level();
+            HolderLookup.Provider registries = level.registryAccess();
+            BlockPos center = sender.blockPosition();
+            int minX = center.getX() - r;
+            int maxX = center.getX() + r;
+            int minY = Math.max(level.getMinBuildHeight(), center.getY() - r);
+            int maxY = Math.min(level.getMaxBuildHeight() - 1, center.getY() + r);
+            int minZ = center.getZ() - r;
+            int maxZ = center.getZ() + r;
+
+            List<RawBlockSnapshot> snapshots = new ArrayList<>();
+            int total = 0;
+            var chunkSource = level.getChunkSource();
+            for (int cx = minX >> 4; cx <= (maxX >> 4); cx++) {
+                int cMinX = Math.max(minX, cx << 4);
+                int cMaxX = Math.min(maxX, (cx << 4) + 15);
+                for (int cz = minZ >> 4; cz <= (maxZ >> 4); cz++) {
+                    LevelChunk chunk = chunkSource.getChunkNow(cx, cz);
+                    if (chunk == null) continue;
+                    int cMinZ = Math.max(minZ, cz << 4);
+                    int cMaxZ = Math.min(maxZ, (cz << 4) + 15);
+                    for (Map.Entry<BlockPos, BlockEntity> entry : chunk.getBlockEntities().entrySet()) {
+                        BlockPos bePos = entry.getKey();
+                        if (bePos.getX() >= cMinX && bePos.getX() <= cMaxX
+                            && bePos.getY() >= minY && bePos.getY() <= maxY
+                            && bePos.getZ() >= cMinZ && bePos.getZ() <= cMaxZ) {
+                            BlockState beState = chunk.getBlockState(bePos);
+                            BlockEntity be = entry.getValue();
+                            if (!normFilter.isEmpty() && !matchesBlockFilter(beState.getBlock(), be, normFilter)) {
+                                continue;
+                            }
+                            total++;
+                            if (snapshots.size() < MAX_BLOCK_ENTITIES) {
+                                snapshots.add(captureBlockSnapshot(bePos, beState, be, registries));
+                            }
+                        }
+                    }
+                }
+            }
+            return new BeScanResult(snapshots, total);
+        }, 5000);
+
+        JsonArray arr = new JsonArray(res.snapshots().size());
+        for (RawBlockSnapshot b : res.snapshots()) {
+            arr.add(serializeBlockSnapshot(b, false));
+        }
+        JsonObject out = new JsonObject();
+        out.addProperty("ok", true);
+        out.add("blockEntities", arr);
+        out.addProperty("totalBlockEntities", res.totalCount());
+        if (res.totalCount() > arr.size()) {
+            out.addProperty("blockEntitiesTruncated", true);
+        }
+        return out;
+    }
+
+    public static JsonObject inspectBlockEntityForPlayer(
+        MainThreadExecutor executor,
+        ServerPlayer sender,
+        int x,
+        int y,
+        int z
+    ) throws Exception {
+        if (sender == null) {
+            return JsonUtil.errorObject("NO_PLAYER", "Missing player context.");
+        }
+        BlockPos pos = new BlockPos(x, y, z);
+        if (sender.blockPosition().distSqr(pos) > 16.0 * 16.0) {
+            return JsonUtil.errorObject("OUT_OF_RANGE", "Target block is outside the 16-block inspection range.");
+        }
+        RawBlockSnapshot snap = executor.supplyOnServerThread(() -> {
+            Level level = sender.level();
+            if (!level.isLoaded(pos)) {
+                return null;
+            }
+            return captureBlockSnapshot(pos, level.getBlockState(pos), level.getBlockEntity(pos), level.registryAccess());
+        }, 5000);
+        if (snap == null) {
+            return JsonUtil.errorObject("UNLOADED", "Target position is not loaded.");
+        }
+        JsonObject out = serializeBlockSnapshot(snap, true);
+        out.addProperty("ok", true);
+        return out;
     }
 }
