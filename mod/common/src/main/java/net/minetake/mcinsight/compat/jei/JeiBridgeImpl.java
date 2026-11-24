@@ -5,6 +5,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mojang.serialization.DataResult;
 import com.mojang.serialization.JsonOps;
+import net.minetake.mcinsight.client.ClientStateAccessor;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
 import net.minetake.mcinsight.server.JsonUtil;
 import java.util.ArrayList;
@@ -63,6 +64,12 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
     }
 
     @Override
+    public void invalidateCache() {
+        cachedCategories = null;
+        cachedCatalysts.clear();
+    }
+
+    @Override
     public JsonObject listCategories() {
         JsonObject existing = cachedCategories;
         if (existing != null) {
@@ -70,6 +77,10 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
         }
         IRecipeManager recipeManager = runtime.getRecipeManager();
         IIngredientManager ingredientManager = runtime.getIngredientManager();
+        var level = ClientStateAccessor.getLevel();
+        RegistryOps<JsonElement> jsonOps = level != null
+            ? level.registryAccess().createSerializationContext(JsonOps.INSTANCE)
+            : null;
         JsonArray categories = new JsonArray();
 
         List<IRecipeCategory<?>> list = recipeManager.createRecipeCategoryLookup().get().toList();
@@ -84,7 +95,7 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
 
                 JsonArray catalysts = new JsonArray();
                 recipeManager.createRecipeCatalystLookup(cat.getRecipeType()).get().forEach(ti ->
-                    catalysts.add(serializeTypedIngredient(ti, ingredientManager, null))
+                    catalysts.add(serializeTypedIngredient(ti, ingredientManager, jsonOps))
                 );
                 obj.add("catalysts", catalysts);
                 categories.add(obj);
@@ -107,7 +118,7 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
             return List.of();
         }
         try {
-            List<IFocus<?>> focusList = buildFocusList(itemId, "any", runtime.getJeiHelpers());
+            List<IFocus<?>> focusList = buildFocusList(itemId, "any", runtime.getJeiHelpers(), runtime.getIngredientManager());
             if (focusList.isEmpty()) {
                 return List.of();
             }
@@ -152,7 +163,7 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
             ? registries.createSerializationContext(JsonOps.INSTANCE)
             : null;
 
-        List<IFocus<?>> focusList = buildFocusList(itemQuery, role, helpers);
+        List<IFocus<?>> focusList = buildFocusList(itemQuery, role, helpers, ingredientManager);
         IRecipeCategoriesLookup catLookup = recipeManager.createRecipeCategoryLookup();
         if (!focusList.isEmpty()) {
             catLookup.limitFocus(focusList);
@@ -349,12 +360,18 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
             mcRecipe = direct;
         }
 
+        boolean encodedRaw = false;
         if (mcRecipe != null && jsonOps != null) {
             try {
                 DataResult<JsonElement> encoded = Recipe.CODEC.encodeStart(jsonOps, mcRecipe);
-                encoded.result().ifPresent(el -> obj.add("rawJson", el));
+                Optional<JsonElement> res = encoded.result();
+                if (res.isPresent()) {
+                    obj.add("rawJson", res.get());
+                    encodedRaw = true;
+                }
             } catch (Exception ignored) {}
-        } else if (recipe instanceof IJeiIngredientInfoRecipe info) {
+        }
+        if (!encodedRaw && recipe instanceof IJeiIngredientInfoRecipe info) {
             JsonArray descArr = new JsonArray();
             for (FormattedText ft : info.getDescription()) {
                 String text = ft.getString();
@@ -363,48 +380,77 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
                 }
             }
             obj.add("description", descArr);
-        } else {
-            obj.add("pojoSnapshot", JsonUtil.snapshotObject(recipe, 3));
+        } else if (!encodedRaw) {
+            obj.add("pojoSnapshot", JsonUtil.snapshotObject(recipe, 3, jsonOps));
         }
 
         return obj;
     }
 
-    private List<IFocus<?>> buildFocusList(String itemQuery, String role, IJeiHelpers helpers) {
-        if (itemQuery == null || itemQuery.isBlank() || !itemQuery.contains(":")) {
+    private List<IFocus<?>> buildFocusList(
+        String itemQuery,
+        String role,
+        IJeiHelpers helpers,
+        IIngredientManager ingredientManager
+    ) {
+        if (itemQuery == null || itemQuery.isBlank() || itemQuery.trim().startsWith("#") || !itemQuery.contains(":")) {
             return Collections.emptyList();
         }
         ResourceLocation rl = ResourceLocation.tryParse(itemQuery.trim());
-        if (rl == null || !BuiltInRegistries.ITEM.containsKey(rl)) {
-            return Collections.emptyList();
-        }
-        Item item = BuiltInRegistries.ITEM.get(rl);
-        ItemStack stack = new ItemStack(item);
-        if (stack.isEmpty()) {
+        if (rl == null) {
             return Collections.emptyList();
         }
 
-        IFocusFactoryProxy proxy = new IFocusFactoryProxy(helpers);
-        String r = role == null ? "any" : role.trim().toLowerCase(Locale.ROOT);
-        if ("input".equals(r)) {
-            return List.of(proxy.create(RecipeIngredientRole.INPUT, stack));
+        List<RecipeIngredientRole> roles = resolveRoles(role);
+        List<IFocus<?>> foci = new ArrayList<>();
+
+        if (BuiltInRegistries.ITEM.containsKey(rl)) {
+            Item item = BuiltInRegistries.ITEM.get(rl);
+            ItemStack stack = new ItemStack(item);
+            if (!stack.isEmpty()) {
+                for (RecipeIngredientRole r : roles) {
+                    foci.add(helpers.getFocusFactory().createFocus(r, VanillaTypes.ITEM_STACK, stack));
+                }
+            }
         }
-        if ("output".equals(r)) {
-            return List.of(proxy.create(RecipeIngredientRole.OUTPUT, stack));
+
+        // Also match non-item ingredients (fluids, chemicals, etc.) across all registered JEI ingredient types
+        for (IIngredientType<?> rawType : ingredientManager.getRegisteredIngredientTypes()) {
+            if (VanillaTypes.ITEM_STACK.equals(rawType)) continue;
+            addMatchingTypeFoci(rawType, rl, roles, helpers, ingredientManager, foci);
         }
-        if ("catalyst".equals(r)) {
-            return List.of(proxy.create(RecipeIngredientRole.CATALYST, stack));
-        }
-        return List.of(
-            proxy.create(RecipeIngredientRole.INPUT, stack),
-            proxy.create(RecipeIngredientRole.OUTPUT, stack)
-        );
+
+        return foci;
     }
 
-    private record IFocusFactoryProxy(IJeiHelpers helpers) {
-        IFocus<ItemStack> create(RecipeIngredientRole role, ItemStack stack) {
-            return helpers.getFocusFactory().createFocus(role, VanillaTypes.ITEM_STACK, stack);
-        }
+    private static <V> void addMatchingTypeFoci(
+        IIngredientType<V> type,
+        ResourceLocation targetRl,
+        List<RecipeIngredientRole> roles,
+        IJeiHelpers helpers,
+        IIngredientManager ingredientManager,
+        List<IFocus<?>> outFoci
+    ) {
+        try {
+            IIngredientHelper<V> helper = ingredientManager.getIngredientHelper(type);
+            for (V val : ingredientManager.getAllIngredients(type)) {
+                ResourceLocation ingRl = helper.getResourceLocation(val);
+                if (targetRl.equals(ingRl)) {
+                    for (RecipeIngredientRole r : roles) {
+                        outFoci.add(helpers.getFocusFactory().createFocus(r, type, val));
+                    }
+                    break;
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private static List<RecipeIngredientRole> resolveRoles(String role) {
+        String r = role == null ? "any" : role.trim().toLowerCase(Locale.ROOT);
+        if ("input".equals(r)) return List.of(RecipeIngredientRole.INPUT);
+        if ("output".equals(r)) return List.of(RecipeIngredientRole.OUTPUT);
+        if ("catalyst".equals(r)) return List.of(RecipeIngredientRole.CATALYST);
+        return List.of(RecipeIngredientRole.INPUT, RecipeIngredientRole.OUTPUT, RecipeIngredientRole.CATALYST);
     }
 
     private boolean matchesItemFilter(
@@ -446,6 +492,23 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
         try {
             IIngredientHelper<V> helper = ingredientManager.getIngredientHelper(typed.getType());
             V val = typed.getIngredient();
+            if (normItem.startsWith("#")) {
+                String tagNeedle = normItem.substring(1);
+                if (helper.getTagStream(val).anyMatch(tagRl -> {
+                    String s = tagRl.toString().toLowerCase(Locale.ROOT);
+                    return tagNeedle.contains(":") ? s.equals(tagNeedle) : s.contains(tagNeedle);
+                })) {
+                    return true;
+                }
+                Optional<ItemStack> maybeStack = typed.getItemStack();
+                if (maybeStack.isPresent() && !maybeStack.get().isEmpty()) {
+                    return maybeStack.get().getTags().anyMatch(tk -> {
+                        String s = tk.location().toString().toLowerCase(Locale.ROOT);
+                        return tagNeedle.contains(":") ? s.equals(tagNeedle) : s.contains(tagNeedle);
+                    });
+                }
+                return false;
+            }
             String id = helper.getResourceLocation(val).toString().toLowerCase(Locale.ROOT);
             if (id.contains(normItem)) {
                 return true;

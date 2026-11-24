@@ -104,17 +104,27 @@ public final class ClientStateAccessor {
         return new ScreenSnapshot(screenClass, title, null, List.of());
     }
 
-    public static HitResult raycast(double maxDistance) {
+    public static String getLocalGameMode() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.gameMode != null) {
+            return mc.gameMode.getPlayerMode().getName();
+        }
+        return null;
+    }
+
+    public static HitResult raycast(double maxDistance, boolean includeFluids) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || mc.level == null) {
             return null;
         }
-        if (maxDistance <= 5.0 && mc.hitResult != null && mc.hitResult.getType() != HitResult.Type.MISS) {
-            return mc.hitResult;
-        }
         Player player = mc.player;
-        HitResult blockHit = player.pick(maxDistance, 0.0F, false);
         Vec3 eyePos = player.getEyePosition(0.0F);
+        if (!includeFluids && maxDistance <= 5.0 && mc.hitResult != null && mc.hitResult.getType() != HitResult.Type.MISS) {
+            if (mc.hitResult.getLocation().distanceToSqr(eyePos) <= maxDistance * maxDistance) {
+                return mc.hitResult;
+            }
+        }
+        HitResult blockHit = player.pick(maxDistance, 0.0F, includeFluids);
         double bestDistSq = blockHit.getType() != HitResult.Type.MISS
             ? blockHit.getLocation().distanceToSqr(eyePos)
             : maxDistance * maxDistance;

@@ -119,7 +119,8 @@ public final class InsightHttpServer {
                 case "/api/v1/player" -> PlayerStateCollector.collect(executor);
                 case "/api/v1/looking-at" -> WorldTargetCollector.collectLookingAt(
                     executor,
-                    HttpQueryParser.parseDouble(query.get("maxDistance"), 16.0, "maxDistance")
+                    HttpQueryParser.parseDouble(query.get("maxDistance"), 16.0, "maxDistance"),
+                    HttpQueryParser.parseBoolean(query.get("includeFluids"), false, "includeFluids")
                 );
                 case "/api/v1/scan" -> WorldTargetCollector.scanArea(
                     executor,
@@ -135,7 +136,11 @@ public final class InsightHttpServer {
                     HttpQueryParser.parseInt(query.get("limit"), 50, "limit"),
                     HttpQueryParser.parseInt(query.get("offset"), 0, "offset")
                 );
-                case "/api/v1/registry/item" -> RegistryCollector.inspectItem(executor, query.get("id"));
+                case "/api/v1/registry/inspect" -> RegistryCollector.inspectEntry(
+                    executor,
+                    query.get("kind"),
+                    query.get("id")
+                );
                 case "/api/v1/registry/tag" -> RegistryCollector.inspectTag(
                     query.get("kind"),
                     query.get("id"),

@@ -1,5 +1,6 @@
 package net.minetake.mcinsight.introspect;
 
+import net.minetake.mcinsight.compat.IntegrationRegistry;
 import net.minetake.mcinsight.server.JsonUtil;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -36,6 +37,7 @@ public final class InsightCacheManager {
         RESOURCE_GENERATION.incrementAndGet();
         ResourceGuideCollector.invalidateCache();
         RegistryCollector.invalidateDisplayNameCache();
+        IntegrationRegistry.invalidateViewerCaches();
     }
 
     public static void invalidateAll() {

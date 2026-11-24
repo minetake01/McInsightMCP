@@ -39,6 +39,18 @@ repositories {
         name = 'BlameJared'
         url = 'https://maven.blamejared.com'
     }
+    maven {
+        name = 'TerraformersMC'
+        url = 'https://maven.terraformersmc.com/'
+    }
+    maven {
+        name = 'Shedaniel'
+        url = 'https://maven.shedaniel.me/'
+    }
+    maven {
+        name = 'Architectury'
+        url = 'https://maven.architectury.dev/'
+    }
 }
 
 ['apiElements', 'runtimeElements', 'sourcesElements'].each { variant ->

@@ -35,4 +35,7 @@ neoForge {
 
 dependencies {
     compileOnly "mezz.jei:jei-${minecraft_version}-neoforge-api:${jei_version}"
+    compileOnly "dev.emi:emi-neoforge:${emi_version}:api"
+    compileOnly "me.shedaniel:RoughlyEnoughItems-api-neoforge:${rei_version}"
+    compileOnly "me.shedaniel:RoughlyEnoughItems-default-plugin-neoforge:${rei_version}"
 }

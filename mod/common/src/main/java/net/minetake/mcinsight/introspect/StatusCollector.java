@@ -87,9 +87,20 @@ public final class StatusCollector {
         }
 
         JsonObject integrations = new JsonObject();
-        IRecipeViewerBridge jei = IntegrationRegistry.getRecipeViewerBridge();
+        IRecipeViewerBridge jei = IntegrationRegistry.getRecipeViewerBridge("jei");
+        IRecipeViewerBridge emi = IntegrationRegistry.getRecipeViewerBridge("emi");
+        IRecipeViewerBridge rei = IntegrationRegistry.getRecipeViewerBridge("rei");
         integrations.addProperty("jeiLoaded", Services.PLATFORM.isModLoaded("jei"));
         integrations.addProperty("jeiRuntimeReady", jei != null && jei.isAvailable());
+        integrations.addProperty("emiLoaded", Services.PLATFORM.isModLoaded("emi"));
+        integrations.addProperty("emiRuntimeReady", emi != null && emi.isAvailable());
+        integrations.addProperty("reiLoaded", Services.PLATFORM.isModLoaded("roughlyenoughitems") || Services.PLATFORM.isModLoaded("rei"));
+        integrations.addProperty("reiRuntimeReady", rei != null && rei.isAvailable());
+        JsonArray activeViewers = new JsonArray();
+        for (IRecipeViewerBridge b : IntegrationRegistry.getRecipeViewerBridges()) {
+            activeViewers.add(b.getViewerName());
+        }
+        integrations.add("activeRecipeViewers", activeViewers);
         integrations.addProperty("patchouliLoaded", Services.PLATFORM.isModLoaded("patchouli"));
         integrations.addProperty("guidemeLoaded", Services.PLATFORM.isModLoaded("guideme"));
         integrations.addProperty("ftbQuestsLoaded", Services.PLATFORM.isModLoaded("ftbquests"));

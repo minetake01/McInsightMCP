@@ -10,6 +10,8 @@ public interface IRecipeViewerBridge {
 
     boolean isAvailable();
 
+    default void invalidateCache() {}
+
     JsonObject listCategories();
 
     List<String> getIngredientInfo(String itemId);

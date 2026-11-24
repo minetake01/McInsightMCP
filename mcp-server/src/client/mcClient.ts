@@ -50,6 +50,7 @@ export interface McStatusResponse {
   remoteServerModVersion?: string;
   integrations?: Record<string, boolean | string[]>;
   modCount: number;
+  filteredModCount?: number;
   mods?: McModInfo[];
 }
 

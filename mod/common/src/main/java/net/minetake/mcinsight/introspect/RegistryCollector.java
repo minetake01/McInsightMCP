@@ -1,8 +1,10 @@
 package net.minetake.mcinsight.introspect;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import net.minetake.mcinsight.client.ClientStateAccessor;
+import com.mojang.serialization.DataResult;
+import com.mojang.serialization.JsonOps;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
 import net.minetake.mcinsight.compat.IntegrationRegistry;
 import net.minetake.mcinsight.platform.Services;
@@ -17,12 +19,16 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
+import net.minecraft.Util;
 import net.minecraft.core.Holder;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.HolderSet;
 import net.minecraft.core.Registry;
+import net.minecraft.core.component.DataComponentMap;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.RegistryOps;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.tags.TagKey;
 import net.minecraft.world.entity.EntityType;
@@ -30,11 +36,14 @@ import net.minecraft.world.food.FoodProperties;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.EntityBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.Property;
 import net.minecraft.world.level.material.Fluid;
+import net.minecraft.world.level.material.FluidState;
 
 public final class RegistryCollector {
 
@@ -102,9 +111,19 @@ public final class RegistryCollector {
             return searchTags(normKind, normQ, normMod, clampedLimit, clampedOffset);
         }
 
+        if (!"item".equals(normKind) && !"block".equals(normKind) && !"fluid".equals(normKind) && !"entity".equals(normKind)) {
+            return JsonUtil.errorObject(
+                "INVALID_KIND",
+                "Unsupported registry search kind: " + kind + ". Expected item, block, fluid, entity, tag, item_tag, block_tag, fluid_tag, or entity_tag."
+            );
+        }
+
         String langKey = "server";
         if (Services.PLATFORM.isClientSide()) {
-            langKey = executor.supplyOnClientThread(ClientStateAccessor::getLanguageCode, 5000);
+            langKey = executor.supplyOnClientThread(
+                () -> net.minetake.mcinsight.client.ClientStateAccessor.getLanguageCode(),
+                5000
+            );
             if (langKey == null || langKey.isBlank()) {
                 langKey = "en_us";
             }
@@ -181,7 +200,7 @@ public final class RegistryCollector {
             String idStr = id.toString();
             String mod = id.getNamespace();
             String modLower = mod.toLowerCase(Locale.ROOT);
-            String displayName = resolveDisplayName(entry);
+            String displayName = resolveDisplayName(entry, id);
             String displayNameLower = displayName != null ? displayName.toLowerCase(Locale.ROOT) : null;
             String javaClass = entry != null ? entry.getClass().getName() : null;
 
@@ -283,7 +302,7 @@ public final class RegistryCollector {
     }
 
     public static JsonObject inspectTag(String kind, String tagId, int limit, int offset) {
-        String normKind = kind == null ? "item" : kind.trim().toLowerCase(Locale.ROOT);
+        String normKind = (kind == null || kind.isBlank()) ? "auto" : kind.trim().toLowerCase(Locale.ROOT);
         if (normKind.endsWith("_tag")) {
             normKind = normKind.substring(0, normKind.length() - 4);
         }
@@ -298,6 +317,34 @@ public final class RegistryCollector {
 
         int clampedLimit = Math.max(1, Math.min(limit, 500));
         int clampedOffset = Math.max(0, offset);
+
+        if ("auto".equals(normKind)) {
+            List<String> matchedKinds = new ArrayList<>();
+            if (BuiltInRegistries.ITEM.getTag(TagKey.create(BuiltInRegistries.ITEM.key(), rl)).isPresent()) {
+                matchedKinds.add("item_tag");
+            }
+            if (BuiltInRegistries.BLOCK.getTag(TagKey.create(BuiltInRegistries.BLOCK.key(), rl)).isPresent()) {
+                matchedKinds.add("block_tag");
+            }
+            if (BuiltInRegistries.FLUID.getTag(TagKey.create(BuiltInRegistries.FLUID.key(), rl)).isPresent()) {
+                matchedKinds.add("fluid_tag");
+            }
+            if (BuiltInRegistries.ENTITY_TYPE.getTag(TagKey.create(BuiltInRegistries.ENTITY_TYPE.key(), rl)).isPresent()) {
+                matchedKinds.add("entity_tag");
+            }
+            if (matchedKinds.isEmpty()) {
+                return JsonUtil.errorObject("NOT_FOUND", "Tag not found in item/block/fluid/entity registries: #" + rl);
+            }
+            String primary = matchedKinds.get(0);
+            JsonObject res = inspectTag(primary, rawTag, clampedLimit, clampedOffset);
+            if (matchedKinds.size() > 1) {
+                JsonArray also = new JsonArray();
+                for (String k : matchedKinds) also.add(k);
+                res.add("matchedTagKinds", also);
+            }
+            return res;
+        }
+
         return switch (normKind) {
             case "block" -> buildInspectTagResponse(BuiltInRegistries.BLOCK, "block_tag", rl, clampedLimit, clampedOffset);
             case "fluid" -> buildInspectTagResponse(BuiltInRegistries.FLUID, "fluid_tag", rl, clampedLimit, clampedOffset);
@@ -332,7 +379,7 @@ public final class RegistryCollector {
                 JsonObject mObj = new JsonObject();
                 mObj.addProperty("id", memberId.toString());
                 mObj.addProperty("modId", memberId.getNamespace());
-                String displayName = resolveDisplayName(holder.value());
+                String displayName = resolveDisplayName(holder.value(), memberId);
                 if (displayName != null) {
                     mObj.addProperty("displayName", displayName);
                 }
@@ -353,12 +400,50 @@ public final class RegistryCollector {
         return out;
     }
 
-    public static JsonObject inspectItem(MainThreadExecutor executor, String itemId) throws Exception {
-        ResourceLocation rl = ResourceLocation.tryParse(itemId == null ? "" : itemId.trim());
+    public static JsonObject inspectEntry(
+        MainThreadExecutor executor,
+        String kind,
+        String targetId
+    ) throws Exception {
+        String normKind = (kind == null || kind.isBlank()) ? "auto" : kind.trim().toLowerCase(Locale.ROOT);
+        ResourceLocation rl = ResourceLocation.tryParse(targetId == null ? "" : targetId.trim());
         if (rl == null) {
-            return JsonUtil.errorObject("INVALID_ID", "Invalid ResourceLocation: " + itemId);
+            return JsonUtil.errorObject("INVALID_ID", "Invalid ResourceLocation: " + targetId);
         }
 
+        if ("auto".equals(normKind)) {
+            List<String> presentIn = new ArrayList<>();
+            if (BuiltInRegistries.ITEM.containsKey(rl)) presentIn.add("item");
+            if (BuiltInRegistries.BLOCK.containsKey(rl)) presentIn.add("block");
+            if (BuiltInRegistries.FLUID.containsKey(rl)) presentIn.add("fluid");
+            if (BuiltInRegistries.ENTITY_TYPE.containsKey(rl)) presentIn.add("entity");
+            if (presentIn.isEmpty()) {
+                return JsonUtil.errorObject("NOT_FOUND", "ID not found in item/block/fluid/entity registries: " + rl);
+            }
+            String chosen = presentIn.get(0);
+            JsonObject res = inspectByKind(executor, chosen, rl);
+            if (presentIn.size() > 1) {
+                JsonArray also = new JsonArray();
+                for (String k : presentIn) also.add(k);
+                res.add("alsoInRegistries", also);
+            }
+            return res;
+        }
+
+        return inspectByKind(executor, normKind, rl);
+    }
+
+    private static JsonObject inspectByKind(MainThreadExecutor executor, String normKind, ResourceLocation rl) throws Exception {
+        return switch (normKind) {
+            case "item" -> inspectItem(executor, rl);
+            case "block" -> inspectBlock(executor, rl);
+            case "fluid" -> inspectFluid(executor, rl);
+            case "entity" -> inspectEntity(rl);
+            default -> JsonUtil.errorObject("INVALID_KIND", "Unsupported inspect kind: " + normKind);
+        };
+    }
+
+    private static JsonObject inspectItem(MainThreadExecutor executor, ResourceLocation rl) throws Exception {
         Optional<Item> opt = BuiltInRegistries.ITEM.getOptional(rl);
         if (opt.isEmpty()) {
             return JsonUtil.errorObject("NOT_FOUND", "Item not found in registry: " + rl);
@@ -366,11 +451,22 @@ public final class RegistryCollector {
 
         Item item = opt.get();
         HolderLookup.Provider registries = getCachedRegistries(executor);
+        RegistryOps<JsonElement> ops = registries != null
+            ? registries.createSerializationContext(JsonOps.INSTANCE)
+            : null;
         ItemStack stack = new ItemStack(item);
 
-        JsonObject out = JsonUtil.serializeItemStack(stack, registries);
+        JsonObject out = JsonUtil.serializeItemStack(stack, ops);
         out.addProperty("ok", true);
+        out.addProperty("kind", "item");
         out.addProperty("itemClass", item.getClass().getName());
+
+        if (ops != null) {
+            try {
+                DataResult<JsonElement> compRes = DataComponentMap.CODEC.encodeStart(ops, stack.getComponents());
+                compRes.result().ifPresent(el -> out.add("defaultComponents", el));
+            } catch (Exception ignored) {}
+        }
 
         FoodProperties food = stack.get(DataComponents.FOOD);
         if (food != null) {
@@ -382,45 +478,160 @@ public final class RegistryCollector {
         }
 
         if (item instanceof BlockItem blockItem) {
-            Block block = blockItem.getBlock();
-            ResourceLocation blockId = BuiltInRegistries.BLOCK.getKey(block);
-            BlockState defState = block.defaultBlockState();
-            JsonObject bObj = new JsonObject();
-            bObj.addProperty("id", blockId.toString());
-            bObj.addProperty("blockClass", block.getClass().getName());
-            bObj.addProperty("isEntityBlock", block instanceof EntityBlock);
-            bObj.addProperty("isRandomlyTicking", defState.isRandomlyTicking());
-            bObj.addProperty("destroySpeed", block.defaultDestroyTime());
-            bObj.addProperty("requiresCorrectToolForDrops", defState.requiresCorrectToolForDrops());
-
-            if (!block.getStateDefinition().getProperties().isEmpty()) {
-                JsonObject propsObj = new JsonObject();
-                for (Property<?> prop : block.getStateDefinition().getProperties()) {
-                    propsObj.add(prop.getName(), encodePropertyValues(prop));
-                }
-                bObj.add("stateProperties", propsObj);
-            }
-
-            JsonArray bTags = new JsonArray();
-            defState.getTags().map(t -> t.location().toString()).sorted().forEach(bTags::add);
-            if (!bTags.isEmpty()) {
-                bObj.add("tags", bTags);
-            }
-            out.add("blockInfo", bObj);
+            out.add("blockInfo", buildBlockInfoObject(blockItem.getBlock()));
         }
 
-        IRecipeViewerBridge bridge = IntegrationRegistry.getRecipeViewerBridge();
-        if (bridge != null && bridge.isAvailable() && Services.PLATFORM.isClientSide()) {
-            List<String> jeiInfo = executor.supplyOnClientThread(() -> bridge.getIngredientInfo(rl.toString()), 5000);
-            if (jeiInfo != null && !jeiInfo.isEmpty()) {
-                JsonArray infoArr = new JsonArray();
-                for (String line : jeiInfo) {
-                    infoArr.add(line);
-                }
-                out.add("jeiInformation", infoArr);
-            }
+        attachViewerInfo(executor, rl.toString(), out);
+        return out;
+    }
+
+    private static JsonObject inspectBlock(MainThreadExecutor executor, ResourceLocation rl) throws Exception {
+        Optional<Block> opt = BuiltInRegistries.BLOCK.getOptional(rl);
+        if (opt.isEmpty()) {
+            return JsonUtil.errorObject("NOT_FOUND", "Block not found in registry: " + rl);
+        }
+        Block block = opt.get();
+        JsonObject out = new JsonObject();
+        out.addProperty("ok", true);
+        out.addProperty("kind", "block");
+        out.addProperty("id", rl.toString());
+        out.addProperty("modId", rl.getNamespace());
+        out.addProperty("displayName", block.getName().getString());
+        Item asItem = block.asItem();
+        if (asItem != Items.AIR) {
+            out.addProperty("blockItemId", BuiltInRegistries.ITEM.getKey(asItem).toString());
+        }
+        out.add("blockInfo", buildBlockInfoObject(block));
+        attachViewerInfo(executor, rl.toString(), out);
+        return out;
+    }
+
+    private static JsonObject inspectFluid(MainThreadExecutor executor, ResourceLocation rl) throws Exception {
+        Optional<Fluid> opt = BuiltInRegistries.FLUID.getOptional(rl);
+        if (opt.isEmpty()) {
+            return JsonUtil.errorObject("NOT_FOUND", "Fluid not found in registry: " + rl);
+        }
+        Fluid fluid = opt.get();
+        FluidState defState = fluid.defaultFluidState();
+        JsonObject out = new JsonObject();
+        out.addProperty("ok", true);
+        out.addProperty("kind", "fluid");
+        out.addProperty("id", rl.toString());
+        out.addProperty("modId", rl.getNamespace());
+        out.addProperty("displayName", resolveDisplayName(fluid, rl));
+        out.addProperty("fluidClass", fluid.getClass().getName());
+        out.addProperty("isSource", defState.isSource());
+        Item bucket = fluid.getBucket();
+        if (bucket != Items.AIR) {
+            out.addProperty("bucketItem", BuiltInRegistries.ITEM.getKey(bucket).toString());
+        }
+        BlockState legacyBlock = defState.createLegacyBlock();
+        if (legacyBlock.getBlock() != Blocks.AIR) {
+            out.addProperty("blockId", BuiltInRegistries.BLOCK.getKey(legacyBlock.getBlock()).toString());
+        }
+        JsonArray tags = new JsonArray();
+        BuiltInRegistries.FLUID.wrapAsHolder(fluid).tags().map(t -> t.location().toString()).sorted().forEach(tags::add);
+        if (!tags.isEmpty()) {
+            out.add("tags", tags);
+        }
+        attachViewerInfo(executor, rl.toString(), out);
+        return out;
+    }
+
+    private static JsonObject inspectEntity(ResourceLocation rl) {
+        Optional<EntityType<?>> opt = BuiltInRegistries.ENTITY_TYPE.getOptional(rl);
+        if (opt.isEmpty()) {
+            return JsonUtil.errorObject("NOT_FOUND", "EntityType not found in registry: " + rl);
+        }
+        EntityType<?> et = opt.get();
+        JsonObject out = new JsonObject();
+        out.addProperty("ok", true);
+        out.addProperty("kind", "entity");
+        out.addProperty("id", rl.toString());
+        out.addProperty("modId", rl.getNamespace());
+        out.addProperty("displayName", et.getDescription().getString());
+        out.addProperty("entityTypeClass", et.getClass().getName());
+        out.addProperty("category", et.getCategory().getName());
+        out.addProperty("width", et.getWidth());
+        out.addProperty("height", et.getHeight());
+        out.addProperty("fireImmune", et.fireImmune());
+        out.addProperty("canSummon", et.canSummon());
+
+        JsonArray tags = new JsonArray();
+        BuiltInRegistries.ENTITY_TYPE.wrapAsHolder(et).tags().map(t -> t.location().toString()).sorted().forEach(tags::add);
+        if (!tags.isEmpty()) {
+            out.add("tags", tags);
         }
         return out;
+    }
+
+    private static JsonObject buildBlockInfoObject(Block block) {
+        ResourceLocation blockId = BuiltInRegistries.BLOCK.getKey(block);
+        BlockState defState = block.defaultBlockState();
+        JsonObject bObj = new JsonObject();
+        bObj.addProperty("id", blockId.toString());
+        bObj.addProperty("blockClass", block.getClass().getName());
+        bObj.addProperty("isEntityBlock", block instanceof EntityBlock);
+        bObj.addProperty("isRandomlyTicking", defState.isRandomlyTicking());
+        bObj.addProperty("destroySpeed", block.defaultDestroyTime());
+        bObj.addProperty("requiresCorrectToolForDrops", defState.requiresCorrectToolForDrops());
+
+        if (!block.getStateDefinition().getProperties().isEmpty()) {
+            JsonObject propsObj = new JsonObject();
+            for (Property<?> prop : block.getStateDefinition().getProperties()) {
+                propsObj.add(prop.getName(), encodePropertyValues(prop));
+            }
+            bObj.add("stateProperties", propsObj);
+        }
+
+        JsonArray bTags = new JsonArray();
+        defState.getTags().map(t -> t.location().toString()).sorted().forEach(bTags::add);
+        if (!bTags.isEmpty()) {
+            bObj.add("tags", bTags);
+        }
+        return bObj;
+    }
+
+    private static void attachViewerInfo(MainThreadExecutor executor, String idStr, JsonObject out) throws Exception {
+        if (!Services.PLATFORM.isClientSide()) {
+            return;
+        }
+        List<IRecipeViewerBridge> bridges = IntegrationRegistry.getRecipeViewerBridges();
+        if (bridges.isEmpty()) {
+            return;
+        }
+        Map<String, List<String>> perViewer = executor.supplyOnClientThread(() -> {
+            Map<String, List<String>> map = new HashMap<>();
+            for (IRecipeViewerBridge bridge : bridges) {
+                List<String> lines = bridge.getIngredientInfo(idStr);
+                if (lines != null && !lines.isEmpty()) {
+                    map.put(bridge.getViewerName(), lines);
+                }
+            }
+            return map;
+        }, 5000);
+
+        if (perViewer == null || perViewer.isEmpty()) {
+            return;
+        }
+        JsonObject viewerObj = new JsonObject();
+        List<String> firstLines = null;
+        for (Map.Entry<String, List<String>> e : perViewer.entrySet()) {
+            JsonArray arr = new JsonArray();
+            for (String line : e.getValue()) arr.add(line);
+            viewerObj.add(e.getKey(), arr);
+            if (firstLines == null) {
+                firstLines = e.getValue();
+            }
+        }
+        out.add("viewerInformation", viewerObj);
+        // Preserve jeiInformation when JEI (or primary viewer) returned info
+        List<String> primaryInfo = perViewer.getOrDefault("jei", firstLines);
+        if (primaryInfo != null) {
+            JsonArray infoArr = new JsonArray();
+            for (String line : primaryInfo) infoArr.add(line);
+            out.add("jeiInformation", infoArr);
+        }
     }
 
     private static <T extends Comparable<T>> JsonArray encodePropertyValues(Property<T> prop) {
@@ -453,7 +664,7 @@ public final class RegistryCollector {
         }
     }
 
-    private static String resolveDisplayName(Object entry) {
+    private static String resolveDisplayName(Object entry, ResourceLocation id) {
         if (entry instanceof Item item) {
             return item.getDescription().getString();
         }
@@ -461,7 +672,24 @@ public final class RegistryCollector {
             return block.getName().getString();
         }
         if (entry instanceof Fluid fluid) {
-            return fluid.defaultFluidState().createLegacyBlock().getBlock().getName().getString();
+            Block legacyBlock = fluid.defaultFluidState().createLegacyBlock().getBlock();
+            if (legacyBlock != Blocks.AIR) {
+                return legacyBlock.getName().getString();
+            }
+            if (id != null) {
+                String blockKey = Util.makeDescriptionId("block", id);
+                String translated = Component.translatable(blockKey).getString();
+                if (!translated.equals(blockKey)) {
+                    return translated;
+                }
+                String fluidKey = Util.makeDescriptionId("fluid", id);
+                String fluidTranslated = Component.translatable(fluidKey).getString();
+                if (!fluidTranslated.equals(fluidKey)) {
+                    return fluidTranslated;
+                }
+                return id.toString();
+            }
+            return null;
         }
         if (entry instanceof EntityType<?> et) {
             return et.getDescription().getString();

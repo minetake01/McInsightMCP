@@ -33,3 +33,17 @@ type="optional"
 versionRange="[19.0.0,)"
 ordering="AFTER"
 side="CLIENT"
+
+[[dependencies.${mod_id}]]
+modId="emi"
+type="optional"
+versionRange="[1.1.0,)"
+ordering="AFTER"
+side="CLIENT"
+
+[[dependencies.${mod_id}]]
+modId="roughlyenoughitems"
+type="optional"
+versionRange="[16.0.0,)"
+ordering="AFTER"
+side="CLIENT"

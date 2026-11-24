@@ -73,8 +73,10 @@ public final class RecipeCollector {
         final ItemStack resultPreview;
         final String resultItemIdLower;
         final String resultNameLower;
+        final String[] resultTagsLower;
         final String[] inputItemIdsLower;
         final String[] inputNamesLower;
+        final String[] inputTagsLower;
         final boolean standardVanillaIo;
 
         IndexedRecipe(
@@ -86,8 +88,10 @@ public final class RecipeCollector {
             ItemStack resultPreview,
             String resultItemIdLower,
             String resultNameLower,
+            String[] resultTagsLower,
             String[] inputItemIdsLower,
             String[] inputNamesLower,
+            String[] inputTagsLower,
             boolean standardVanillaIo
         ) {
             this.id = id;
@@ -103,8 +107,10 @@ public final class RecipeCollector {
             this.resultPreview = resultPreview;
             this.resultItemIdLower = resultItemIdLower;
             this.resultNameLower = resultNameLower;
+            this.resultTagsLower = resultTagsLower;
             this.inputItemIdsLower = inputItemIdsLower;
             this.inputNamesLower = inputNamesLower;
+            this.inputTagsLower = inputTagsLower;
             this.standardVanillaIo = standardVanillaIo;
         }
     }
@@ -120,6 +126,8 @@ public final class RecipeCollector {
         final Map<String, List<IndexedRecipe>> byMod;
         final Map<String, List<IndexedRecipe>> byOutputItemId;
         final Map<String, List<IndexedRecipe>> byInputItemId;
+        final Map<String, List<IndexedRecipe>> byOutputTag;
+        final Map<String, List<IndexedRecipe>> byInputTag;
         final List<IndexedRecipe> fallbackCandidates;
         final ConcurrentHashMap<ResourceLocation, Optional<JsonElement>> encodedJsonCache = new ConcurrentHashMap<>();
         final ConcurrentHashMap<ResourceLocation, String> encodedLowerCache = new ConcurrentHashMap<>();
@@ -135,6 +143,8 @@ public final class RecipeCollector {
             Map<String, List<IndexedRecipe>> byMod,
             Map<String, List<IndexedRecipe>> byOutputItemId,
             Map<String, List<IndexedRecipe>> byInputItemId,
+            Map<String, List<IndexedRecipe>> byOutputTag,
+            Map<String, List<IndexedRecipe>> byInputTag,
             List<IndexedRecipe> fallbackCandidates
         ) {
             this.recipeManager = recipeManager;
@@ -147,6 +157,8 @@ public final class RecipeCollector {
             this.byMod = byMod;
             this.byOutputItemId = byOutputItemId;
             this.byInputItemId = byInputItemId;
+            this.byOutputTag = byOutputTag;
+            this.byInputTag = byInputTag;
             this.fallbackCandidates = fallbackCandidates;
         }
 
@@ -174,9 +186,9 @@ public final class RecipeCollector {
             }
             JsonElement el = getOrEncodeRawJson(rec);
             if (el == null) {
-                return "";
+                el = JsonUtil.snapshotObject(rec.recipe, 3, jsonOps);
             }
-            String lower = el.toString().toLowerCase(Locale.ROOT);
+            String lower = el != null ? el.toString().toLowerCase(Locale.ROOT) : "";
             encodedLowerCache.putIfAbsent(rec.id, lower);
             return lower;
         }
@@ -231,6 +243,8 @@ public final class RecipeCollector {
         Map<String, List<IndexedRecipe>> byMod = new HashMap<>();
         Map<String, List<IndexedRecipe>> byOutputItemId = new HashMap<>();
         Map<String, List<IndexedRecipe>> byInputItemId = new HashMap<>();
+        Map<String, List<IndexedRecipe>> byOutputTag = new HashMap<>();
+        Map<String, List<IndexedRecipe>> byInputTag = new HashMap<>();
         List<IndexedRecipe> fallbackCandidates = new ArrayList<>();
 
         for (RecipeHolder<?> holder : boot.holders()) {
@@ -247,18 +261,21 @@ public final class RecipeCollector {
             ItemStack resultPreview = ItemStack.EMPTY;
             String resultIdLower = null;
             String resultNameLower = null;
+            Set<String> resultTags = new HashSet<>();
             try {
                 ItemStack res = recipe.getResultItem(boot.registries());
                 if (res != null && !res.isEmpty()) {
                     resultPreview = res;
                     resultIdLower = BuiltInRegistries.ITEM.getKey(res.getItem()).toString().toLowerCase(Locale.ROOT);
                     resultNameLower = res.getHoverName().getString().toLowerCase(Locale.ROOT);
+                    res.getTags().forEach(tk -> resultTags.add(tk.location().toString().toLowerCase(Locale.ROOT)));
                 }
             } catch (Exception ignored) {}
 
             List<String> inIds = new ArrayList<>();
             List<String> inNames = new ArrayList<>();
             Set<String> uniqueInputIds = new HashSet<>();
+            Set<String> uniqueInputTags = new HashSet<>();
             try {
                 for (Ingredient ing : recipe.getIngredients()) {
                     for (ItemStack stack : ing.getItems()) {
@@ -267,6 +284,7 @@ public final class RecipeCollector {
                         if (uniqueInputIds.add(itemId)) {
                             inIds.add(itemId);
                             inNames.add(stack.getHoverName().getString().toLowerCase(Locale.ROOT));
+                            stack.getTags().forEach(tk -> uniqueInputTags.add(tk.location().toString().toLowerCase(Locale.ROOT)));
                         }
                     }
                 }
@@ -283,8 +301,10 @@ public final class RecipeCollector {
                 resultPreview,
                 resultIdLower,
                 resultNameLower,
+                resultTags.toArray(String[]::new),
                 inIds.toArray(String[]::new),
                 inNames.toArray(String[]::new),
+                uniqueInputTags.toArray(String[]::new),
                 standardVanillaIo
             );
 
@@ -297,8 +317,14 @@ public final class RecipeCollector {
             if (resultIdLower != null) {
                 byOutputItemId.computeIfAbsent(resultIdLower, k -> new ArrayList<>()).add(idxRec);
             }
+            for (String rt : idxRec.resultTagsLower) {
+                byOutputTag.computeIfAbsent(rt, k -> new ArrayList<>()).add(idxRec);
+            }
             for (String inId : idxRec.inputItemIdsLower) {
                 byInputItemId.computeIfAbsent(inId, k -> new ArrayList<>()).add(idxRec);
+            }
+            for (String it : idxRec.inputTagsLower) {
+                byInputTag.computeIfAbsent(it, k -> new ArrayList<>()).add(idxRec);
             }
             if (!standardVanillaIo) {
                 fallbackCandidates.add(idxRec);
@@ -325,6 +351,8 @@ public final class RecipeCollector {
             byMod,
             byOutputItemId,
             byInputItemId,
+            byOutputTag,
+            byInputTag,
             fallbackCandidates
         );
     }
@@ -337,11 +365,14 @@ public final class RecipeCollector {
         out.addProperty("recipeManagerAvailable", index != null);
         out.add("recipeTypes", index != null ? index.recipeTypesArray.deepCopy() : new JsonArray());
 
-        IRecipeViewerBridge bridge = IntegrationRegistry.getRecipeViewerBridge();
-        if (bridge != null && bridge.isAvailable()) {
-            JsonObject jeiCats = executor.supplyOnClientThread(bridge::listCategories, 10000);
-            out.add("jei", jeiCats);
+        JsonArray activeViewers = new JsonArray();
+        for (IRecipeViewerBridge bridge : IntegrationRegistry.getRecipeViewerBridges()) {
+            if (!bridge.isAvailable()) continue;
+            activeViewers.add(bridge.getViewerName());
+            JsonObject cats = executor.supplyOnClientThread(bridge::listCategories, 10000);
+            out.add(bridge.getViewerName(), cats);
         }
+        out.add("activeViewers", activeViewers);
         return out;
     }
 
@@ -357,42 +388,76 @@ public final class RecipeCollector {
     ) throws Exception {
         int clampedLimit = Math.max(1, Math.min(limit, 500));
         int clampedOffset = Math.max(0, offset);
-        String normSource = source == null ? "all" : source.trim().toLowerCase(Locale.ROOT);
+        String normSource = (source == null || source.isBlank()) ? "all" : source.trim().toLowerCase(Locale.ROOT);
+        if (!"all".equals(normSource) && !"vanilla".equals(normSource) && !"viewer".equals(normSource)
+            && !"jei".equals(normSource) && !"rei".equals(normSource) && !"emi".equals(normSource)) {
+            return JsonUtil.errorObject("INVALID_SOURCE", "Invalid recipe source: " + normSource + ". Expected all, vanilla, viewer, jei, rei, or emi.");
+        }
+
         String normItem = itemQuery == null ? "" : itemQuery.trim().toLowerCase(Locale.ROOT);
-        String normRole = role == null ? "any" : role.trim().toLowerCase(Locale.ROOT);
+        String normRole = (role == null || role.isBlank()) ? "any" : role.trim().toLowerCase(Locale.ROOT);
         String normType = typeFilter == null ? "" : typeFilter.trim().toLowerCase(Locale.ROOT);
         String normMod = modId == null ? "" : modId.trim().toLowerCase(Locale.ROOT);
 
-        RecipeIndex index = !"jei".equals(normSource) ? getOrBuildIndex(executor) : null;
-        IRecipeViewerBridge bridge = IntegrationRegistry.getRecipeViewerBridge();
-        boolean queryJei = !"vanilla".equals(normSource) && bridge != null && bridge.isAvailable();
+        boolean wantVanilla = "all".equals(normSource) || "vanilla".equals(normSource);
+        List<IRecipeViewerBridge> bridges;
+        if ("vanilla".equals(normSource)) {
+            bridges = List.of();
+        } else if ("all".equals(normSource) || "viewer".equals(normSource)) {
+            bridges = IntegrationRegistry.getRecipeViewerBridges();
+        } else {
+            IRecipeViewerBridge specific = IntegrationRegistry.getRecipeViewerBridge(normSource);
+            if (specific == null || !specific.isAvailable()) {
+                return JsonUtil.errorObject("VIEWER_UNAVAILABLE", "Recipe viewer '" + normSource + "' is not active.");
+            }
+            bridges = List.of(specific);
+        }
 
-        if (index == null && !queryJei) {
-            return JsonUtil.errorObject("NO_RECIPES", "Neither RecipeManager nor JEI runtime is currently available.");
+        if ("viewer".equals(normSource) && bridges.isEmpty()) {
+            return JsonUtil.errorObject("VIEWER_UNAVAILABLE", "No recipe viewer integration (JEI, EMI, REI) is currently active.");
+        }
+
+        RecipeIndex index = wantVanilla ? getOrBuildIndex(executor) : null;
+        if ("vanilla".equals(normSource) && index == null) {
+            return JsonUtil.errorObject("NO_RECIPES", "RecipeManager is not currently available.");
+        }
+        if ("all".equals(normSource) && index == null && bridges.isEmpty()) {
+            return JsonUtil.errorObject("NO_RECIPES", "Neither RecipeManager nor any recipe viewer integration is currently available.");
         }
 
         JsonObject out = new JsonObject();
         out.addProperty("ok", true);
 
         if (index != null) {
-            JsonObject vanillaResult = queryIndexedRecipes(
-                index,
-                normItem,
-                normRole,
-                normType,
-                normMod,
-                clampedLimit,
-                clampedOffset
-            );
+            JsonObject vanillaResult;
+            if ("catalyst".equals(normRole)) {
+                vanillaResult = new JsonObject();
+                vanillaResult.addProperty("returned", 0);
+                vanillaResult.addProperty("hasMore", false);
+                vanillaResult.add("recipes", new JsonArray());
+            } else {
+                vanillaResult = queryIndexedRecipes(
+                    index,
+                    normItem,
+                    normRole,
+                    normType,
+                    normMod,
+                    clampedLimit,
+                    clampedOffset
+                );
+            }
             out.add("vanilla", vanillaResult);
         }
 
-        if (queryJei) {
-            JsonObject jeiResult = executor.supplyOnClientThread(() -> {
-                HolderLookup.Provider regs = index != null
-                    ? index.registries
-                    : GameStateSupport.getRegistryAccess(executor);
-                return bridge.queryRecipes(
+        JsonArray activeViewers = new JsonArray();
+        if (!bridges.isEmpty()) {
+            HolderLookup.Provider regs = index != null
+                ? index.registries
+                : GameStateSupport.getRegistryAccess(executor);
+            for (IRecipeViewerBridge bridge : bridges) {
+                if (!bridge.isAvailable()) continue;
+                activeViewers.add(bridge.getViewerName());
+                JsonObject viewerResult = executor.supplyOnClientThread(() -> bridge.queryRecipes(
                     itemQuery,
                     role,
                     typeFilter,
@@ -400,10 +465,11 @@ public final class RecipeCollector {
                     clampedLimit,
                     clampedOffset,
                     regs
-                );
-            }, 15000);
-            out.add("jei", jeiResult);
+                ), 15000);
+                out.add(bridge.getViewerName(), viewerResult);
+            }
         }
+        out.add("activeViewers", activeViewers);
 
         return out;
     }
@@ -465,7 +531,7 @@ public final class RecipeCollector {
             if (rawJson != null) {
                 entry.add("rawJson", rawJson);
             } else {
-                entry.add("pojoSnapshot", JsonUtil.snapshotObject(rec.recipe, 3));
+                entry.add("pojoSnapshot", JsonUtil.snapshotObject(rec.recipe, 3, index.jsonOps));
             }
 
             if (!rec.resultPreview.isEmpty()) {
@@ -490,36 +556,55 @@ public final class RecipeCollector {
         String normType,
         String normMod
     ) {
+        if ("catalyst".equals(normRole)) {
+            return List.of();
+        }
         if (!normType.isEmpty()) {
             return index.byType.getOrDefault(normType, List.of());
         }
         if (!normMod.isEmpty()) {
             return index.byMod.getOrDefault(normMod, List.of());
         }
+        if (normItem.startsWith("#")) {
+            String tagNeedle = normItem.substring(1);
+            if (tagNeedle.contains(":")) {
+                List<IndexedRecipe> directOut = ("output".equals(normRole) || "any".equals(normRole))
+                    ? index.byOutputTag.getOrDefault(tagNeedle, List.of())
+                    : List.of();
+                List<IndexedRecipe> directIn = ("input".equals(normRole) || "any".equals(normRole))
+                    ? index.byInputTag.getOrDefault(tagNeedle, List.of())
+                    : List.of();
+                List<IndexedRecipe> combined = new ArrayList<>(
+                    directOut.size() + directIn.size() + index.fallbackCandidates.size()
+                );
+                combined.addAll(directOut);
+                combined.addAll(directIn);
+                combined.addAll(index.fallbackCandidates);
+                return combined;
+            }
+            return index.allRecipes;
+        }
         // Fast exact-ID inverted index path for registered item IDs
         if (!normItem.isEmpty() && normItem.indexOf(':') > 0) {
             ResourceLocation exactRl = ResourceLocation.tryParse(normItem);
             if (exactRl != null && BuiltInRegistries.ITEM.containsKey(exactRl)) {
-                if ("output".equals(normRole)) {
-                    List<IndexedRecipe> direct = index.byOutputItemId.getOrDefault(normItem, List.of());
-                    if (index.fallbackCandidates.isEmpty()) {
-                        return direct;
-                    }
-                    List<IndexedRecipe> combined = new ArrayList<>(direct.size() + index.fallbackCandidates.size());
-                    combined.addAll(direct);
-                    combined.addAll(index.fallbackCandidates);
-                    return combined;
+                List<IndexedRecipe> directOut = ("output".equals(normRole) || "any".equals(normRole))
+                    ? index.byOutputItemId.getOrDefault(normItem, List.of())
+                    : List.of();
+                List<IndexedRecipe> directIn = ("input".equals(normRole) || "any".equals(normRole))
+                    ? index.byInputItemId.getOrDefault(normItem, List.of())
+                    : List.of();
+                if (index.fallbackCandidates.isEmpty()) {
+                    if ("output".equals(normRole)) return directOut;
+                    if ("input".equals(normRole)) return directIn;
                 }
-                if ("input".equals(normRole)) {
-                    List<IndexedRecipe> direct = index.byInputItemId.getOrDefault(normItem, List.of());
-                    if (index.fallbackCandidates.isEmpty()) {
-                        return direct;
-                    }
-                    List<IndexedRecipe> combined = new ArrayList<>(direct.size() + index.fallbackCandidates.size());
-                    combined.addAll(direct);
-                    combined.addAll(index.fallbackCandidates);
-                    return combined;
-                }
+                List<IndexedRecipe> combined = new ArrayList<>(
+                    directOut.size() + directIn.size() + index.fallbackCandidates.size()
+                );
+                combined.addAll(directOut);
+                combined.addAll(directIn);
+                combined.addAll(index.fallbackCandidates);
+                return combined;
             }
         }
         return index.allRecipes;
@@ -533,8 +618,35 @@ public final class RecipeCollector {
         boolean isExactItemId,
         String quotedNeedle
     ) {
+        if ("catalyst".equals(normRole)) {
+            return false;
+        }
         boolean checkOut = "any".equals(normRole) || "output".equals(normRole);
         boolean checkIn = "any".equals(normRole) || "input".equals(normRole);
+
+        if (normItem.startsWith("#")) {
+            String tagNeedle = normItem.substring(1);
+            boolean exactTag = tagNeedle.contains(":");
+            if (checkOut) {
+                for (String rt : rec.resultTagsLower) {
+                    if (exactTag ? rt.equals(tagNeedle) : rt.contains(tagNeedle)) {
+                        return true;
+                    }
+                }
+            }
+            if (checkIn) {
+                for (String it : rec.inputTagsLower) {
+                    if (exactTag ? it.equals(tagNeedle) : it.contains(tagNeedle)) {
+                        return true;
+                    }
+                }
+            }
+            if (rec.standardVanillaIo) {
+                return false;
+            }
+            String lower = index.getOrEncodeLowerString(rec);
+            return lower.contains(normItem) || (exactTag && lower.contains("\"" + tagNeedle + "\""));
+        }
 
         if (checkOut && rec.resultItemIdLower != null) {
             if (isExactItemId
@@ -558,33 +670,32 @@ public final class RecipeCollector {
             return false;
         }
 
-        // Lazy Codec encode fallback only for non-standard / modded recipes
-        JsonElement rawJson = index.getOrEncodeRawJson(rec);
-        if (rawJson == null) {
-            return false;
-        }
+        // Lazy Codec encode (or pojoSnapshot) fallback only for non-standard / modded recipes
         String fallbackNeedle = isExactItemId ? quotedNeedle : normItem;
-        if ("output".equals(normRole)) {
-            if (rawJson.isJsonObject()) {
-                JsonObject obj = rawJson.getAsJsonObject();
-                for (String key : OUTPUT_FALLBACK_KEYS) {
-                    if (obj.has(key) && obj.get(key).toString().toLowerCase(Locale.ROOT).contains(fallbackNeedle)) {
-                        return true;
+        JsonElement rawJson = index.getOrEncodeRawJson(rec);
+        if (rawJson != null) {
+            if ("output".equals(normRole)) {
+                if (rawJson.isJsonObject()) {
+                    JsonObject obj = rawJson.getAsJsonObject();
+                    for (String key : OUTPUT_FALLBACK_KEYS) {
+                        if (obj.has(key) && obj.get(key).toString().toLowerCase(Locale.ROOT).contains(fallbackNeedle)) {
+                            return true;
+                        }
                     }
                 }
+                return false;
             }
-            return false;
-        }
-        if ("input".equals(normRole)) {
-            if (rawJson.isJsonObject()) {
-                JsonObject obj = rawJson.getAsJsonObject();
-                for (String key : INPUT_FALLBACK_KEYS) {
-                    if (obj.has(key) && obj.get(key).toString().toLowerCase(Locale.ROOT).contains(fallbackNeedle)) {
-                        return true;
+            if ("input".equals(normRole)) {
+                if (rawJson.isJsonObject()) {
+                    JsonObject obj = rawJson.getAsJsonObject();
+                    for (String key : INPUT_FALLBACK_KEYS) {
+                        if (obj.has(key) && obj.get(key).toString().toLowerCase(Locale.ROOT).contains(fallbackNeedle)) {
+                            return true;
+                        }
                     }
                 }
+                return false;
             }
-            return false;
         }
         return index.getOrEncodeLowerString(rec).contains(fallbackNeedle);
     }

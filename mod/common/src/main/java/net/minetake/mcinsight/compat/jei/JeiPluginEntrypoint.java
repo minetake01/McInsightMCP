@@ -22,13 +22,13 @@ public final class JeiPluginEntrypoint implements IModPlugin {
 
     @Override
     public void onRuntimeAvailable(IJeiRuntime jeiRuntime) {
-        IntegrationRegistry.setRecipeViewerBridge(new JeiBridgeImpl(jeiRuntime));
+        IntegrationRegistry.registerRecipeViewerBridge(new JeiBridgeImpl(jeiRuntime));
         McInsightConstants.LOG.info("JEI runtime bridge attached.");
     }
 
     @Override
     public void onRuntimeUnavailable() {
-        IntegrationRegistry.setRecipeViewerBridge(null);
+        IntegrationRegistry.unregisterRecipeViewerBridge("jei");
         McInsightConstants.LOG.info("JEI runtime bridge detached.");
     }
 }

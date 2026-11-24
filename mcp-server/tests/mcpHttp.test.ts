@@ -131,10 +131,11 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
         return;
       }
 
-      if (url.pathname === '/api/v1/registry/item') {
+      if (url.pathname === '/api/v1/registry/inspect') {
         res.end(
           JSON.stringify({
             ok: true,
+            kind: 'item',
             id: 'tofucraft:blocktofumomen',
             displayName: '木綿豆腐ブロック',
             itemClass: 'net.minecraft.world.item.BlockItem',
@@ -144,6 +145,9 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
               isEntityBlock: false,
               isRandomlyTicking: true,
               destroySpeed: 0.35,
+            },
+            viewerInformation: {
+              jei: ['このブロックは、上と下に石を置くと時間経過でより硬くなります。'],
             },
             jeiInformation: ['このブロックは、上と下に石を置くと時間経過でより硬くなります。'],
           }),
@@ -441,13 +445,18 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
     });
     const flowData = unwrapToolPayload<{
       ok: boolean;
-      itemMeta?: { blockInfo?: { isRandomlyTicking?: boolean }; jeiInformation?: string[] };
+      itemMeta?: {
+        blockInfo?: { isRandomlyTicking?: boolean };
+        viewerInformation?: Record<string, string[]>;
+        jeiInformation?: string[];
+      };
       loot?: { entries: Array<{ nativeParsed?: unknown; rawJson?: unknown }> };
       trades?: { trades: unknown[] };
       datamaps?: { entries: unknown[] };
     }>(flowRes.body);
     expect(flowData.ok).toBe(true);
     expect(flowData.itemMeta?.blockInfo?.isRandomlyTicking).toBe(true);
+    expect(flowData.itemMeta?.viewerInformation?.jei?.[0]).toContain('時間経過');
     expect(flowData.itemMeta?.jeiInformation?.[0]).toContain('時間経過');
     expect(flowData.loot?.entries[0]?.nativeParsed).toBeDefined();
     expect(flowData.loot?.entries[0]?.rawJson).toBeUndefined();

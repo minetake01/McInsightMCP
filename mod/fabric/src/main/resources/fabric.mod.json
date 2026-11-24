@@ -24,6 +24,12 @@
     ],
     "jei_mod_plugin": [
       "net.minetake.mcinsight.compat.jei.JeiPluginEntrypoint"
+    ],
+    "emi": [
+      "net.minetake.mcinsight.compat.emi.EmiPluginEntrypoint"
+    ],
+    "rei_client": [
+      "net.minetake.mcinsight.compat.rei.ReiPluginEntrypoint"
     ]
   },
   "depends": {
@@ -33,6 +39,8 @@
     "java": ">=${java_version}"
   },
   "suggests": {
-    "jei": "*"
+    "jei": "*",
+    "emi": "*",
+    "roughlyenoughitems": "*"
   }
 }

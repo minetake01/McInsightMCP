@@ -5,6 +5,7 @@ import { parseNativeRecipe } from '../parsers/nativeParsers.js';
 
 export interface RawRecipeRecord {
   recipeId?: string;
+  sourceRecipeIds?: string[];
   recipeType?: string;
   categoryUid?: string;
   categoryTitle?: string;
@@ -32,9 +33,11 @@ export function jsonText(data: unknown) {
   };
 }
 
+export type RecipeOrigin = 'recipe_manager' | 'jei' | 'rei' | 'emi';
+
 export function enrichRecipeList(
   list: RawRecipeRecord[] | undefined,
-  origin: 'recipe_manager' | 'jei',
+  origin: RecipeOrigin,
   versions: LoadedModsVersionMap | undefined,
   includeRaw: boolean,
 ) {
@@ -56,19 +59,20 @@ export function enrichRecipeList(
         ? parseWithBuiltinModParser(effectiveType, rec.rawJson, versions)
         : {};
 
-    const hasJeiDescription = Array.isArray(rec.description) && rec.description.length > 0;
+    const hasViewerDescription = Array.isArray(rec.description) && rec.description.length > 0;
     const hasUnparsed = Boolean(
       nativeParsed?.hasUnparsedFields || builtinModResult.parsed?.hasUnparsedFields,
     );
     const parsedCleanly = Boolean(
       ((nativeParsed && !nativeParsed.hasUnparsedFields) ||
         (builtinModResult.parsed && !builtinModResult.parsed.hasUnparsedFields) ||
-        hasJeiDescription),
+        hasViewerDescription),
     );
 
     return {
       origin,
       recipeId: rec.recipeId,
+      sourceRecipeIds: rec.sourceRecipeIds,
       recipeType: rType,
       effectiveFormatType: effectiveType !== rType ? effectiveType : undefined,
       categoryTitle: rec.categoryTitle,
@@ -78,11 +82,11 @@ export function enrichRecipeList(
       nativeParsed: nativeParsed ?? undefined,
       modParsed: builtinModResult.parsed ?? undefined,
       parserVersionMismatch: builtinModResult.versionMismatch ?? undefined,
-      description: hasJeiDescription ? rec.description : undefined,
+      description: hasViewerDescription ? rec.description : undefined,
       rawJson: !parsedCleanly || hasUnparsed || includeRaw ? rec.rawJson : undefined,
       pojoSnapshot: rec.pojoSnapshot,
-      jeiIngredients:
-        origin === 'jei'
+      viewerIngredients:
+        origin !== 'recipe_manager'
           ? { inputs: rec.inputs, outputs: rec.outputs, catalysts: rec.catalysts }
           : undefined,
       vanillaResultPreview: parsedCleanly ? undefined : rec.vanillaResultPreview,

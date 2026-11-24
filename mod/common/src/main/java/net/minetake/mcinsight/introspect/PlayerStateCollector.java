@@ -17,7 +17,9 @@ import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.RegistryOps;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
@@ -38,6 +40,8 @@ public final class PlayerStateCollector {
 
     private record SlotItemSample(int slot, ItemStack stack) {}
 
+    private record VehicleSample(String id, String displayName, UUID uuid) {}
+
     private record RawPlayerSnapshot(
         String name,
         UUID uuid,
@@ -56,11 +60,17 @@ public final class PlayerStateCollector {
         float pitch,
         float health,
         float maxHealth,
+        float absorptionAmount,
         int foodLevel,
         float saturation,
+        int airSupply,
+        int maxAirSupply,
         int xpLevel,
+        float experienceProgress,
+        String gameMode,
         boolean isCreative,
         boolean isSpectator,
+        VehicleSample vehicle,
         List<EffectSample> effects,
         ItemStack mainHand,
         ItemStack offHand,
@@ -121,11 +131,26 @@ public final class PlayerStateCollector {
 
         out.addProperty("health", round2(snap.health()));
         out.addProperty("maxHealth", round2(snap.maxHealth()));
+        out.addProperty("absorptionAmount", round2(snap.absorptionAmount()));
         out.addProperty("foodLevel", snap.foodLevel());
         out.addProperty("saturation", round2(snap.saturation()));
+        out.addProperty("airSupply", snap.airSupply());
+        out.addProperty("maxAirSupply", snap.maxAirSupply());
         out.addProperty("xpLevel", snap.xpLevel());
+        out.addProperty("experienceProgress", Math.round(snap.experienceProgress() * 1000.0) / 1000.0);
+        if (snap.gameMode() != null) {
+            out.addProperty("gameMode", snap.gameMode());
+        }
         out.addProperty("isCreative", snap.isCreative());
         out.addProperty("isSpectator", snap.isSpectator());
+
+        if (snap.vehicle() != null) {
+            JsonObject vObj = new JsonObject();
+            vObj.addProperty("id", snap.vehicle().id());
+            vObj.addProperty("displayName", snap.vehicle().displayName());
+            vObj.addProperty("uuid", snap.vehicle().uuid().toString());
+            out.add("vehicle", vObj);
+        }
 
         JsonArray effects = new JsonArray(snap.effects().size());
         for (EffectSample eff : snap.effects()) {
@@ -205,13 +230,33 @@ public final class PlayerStateCollector {
             armor[i] = player.getItemBySlot(ARMOR_SLOTS[i]).copy();
         }
 
+        // Main inventory only (0..35); armor and offhand are returned in their dedicated fields
         Inventory inv = player.getInventory();
+        int mainSize = inv.items.size();
         List<SlotItemSample> invItems = new ArrayList<>();
-        for (int i = 0; i < inv.getContainerSize(); i++) {
-            ItemStack stack = inv.getItem(i);
+        for (int i = 0; i < mainSize; i++) {
+            ItemStack stack = inv.items.get(i);
             if (!stack.isEmpty()) {
                 invItems.add(new SlotItemSample(i, stack.copy()));
             }
+        }
+
+        String gameMode = null;
+        if (player instanceof ServerPlayer sp) {
+            gameMode = sp.gameMode.getGameModeForPlayer().getName();
+        } else if (Services.PLATFORM.isClientSide()) {
+            gameMode = ClientStateAccessor.getLocalGameMode();
+        }
+
+        VehicleSample vehicleSample = null;
+        Entity vehicle = player.getVehicle();
+        if (vehicle != null) {
+            ResourceLocation vId = BuiltInRegistries.ENTITY_TYPE.getKey(vehicle.getType());
+            vehicleSample = new VehicleSample(
+                vId.toString(),
+                vehicle.getDisplayName().getString(),
+                vehicle.getUUID()
+            );
         }
 
         ClientStateAccessor.ScreenSnapshot screen = includeClientScreen
@@ -236,11 +281,17 @@ public final class PlayerStateCollector {
             player.getXRot(),
             player.getHealth(),
             player.getMaxHealth(),
+            player.getAbsorptionAmount(),
             player.getFoodData().getFoodLevel(),
             player.getFoodData().getSaturationLevel(),
+            player.getAirSupply(),
+            player.getMaxAirSupply(),
             player.experienceLevel,
+            player.experienceProgress,
+            gameMode,
             player.isCreative(),
             player.isSpectator(),
+            vehicleSample,
             effects,
             player.getMainHandItem().copy(),
             player.getOffhandItem().copy(),

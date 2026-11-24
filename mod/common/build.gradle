@@ -16,6 +16,9 @@ dependencies {
     compileOnly group: 'io.github.llamalad7', name: 'mixinextras-common', version: '0.5.5'
     annotationProcessor group: 'io.github.llamalad7', name: 'mixinextras-common', version: '0.5.5'
     compileOnly "mezz.jei:jei-${minecraft_version}-common-api:${jei_version}"
+    compileOnly "dev.emi:emi-xplat-mojmap:${emi_version}:api"
+    compileOnly "me.shedaniel:RoughlyEnoughItems-api-neoforge:${rei_version}"
+    compileOnly "me.shedaniel:RoughlyEnoughItems-default-plugin-neoforge:${rei_version}"
 }
 
 configurations {

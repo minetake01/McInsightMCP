@@ -1,7 +1,9 @@
 package net.minetake.mcinsight.introspect;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.mojang.serialization.JsonOps;
 import net.minetake.mcinsight.client.ClientStateAccessor;
 import net.minetake.mcinsight.platform.Services;
 import net.minetake.mcinsight.server.JsonUtil;
@@ -10,7 +12,6 @@ import it.unimi.dsi.fastutil.objects.Reference2BooleanOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Reference2IntMap;
 import it.unimi.dsi.fastutil.objects.Reference2IntOpenHashMap;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -19,13 +20,16 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.resources.RegistryOps;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -33,6 +37,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.Property;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
+import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.EntityHitResult;
@@ -40,6 +45,7 @@ import net.minecraft.world.phys.HitResult;
 
 public final class WorldTargetCollector {
 
+    private static final int MAX_BLOCK_SUMMARY = 100;
     private static final int MAX_BLOCK_ENTITIES = 120;
     private static final int MAX_MATCHED_BLOCKS = 120;
     private static final int MAX_ENTITIES = 60;
@@ -77,19 +83,28 @@ public final class WorldTargetCollector {
         boolean isLiving,
         float health,
         float maxHealth,
+        ItemStack droppedItem,
         CompoundTag nbt
     ) {}
 
     private record RawScanSnapshot(
         String dimensionId,
         boolean authoritative,
+        HolderLookup.Provider registries,
         Reference2IntOpenHashMap<Block> blockCounts,
         List<RawBlockSnapshot> blockEntities,
+        int totalBlockEntities,
         List<RawBlockSnapshot> matchedBlocks,
-        List<RawEntitySnapshot> nearbyEntities
+        int totalMatchedBlocks,
+        List<RawEntitySnapshot> nearbyEntities,
+        int totalNearbyEntities
     ) {}
 
-    public static JsonObject collectLookingAt(MainThreadExecutor executor, double maxDistance) throws Exception {
+    public static JsonObject collectLookingAt(
+        MainThreadExecutor executor,
+        double maxDistance,
+        boolean includeFluids
+    ) throws Exception {
         double clampedDist = Math.max(1.0, Math.min(maxDistance, 64.0));
         if (!Services.PLATFORM.isClientSide()) {
             return JsonUtil.errorObject("CLIENT_ONLY", "Raycast looking-at requires a client instance.");
@@ -101,7 +116,7 @@ public final class WorldTargetCollector {
             if (clientLevel == null) {
                 return null;
             }
-            HitResult hit = ClientStateAccessor.raycast(clampedDist);
+            HitResult hit = ClientStateAccessor.raycast(clampedDist, includeFluids);
             if (hit == null || hit.getType() == HitResult.Type.MISS) {
                 return new RaycastTarget("miss", clampedDist, clientLevel.dimension(), null, null, -1);
             }
@@ -152,20 +167,19 @@ public final class WorldTargetCollector {
                 snap = executor.supplyOnServerThread(() -> {
                     ServerLevel level = server.getLevel(target.dimension());
                     if (level == null) return null;
-                    return captureBlockSnapshot(level, pos, level.getBlockState(pos), level.getBlockEntity(pos), level.registryAccess());
+                    return captureBlockSnapshot(pos, level.getBlockState(pos), level.getBlockEntity(pos), level.registryAccess());
                 }, 5000);
             } else {
                 authoritative = false;
                 snap = executor.supplyOnClientThread(() -> {
                     Level level = ClientStateAccessor.getLevel();
                     if (level == null) return null;
-                    return captureBlockSnapshot(level, pos, level.getBlockState(pos), level.getBlockEntity(pos), level.registryAccess());
+                    return captureBlockSnapshot(pos, level.getBlockState(pos), level.getBlockEntity(pos), level.registryAccess());
                 }, 5000);
             }
             if (snap == null) {
                 return JsonUtil.errorObject("NO_WORLD", "Target dimension is no longer loaded.");
             }
-            // Phase 2 (HTTP worker thread): serialize JSON
             JsonObject out = serializeBlockSnapshot(snap, true);
             out.addProperty("ok", true);
             out.addProperty("hitType", "block");
@@ -173,32 +187,33 @@ public final class WorldTargetCollector {
             out.addProperty("hasAuthoritativeServerData", authoritative);
             return out;
         } else {
-            RawEntitySnapshot snap;
-            boolean authoritative;
+            record EntitySnapWithRegs(RawEntitySnapshot snap, HolderLookup.Provider regs, boolean authoritative) {}
+            EntitySnapWithRegs wrapped;
             if (server != null) {
-                authoritative = true;
-                snap = executor.supplyOnServerThread(() -> {
+                wrapped = executor.supplyOnServerThread(() -> {
                     ServerLevel level = server.getLevel(target.dimension());
                     if (level == null) return null;
                     Entity entity = level.getEntity(target.entityId());
-                    return entity != null ? captureEntitySnapshot(entity, true) : null;
+                    return entity != null ? new EntitySnapWithRegs(captureEntitySnapshot(entity, true), level.registryAccess(), true) : null;
                 }, 5000);
             } else {
-                authoritative = false;
-                snap = executor.supplyOnClientThread(() -> {
+                wrapped = executor.supplyOnClientThread(() -> {
                     Level level = ClientStateAccessor.getLevel();
                     if (level == null) return null;
                     Entity entity = level.getEntity(target.entityId());
-                    return entity != null ? captureEntitySnapshot(entity, true) : null;
+                    return entity != null ? new EntitySnapWithRegs(captureEntitySnapshot(entity, true), level.registryAccess(), false) : null;
                 }, 5000);
             }
-            if (snap == null) {
+            if (wrapped == null || wrapped.snap() == null) {
                 return JsonUtil.errorObject("NOT_FOUND", "Target entity is no longer available.");
             }
-            JsonObject out = serializeEntitySnapshot(snap);
+            RegistryOps<JsonElement> ops = wrapped.regs() != null
+                ? wrapped.regs().createSerializationContext(JsonOps.INSTANCE)
+                : null;
+            JsonObject out = serializeEntitySnapshot(wrapped.snap(), ops);
             out.addProperty("ok", true);
             out.addProperty("hitType", "entity");
-            out.addProperty("hasAuthoritativeServerData", authoritative);
+            out.addProperty("hasAuthoritativeServerData", wrapped.authoritative());
             return out;
         }
     }
@@ -221,11 +236,8 @@ public final class WorldTargetCollector {
             final UUID targetUuid = preferredPlayerUuid;
             snap = executor.supplyOnServerThread(() -> {
                 Player player = targetUuid != null ? server.getPlayerList().getPlayer(targetUuid) : null;
-                if (player == null) {
-                    for (Player sp : server.getPlayerList().getPlayers()) {
-                        player = sp;
-                        break;
-                    }
+                if (player == null && server.getPlayerList().getPlayers().size() == 1) {
+                    player = server.getPlayerList().getPlayers().get(0);
                 }
                 if (player == null) {
                     return null;
@@ -248,11 +260,14 @@ public final class WorldTargetCollector {
         }
 
         // Phase 2: Build JSON, resolve display names, convert NBT, and sort completely off-thread
+        RegistryOps<JsonElement> ops = snap.registries() != null
+            ? snap.registries().createSerializationContext(JsonOps.INSTANCE)
+            : null;
         List<Reference2IntMap.Entry<Block>> sortedCounts = new ArrayList<>(snap.blockCounts().reference2IntEntrySet());
         sortedCounts.sort((a, b) -> Integer.compare(b.getIntValue(), a.getIntValue()));
 
         JsonArray summary = new JsonArray();
-        int summaryLimit = Math.min(sortedCounts.size(), 100);
+        int summaryLimit = Math.min(sortedCounts.size(), MAX_BLOCK_SUMMARY);
         for (int i = 0; i < summaryLimit; i++) {
             Reference2IntMap.Entry<Block> e = sortedCounts.get(i);
             JsonObject entry = new JsonObject();
@@ -268,7 +283,7 @@ public final class WorldTargetCollector {
 
         JsonArray entities = new JsonArray(snap.nearbyEntities().size());
         for (RawEntitySnapshot ent : snap.nearbyEntities()) {
-            entities.add(serializeEntitySnapshot(ent));
+            entities.add(serializeEntitySnapshot(ent, ops));
         }
 
         JsonObject out = new JsonObject();
@@ -277,15 +292,34 @@ public final class WorldTargetCollector {
         out.addProperty("dimension", snap.dimensionId());
         out.addProperty("hasAuthoritativeServerData", snap.authoritative());
         out.add("blockSummary", summary);
+        out.addProperty("totalBlockTypes", sortedCounts.size());
+        if (sortedCounts.size() > summaryLimit) {
+            out.addProperty("blockSummaryTruncated", true);
+        }
+
         out.add("blockEntities", blockEntities);
+        out.addProperty("totalBlockEntities", snap.totalBlockEntities());
+        if (snap.totalBlockEntities() > blockEntities.size()) {
+            out.addProperty("blockEntitiesTruncated", true);
+        }
+
         if (!normFilter.isEmpty()) {
             JsonArray matchedBlocks = new JsonArray(snap.matchedBlocks().size());
             for (RawBlockSnapshot mb : snap.matchedBlocks()) {
                 matchedBlocks.add(serializeBlockSnapshot(mb, false));
             }
             out.add("matchedBlocks", matchedBlocks);
+            out.addProperty("totalMatchedBlocks", snap.totalMatchedBlocks());
+            if (snap.totalMatchedBlocks() > matchedBlocks.size()) {
+                out.addProperty("matchedBlocksTruncated", true);
+            }
         }
+
         out.add("nearbyEntities", entities);
+        out.addProperty("totalNearbyEntities", snap.totalNearbyEntities());
+        if (snap.totalNearbyEntities() > entities.size()) {
+            out.addProperty("nearbyEntitiesTruncated", true);
+        }
         return out;
     }
 
@@ -307,7 +341,9 @@ public final class WorldTargetCollector {
         Reference2IntOpenHashMap<Block> blockCounts = new Reference2IntOpenHashMap<>();
         Reference2BooleanOpenHashMap<Block> filterCache = normFilter.isEmpty() ? null : new Reference2BooleanOpenHashMap<>();
         List<RawBlockSnapshot> blockEntities = new ArrayList<>();
+        int totalBlockEntities = 0;
         List<RawBlockSnapshot> matchedBlocks = normFilter.isEmpty() ? List.of() : new ArrayList<>();
+        int totalMatchedBlocks = 0;
 
         var chunkSource = level.getChunkSource();
 
@@ -322,24 +358,24 @@ public final class WorldTargetCollector {
                 int cMinZ = Math.max(minZ, cz << 4);
                 int cMaxZ = Math.min(maxZ, (cz << 4) + 15);
 
-                // Collect BlockEntities directly from chunk map instead of calling getBlockEntity on every block
-                if (blockEntities.size() < MAX_BLOCK_ENTITIES) {
-                    for (Map.Entry<BlockPos, BlockEntity> entry : chunk.getBlockEntities().entrySet()) {
-                        BlockPos bePos = entry.getKey();
-                        int bx = bePos.getX();
-                        int by = bePos.getY();
-                        int bz = bePos.getZ();
-                        if (bx >= cMinX && bx <= cMaxX && by >= minY && by <= maxY && bz >= cMinZ && bz <= cMaxZ) {
-                            BlockEntity be = entry.getValue();
-                            blockEntities.add(captureBlockSnapshot(level, bePos, chunk.getBlockState(bePos), be, registries));
-                            if (blockEntities.size() >= MAX_BLOCK_ENTITIES) {
-                                break;
-                            }
+                for (Map.Entry<BlockPos, BlockEntity> entry : chunk.getBlockEntities().entrySet()) {
+                    BlockPos bePos = entry.getKey();
+                    int bx = bePos.getX();
+                    int by = bePos.getY();
+                    int bz = bePos.getZ();
+                    if (bx >= cMinX && bx <= cMaxX && by >= minY && by <= maxY && bz >= cMinZ && bz <= cMaxZ) {
+                        BlockState beState = chunk.getBlockState(bePos);
+                        BlockEntity be = entry.getValue();
+                        if (!normFilter.isEmpty() && !matchesBlockFilter(beState.getBlock(), be, normFilter)) {
+                            continue;
+                        }
+                        totalBlockEntities++;
+                        if (blockEntities.size() < MAX_BLOCK_ENTITIES) {
+                            blockEntities.add(captureBlockSnapshot(bePos, beState, be, registries));
                         }
                     }
                 }
 
-                // Iterate chunk sections and skip empty air sections immediately
                 LevelChunkSection[] sections = chunk.getSections();
                 int minSecY = minY >> 4;
                 int maxSecY = maxY >> 4;
@@ -367,7 +403,7 @@ public final class WorldTargetCollector {
                                 Block block = state.getBlock();
                                 blockCounts.addTo(block, 1);
 
-                                if (filterCache != null && matchedBlocks.size() < MAX_MATCHED_BLOCKS) {
+                                if (filterCache != null) {
                                     boolean hit;
                                     if (filterCache.containsKey(block)) {
                                         hit = filterCache.getBoolean(block);
@@ -378,9 +414,12 @@ public final class WorldTargetCollector {
                                         filterCache.put(block, hit);
                                     }
                                     if (hit) {
-                                        BlockPos pos = new BlockPos(x, y, z);
-                                        BlockEntity be = chunk.getBlockEntity(pos);
-                                        matchedBlocks.add(captureBlockSnapshot(level, pos, state, be, registries));
+                                        totalMatchedBlocks++;
+                                        if (matchedBlocks.size() < MAX_MATCHED_BLOCKS) {
+                                            BlockPos pos = new BlockPos(x, y, z);
+                                            BlockEntity be = chunk.getBlockEntity(pos);
+                                            matchedBlocks.add(captureBlockSnapshot(pos, state, be, registries));
+                                        }
                                     }
                                 }
                             }
@@ -393,23 +432,58 @@ public final class WorldTargetCollector {
         AABB box = new AABB(center).inflate(r);
         List<Entity> nearby = level.getEntities(player, box);
         List<RawEntitySnapshot> entitySnapshots = new ArrayList<>(Math.min(nearby.size(), MAX_ENTITIES));
+        int totalNearbyEntities = 0;
         for (Entity e : nearby) {
-            if (entitySnapshots.size() >= MAX_ENTITIES) break;
-            entitySnapshots.add(captureEntitySnapshot(e, false));
+            if (!normFilter.isEmpty() && !matchesEntityFilter(e, normFilter)) {
+                continue;
+            }
+            totalNearbyEntities++;
+            if (entitySnapshots.size() < MAX_ENTITIES) {
+                entitySnapshots.add(captureEntitySnapshot(e, false));
+            }
         }
 
         return new RawScanSnapshot(
             level.dimension().location().toString(),
             !level.isClientSide,
+            registries,
             blockCounts,
             blockEntities,
+            totalBlockEntities,
             matchedBlocks,
-            entitySnapshots
+            totalMatchedBlocks,
+            entitySnapshots,
+            totalNearbyEntities
         );
     }
 
+    private static boolean matchesBlockFilter(Block block, BlockEntity be, String normFilter) {
+        String idStr = BuiltInRegistries.BLOCK.getKey(block).toString().toLowerCase(Locale.ROOT);
+        if (idStr.contains(normFilter)) return true;
+        if (block.getName().getString().toLowerCase(Locale.ROOT).contains(normFilter)) return true;
+        if (be != null) {
+            ResourceLocation beId = BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(be.getType());
+            if (beId != null && beId.toString().toLowerCase(Locale.ROOT).contains(normFilter)) return true;
+        }
+        return false;
+    }
+
+    private static boolean matchesEntityFilter(Entity e, String normFilter) {
+        ResourceLocation id = BuiltInRegistries.ENTITY_TYPE.getKey(e.getType());
+        if (id.toString().toLowerCase(Locale.ROOT).contains(normFilter)) return true;
+        if (e.getDisplayName().getString().toLowerCase(Locale.ROOT).contains(normFilter)) return true;
+        if (e instanceof ItemEntity itemEnt) {
+            ItemStack st = itemEnt.getItem();
+            if (!st.isEmpty()) {
+                String itemId = BuiltInRegistries.ITEM.getKey(st.getItem()).toString().toLowerCase(Locale.ROOT);
+                if (itemId.contains(normFilter)) return true;
+                if (st.getHoverName().getString().toLowerCase(Locale.ROOT).contains(normFilter)) return true;
+            }
+        }
+        return false;
+    }
+
     private static RawBlockSnapshot captureBlockSnapshot(
-        Level level,
         BlockPos pos,
         BlockState state,
         BlockEntity be,
@@ -450,6 +524,7 @@ public final class WorldTargetCollector {
         boolean isLiving = e instanceof LivingEntity;
         float health = isLiving ? ((LivingEntity) e).getHealth() : 0f;
         float maxHealth = isLiving ? ((LivingEntity) e).getMaxHealth() : 0f;
+        ItemStack droppedItem = e instanceof ItemEntity itemEnt ? itemEnt.getItem().copy() : ItemStack.EMPTY;
         CompoundTag nbt = null;
         if (detailed) {
             try {
@@ -471,6 +546,7 @@ public final class WorldTargetCollector {
             isLiving,
             health,
             maxHealth,
+            droppedItem,
             nbt
         );
     }
@@ -499,6 +575,15 @@ public final class WorldTargetCollector {
             obj.add("properties", props);
         }
 
+        FluidState fluidState = state.getFluidState();
+        if (!fluidState.isEmpty()) {
+            JsonObject fObj = new JsonObject();
+            fObj.addProperty("id", BuiltInRegistries.FLUID.getKey(fluidState.getType()).toString());
+            fObj.addProperty("isSource", fluidState.isSource());
+            fObj.addProperty("amount", fluidState.getAmount());
+            obj.add("fluid", fObj);
+        }
+
         if (includeTags) {
             JsonArray tags = new JsonArray();
             state.getTags().map(t -> t.location().toString()).sorted().forEach(tags::add);
@@ -525,7 +610,7 @@ public final class WorldTargetCollector {
         return prop.getName(state.getValue(prop));
     }
 
-    private static JsonObject serializeEntitySnapshot(RawEntitySnapshot e) {
+    private static JsonObject serializeEntitySnapshot(RawEntitySnapshot e, RegistryOps<JsonElement> ops) {
         JsonObject obj = new JsonObject();
         obj.addProperty("id", e.typeId().toString());
         obj.addProperty("modId", e.typeId().getNamespace());
@@ -542,6 +627,9 @@ public final class WorldTargetCollector {
         if (e.isLiving()) {
             obj.addProperty("health", Math.round(e.health() * 100.0) / 100.0);
             obj.addProperty("maxHealth", Math.round(e.maxHealth() * 100.0) / 100.0);
+        }
+        if (e.droppedItem() != null && !e.droppedItem().isEmpty()) {
+            obj.add("itemStack", JsonUtil.serializeItemStack(e.droppedItem(), ops));
         }
         if (e.nbt() != null) {
             obj.add("nbt", JsonUtil.nbtToJson(e.nbt()));
