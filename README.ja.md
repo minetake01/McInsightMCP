@@ -2,74 +2,173 @@
 
 [English](README.md) | **日本語**
 
-Minecraft 1.21.1 (NeoForge + Fabric) 向けの汎用・読み取り専用・ステートレスゲームシステム解析MODと、MCP `2026-07-28` 準拠（ステートレス Streamable HTTP / stdio 両対応）の TypeScript MCP サーバーです。
+[![CI](https://github.com/minetake01/McInsightMCP/actions/workflows/ci.yml/badge.svg)](https://github.com/minetake01/McInsightMCP/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/minetake01/McInsightMCP?include_prereleases&label=release)](https://github.com/minetake01/McInsightMCP/releases)
+[![Status: Beta](https://img.shields.io/badge/Status-Beta-yellow.svg)](CHANGELOG.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Minecraft](https://img.shields.io/badge/Minecraft-NeoForge%20%7C%20Fabric-62B47A.svg)](https://github.com/minetake01/McInsightMCP/releases)
 
-## 設計思想
+今プレイしている Minecraft のワールド情報をそのまま AI アシスタントに伝えて質問できる MOD と MCP サーバーです。
 
-- **2層の機械的パーサー＋一次証拠／バイトコード解析**:
-  1. **Minecraft標準機構パーサー（`mcp-server/src/parsers/nativeParsers.ts`）**: バニラのクラフト/精錬レシピ、ワールド生成（鉱脈・高度・バイオーム気候/スポーン・構造物・Biome Modifier）、ルートテーブル＆Global Loot Modifier、レジストリ・タグを機械的に構造化します。
-  2. **バージョン指定・組み込み主要MODパーサー層（`mcp-server/src/parsers/modParsers/`）**: Create (`6.x`)、Mekanism (`10.7.x`)、AE2 (`19.x`)、Oritech (`1.x`)、Farmer's Delight (`1.x`)、Ars Nouveau (`5.x`)、TofuCraftReload (`12.x`) などの主要MODについては、`semver` で実行中のMODバージョンと一致する場合のみ機械的に構造化します（バージョン不一致時は推測せず `parserVersionMismatch` を返して生JSONへフォールバックします）。
-  3. **一次証拠・バイトコード逆参照・逆コンパイル**: 上記で扱えないMODやインワールドギミック・マルチブロックについては、KubeJS改変込みの生レシピJSON・JEI情報・BlockEntity NBT・各種ガイド/クエスト（Patchouli / GuideME / FTB Quests / Create Ponder / Oracle Index / 言語ファイル）・ランタイムのブロック挙動メタデータ（`isRandomlyTicking` / `stateProperties`）に加え、MOD JAR内の `<clinit>` 登録フィールド逆引き（`trace_id`）や Vineflower / `javap` によるJavaクラス逆コンパイル結果をそのままAIに提供します。
+McInsightMCP を使うと、Claude Desktop・Cursor・Claude Code・VS Code などの MCP 対応 AI アシスタントを、起動中の Minecraft に直接接続できます。古い Wiki に頼って AI が推測するのではなく、導入中の Modpack（KubeJS やデータパックによる変更込み）のレシピ、視線先のブロックや機械、所持インベントリ、ゲーム内ガイドブックやクエストを AI がリアルタイムに確認して回答します。
+
+> [!NOTE]
+> ベータ版（`0.1.0-beta.1`）: McInsightMCP は現在ベータ版として公開しています。`1.0.0` に向けて MCP ツールの仕様、出力形式、設定項目が変更される場合があります。フィードバックや不具合のご報告は [GitHub Issues](https://github.com/minetake01/McInsightMCP/issues) までお寄せください。
+
+---
 
 ## 主な特徴
 
-- **他MODハード依存ゼロ（MC 1.21.1 マルチローダー）**: NeoForge / Fabric のどちらでも単体動作し、JEI・Patchouli・GuideME・FTB Quests・Create Ponder 等は存在時のみ自動で連携します。
-- **完全読み取り専用・ステートレス**: ゲーム内を改変せず、MCPサーバー側にも永続状態を保持しません。クライアント単体導入でもレシピ・インベントリ・視線先・ガイドを参照でき、シングルや両側導入時は完全な BlockEntity NBT やルートテーブルも取得します。
-- **MCP `2026-07-28` 準拠**: `@modelcontextprotocol/server` v2.4 / `@modelcontextprotocol/node` v2.1 によるステートレス Streamable HTTP（`127.0.0.1` 限定 + Host/Origin 検証）および `stdio` に対応。
+- ゲーム内で有効なレシピ、鉱石の生成高度やバイオーム、ルートテーブル、村人取引、進捗、KubeJS やデータパックによる改変を直接参照して回答します。
+- ワールドの改変、ブロックの設置や破壊、プレイヤーの操作、コマンドの実行は一切行いません。
+- 通信は PC 内部（`127.0.0.1`）に限定しており、外部への送信や画面キャプチャは行いません。
+- マルチプレイで自分のクライアントだけに導入した状態でも、レシピ、インベントリ、視線先の対象、ガイド類を確認できます。シングルプレイやサーバー側にも導入した場合は、チェストや機械の完全な NBT やルートテーブルも参照できます。
+- 各種ガイド MOD が導入されていれば自動で連携し、ドキュメントが見当たらない未知の MOD 仕様でも MOD リソースやクラス実装から仕組みを調べられます。
 
-## ディレクトリ構成
+---
 
+## AI に聞けることの例
+
+- *「この Modpack で `mekanism:atomic_alloy` を作る手順と、今手持ちのインベントリで足りていない素材を教えて」*
+- *「今見ている機械は何のブロックで、なぜ動いていないのか状態を確認して」*
+- *「この環境のオスミウム鉱石やプラチナ鉱石はどの高さ・バイオームで生成される？」*
+- *「Patchouli / FTB Quests / Create Ponder / GuideME の中からこの素材の自動化方法を調べて」*
+- *「Wiki に載っていない MOD アイテムの仕組みを、MOD 本体から読み解いて説明して」*
+
+---
+
+## 動作要件と対応環境
+
+| 項目 | 要件 |
+|---|---|
+| Minecraft | 現在は `1.21.1`（Java 21）に対応（対応バージョン一覧は [Releases](https://github.com/minetake01/McInsightMCP/releases) を参照） |
+| NeoForge | 単体で動作（必須の前提 MOD なし） |
+| Fabric | [Fabric API](https://modrinth.com/mod/fabric-api) が必須 |
+| MCP サーバー | [Node.js](https://nodejs.org/) `20` 以上 |
+
+### 自動連携するオプション MOD
+- JEI（レシピカテゴリ、触媒ブロック、JEI 説明ページ）
+- ゲーム内ガイド・クエスト: Patchouli / GuideME / FTB Quests / Create Ponder / Oracle Index / 言語ファイル
+
+### 主要 MOD 向けレシピ整形
+どの MOD のレシピも生データで取得できますが、Create・Mekanism・Applied Energistics 2・Oritech・Farmer's Delight・Ars Nouveau・TofuCraftReload については見やすく整理された形式で返却します。
+
+---
+
+## 導入手順
+
+### 手順 1: Minecraft MOD を導入する
+
+1. [GitHub Releases](https://github.com/minetake01/McInsightMCP/releases) からお使いの Minecraft バージョン・ローダー用の JAR をダウンロードします。
+   - NeoForge: `mcinsight-neoforge-<mc_version>-<version>.jar`
+   - Fabric: `mcinsight-fabric-<mc_version>-<version>.jar`。Fabric 環境では `mods/` に Fabric API も配置してください。
+2. ダウンロードした JAR を Minecraft インスタンスの `mods/` フォルダに配置します。
+3. Minecraft を起動し、ワールドに入ります。
+
+### 手順 2: AI クライアントに接続する
+
+#### 方法 A: `npx` / `pnpx` を使った `stdio` 接続（Claude Desktop・Cursor・Claude Code・VS Code 向け・推奨）
+
+AI クライアントの MCP 設定に以下を追加してください。
+
+```json
+{
+  "mcpServers": {
+    "mcinsight": {
+      "command": "npx",
+      "args": ["-y", "mcinsight-mcp-server@beta", "--stdio"]
+    }
+  }
+}
 ```
-McInsightMCP/
-├── docs/
-│   └── ARCHITECTURE.md     # HTTP API仕様・パーサー設計・ツール仕様
-├── mod/                    # MC 1.21.1 Multiloader Gradleプロジェクト (common / neoforge / fabric)
-└── mcp-server/             # TypeScript MCPサーバー (2026-07-28)
-```
 
-## ビルド・起動方法
+pnpm 環境では `"command": "pnpx"`、`"args": ["mcinsight-mcp-server@beta", "--stdio"]` も使えます。
 
-### 1. Minecraft MOD のビルド（JDK 21）
+#### 方法 B: Streamable HTTP 接続
+
+ローカルで MCP サーバーを起動します。
+
 ```bash
+npx -y mcinsight-mcp-server@beta --http --port 3876
+# pnpm を使う場合:
+pnpx mcinsight-mcp-server@beta --http --port 3876
+```
+
+AI クライアント側で接続先 URL に `http://127.0.0.1:3876/mcp` を指定してください。
+
+#### 手動セットアップ（GitHub Releases / オフライン環境）
+
+[GitHub Releases](https://github.com/minetake01/McInsightMCP/releases) から `mcinsight-mcp-server-<version>` アーカイブをダウンロードして展開し、フォルダ内で `pnpm install --prod`（または `npm install --omit=dev`）を実行したうえで `node /path/to/mcinsight-mcp-server/dist/index.js --stdio` を指定することもできます。ソースからビルドする場合は、下の「ソースからのビルド」を参照してください。
+
+> ヒント: MCP サーバーは起動中の McInsight MOD（`127.0.0.1` のポート `25580..25599`）を自動で検出するため、通常はポート指定不要です。
+
+---
+
+## オプション設定
+
+### Minecraft MOD 設定（`config/mcinsight.json`）
+
+初回起動時に自動生成されます。
+
+| キー | 初期値 | 説明 |
+|---|---|---|
+| `enabled` | `true` | ローカル HTTP API の有効/無効 |
+| `port` | `25580` | 待ち受けを開始するローカルポート番号（`1024..65535`） |
+| `portRangeSize` | `20` | ポート使用中に試行する連続ポート数（`1..50`） |
+| `authToken` | `""` | API リクエストに必須とする任意の Bearer トークン |
+| `maxScanRadius` | `16` | 周囲スキャンの最大半径（`1..32`） |
+| `maxRecipeResults` | `100` | 1 回の検索で返すレシピ上限数（`1..500`） |
+
+### MCP サーバーの CLI フラグ / 環境変数
+
+| CLI フラグ | 環境変数 | 用途 |
+|---|---|---|
+| `--stdio` | — | stdio モードで起動（デフォルト） |
+| `--http` | — | ローカル Streamable HTTP サーバーとして起動 |
+| `--port <port>` | `MCP_PORT` | HTTP サーバーの待受ポート（デフォルト `3876`） |
+| `--mc-url <url>` | `MCINSIGHT_URL` | MOD の接続先 URL を明示指定（自動検出をスキップ） |
+| `--token <token>` | `MCINSIGHT_TOKEN` | `mcinsight.json` の `authToken` に合わせるトークン |
+| `--mods-dir <path>` | `MCINSIGHT_MODS_DIR` | オフラインで MOD JAR を調べる際の `mods` フォルダパス |
+| `--game-dir <path>` | `MCINSIGHT_GAME_DIR` | オフラインで KubeJS / FTB Quests を調べる際のゲームフォルダパス |
+| `--tools-dir <path>` | `MCINSIGHT_TOOLS_DIR` | 逆コンパイル用ツール（Vineflower）の保存先フォルダ |
+
+---
+
+## 提供される AI ツール（11 種類）
+
+- ワールド・プレイヤー状態: `mc_status`, `mc_player_state`, `mc_observe_world`（視線先や周囲ブロック/エンティティの確認）
+- アイテム・ブロック: `mc_search_registry`, `mc_inspect`（ブロック性質・タグ・JEI 情報）
+- 入手・レシピ・進行: `mc_query_item_flow`, `mc_query_recipes`, `mc_query_world_data`（鉱脈/バイオーム・ルートテーブル・取引・NeoForge Data Maps）, `mc_query_advancements`
+- ガイド・MOD 解析: `mc_guides`（Patchouli / GuideME / FTB Quests / Ponder / Oracle Index / 言語ファイル）, `mc_inspect_code`（リソース・スクリプト検索と Java クラス解析）
+
+---
+
+## ソースからのビルド
+
+MOD のビルドには JDK 21、MCP サーバーのビルドには Node.js 20 以上と pnpm が必要です。
+
+```bash
+# 1. NeoForge / Fabric MOD のビルド
 cd mod
 ./gradlew :neoforge:build :fabric:build
-```
-生成物:
-- `mod/neoforge/build/libs/mcinsight-neoforge-1.21.1-1.0.0.jar`
-- `mod/fabric/build/libs/mcinsight-fabric-1.21.1-1.0.0.jar`
+# 生成物:
+#   mod/neoforge/build/libs/mcinsight-neoforge-<mc_version>-0.1.0-beta.1.jar
+#   mod/fabric/build/libs/mcinsight-fabric-<mc_version>-0.1.0-beta.1.jar
 
-### 2. MCP サーバーのビルド・テスト・起動（Node.js >= 20, pnpm）
-```bash
-cd mcp-server
+# 2. MCP サーバーのビルド・テスト
+cd ../mcp-server
 pnpm install
 pnpm typecheck
 pnpm build
 pnpm test
-
-# Streamable HTTP (MCP 2026-07-28, http://127.0.0.1:3876/mcp)
-node dist/index.js --http --port 3876
-
-# stdio トランスポート
-node dist/index.js --stdio
 ```
 
-### 3. MCP ツール一覧（意味論ベースの 11 ツール）
-- **ワールド・プレイヤー状態**:
-  - `mc_status`: MOD接続状態・ワールド情報・導入MOD一覧
-  - `mc_player_state`: 現在地・バイオーム・周辺環境（`biomeBaseTemperature`, `canSeeSky`, 光量, 降水）・ステータス・インベントリ・開いている画面
-  - `mc_observe_world`: 視線先の詳細取得（`looking_at`）および周囲スキャン（`area`）
-- **レジストリ・仕様確認**:
-  - `mc_search_registry`: アイテム・ブロック・流体・エンティティ・タグの検索
-  - `mc_inspect`: アイテム／ブロックの詳細（`isRandomlyTicking`, `stateProperties`, `destroySpeed`, `jeiInformation`）またはタグメンバー一覧
-- **入手経路・システム解析**:
-  - `mc_query_item_flow`: アイテムの入手方法・用途をレシピ・ルートテーブル・取引・Data Map・JEI情報から一括横断検索
-  - `mc_query_recipes`: レシピタイプ一覧・組み込みパーサー一覧の取得、または条件指定のレシピ検索（`includeRaw` 対応）
-  - `mc_query_world_data`: ワールド生成（バイオーム温度フィルタ・`includeRaw` 対応）・ルートテーブル・取引・NeoForge Data Maps の検索
-  - `mc_query_advancements`: 進捗定義・報酬・プレイヤー達成状況の検索
-- **ドキュメント・コード解析**:
-  - `mc_guides`: Patchouli / GuideME / FTB Quests / Ponder / Oracle Index / 言語ファイルの検索・一覧・閲覧
-  - `mc_inspect_code`: 登録IDから静的フィールド定義・参照クラスを辿るバイトコード追跡（`trace_id`）、JAR/パック検索（`search`）、JAR内リソース閲覧（`read_resource`）、Vineflower/`javap` 逆コンパイル（`decompile`）、JVMクラスリフレクション（`reflect`）
+---
 
-## ライセンス
+## ドキュメント・関連リンク
 
-[MIT](LICENSE)
+- [アーキテクチャ・プロトコル仕様](docs/ARCHITECTURE.md): 設計思想、パーサー階層、HTTP API、スレッド設計の詳細
+- [コントリビュートガイド](CONTRIBUTING.md): 開発環境の構築、テスト方法、MOD パーサーの追加手順
+- [セキュリティポリシー](SECURITY.md): 読み取り専用設計、ローカル通信の仕組み、脆弱性報告窓口
+- [変更履歴](CHANGELOG.md): バージョンごとの変更点
+- [ライセンス (MIT)](LICENSE)

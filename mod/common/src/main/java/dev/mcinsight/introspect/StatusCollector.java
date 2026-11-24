@@ -11,6 +11,7 @@ import dev.mcinsight.platform.Services;
 import dev.mcinsight.server.MainThreadExecutor;
 import dev.mcinsight.server.PerfMetrics;
 import java.util.List;
+import net.minecraft.SharedConstants;
 import net.minecraft.world.level.Level;
 
 public final class StatusCollector {
@@ -28,7 +29,7 @@ public final class StatusCollector {
         out.addProperty("ok", true);
         out.addProperty("modId", McInsightConstants.MOD_ID);
         out.addProperty("modVersion", McInsightConstants.MOD_VERSION);
-        out.addProperty("minecraftVersion", McInsightConstants.MINECRAFT_VERSION);
+        out.addProperty("minecraftVersion", SharedConstants.getCurrentVersion().getName());
         out.addProperty("loader", Services.PLATFORM.getLoaderName());
         out.addProperty("loaderVersion", Services.PLATFORM.getLoaderVersion());
         out.addProperty("port", port);

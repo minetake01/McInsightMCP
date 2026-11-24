@@ -1,0 +1,56 @@
+name: Bug Report
+description: Report a crash, incorrect recipe/worldgen output, or MCP server issue
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting an issue! Please fill in the environment details below so we can reproduce it.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected Component
+      options:
+        - Minecraft Mod (NeoForge)
+        - Minecraft Mod (Fabric)
+        - MCP Server
+        - Both Mod & MCP Server
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: McInsightMCP Version
+      placeholder: e.g. 0.1.0-beta.1
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Minecraft / Loader / Node.js Versions
+      description: Include Minecraft version, NeoForge/Fabric loader version, Java version, and Node.js version (plus modpack name if applicable).
+      placeholder: "MC 1.21.1, NeoForge 21.1.x, Java 21, Node 24.x"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What Happened?
+      description: A clear description of the bug and what you expected to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to Reproduce
+      placeholder: |
+        1. Start Minecraft with...
+        2. Call MCP tool / ask AI...
+        3. Observe error...
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs or Tool Output
+      description: Paste relevant lines from `latest.log` or MCP server stderr (remove any personal paths or auth tokens).
+      render: text

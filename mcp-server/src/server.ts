@@ -18,7 +18,7 @@ export interface ServerDeps {
 export function createMcInsightServer(deps: ServerDeps): McpServer {
   const server = new McpServer({
     name: 'mcinsight',
-    version: '1.0.0',
+    version: '0.1.0-beta.1',
   });
 
   registerWorldStateTools(server, deps.mcClient);
@@ -37,7 +37,7 @@ export function createMcInsightServer(deps: ServerDeps): McpServer {
     'mcinsight://status',
     {
       title: 'Minecraft Runtime Status',
-      description: 'Current status of the connected Minecraft 1.21.1 McInsight mod',
+      description: 'Current status of the connected McInsight Minecraft mod',
       mimeType: 'application/json',
     },
     async (uri) => {

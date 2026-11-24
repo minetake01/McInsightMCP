@@ -1,0 +1,24 @@
+name: Feature Request
+description: Suggest a new mod parser, integration, or MCP tool improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Describe the feature, integration, or mod parser you would like to see.
+    validations:
+      required: true
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use Case
+      description: How would players or AI assistants use this in gameplay?
+    validations:
+      required: true
+  - type: input
+    id: target_mod
+    attributes:
+      label: Target Mod & Version (if requesting a mod parser or integration)
+      placeholder: "e.g. Thermal Expansion 12.x (MC 1.21.1)"

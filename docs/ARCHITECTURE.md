@@ -1,31 +1,59 @@
 # McInsightMCP Architecture & Protocol Specification
 
-## 1. Design Principle: Stateless Read-Only Introspection + 2-Tier Mechanical Parsers
+## 1. Repository Layout
 
+```text
+McInsightMCP/
+├── docs/
+│   └── ARCHITECTURE.md     # HTTP API contract, parser tiers, and MCP tool architecture
+├── mod/                    # Multiloader Gradle project (common / neoforge / fabric)
+├── mcp-server/             # TypeScript MCP 2026-07-28 server (Streamable HTTP & stdio)
+└── bench/                  # Main-thread MSPT and endpoint latency benchmark harness
 ```
-Minecraft JVM (NeoForge / Fabric 1.21.1)
+
+---
+
+## 2. Design Principle: Stateless Read-Only Introspection + 2-Tier Mechanical Parsers
+
+Modded Minecraft packs combine hundreds of mods, KubeJS overrides, datapacks, multiblock structures, and custom in-world mechanics that cannot be captured by a single rigid recipe schema. McInsightMCP separates runtime observation into two mechanical parser tiers plus direct primary-evidence access:
+
+```text
+Minecraft JVM (NeoForge / Fabric)
   ├── McInsight Mod (Read-Only, 127.0.0.1:25580..25599)
   │     ├── Native Minecraft Systems (RecipeManager CODEC, Dynamic Worldgen, LootTables, Registries/Tags)
   │     ├── Optional JEI Bridge (IJeiRuntime -> categories, catalysts, typed ingredients, IngredientInfo)
   │     ├── ResourceManager + FTB Quests SNBT Scanner (Patchouli / GuideME / Ponder / Oracle / Lang)
   │     ├── Player / Environment / Raycast / Area Scanner
   │     └── Runtime Class Reflection Introspector
-  ▼ HTTP JSON API (Loopback only)
-TypeScript MCP Server (Node 24, @modelcontextprotocol/server v2.4, Spec 2026-07-28)
-  ├── Stateless Streamable HTTP (/mcp) & stdio (11 agent-semantic tools)
+  ▼ Pure JDK Loopback HTTP JSON API (no GLFW / screen capture hooks)
+TypeScript MCP Server (Node >= 20, @modelcontextprotocol/server v2.4, @modelcontextprotocol/node v2.1, Spec 2026-07-28)
+  ├── Stateless Streamable HTTP (/mcp with Host/Origin localhost guards) & stdio (11 agent-semantic tools)
   ├── McHttpClient (parallel port auto-discovery 25580..25599)
-  ├── Tier 1: Native Vanilla Parsers (vanilla recipes, worldgen ore/height/biome, loot pools/GLMs)
-  ├── Tier 2: Version-Scoped Built-in Major Mod Parsers (Create 6.x, Mekanism 10.7.x, AE2 19.x, Oritech 1.x, Farmer's Delight 1.x, Ars Nouveau 5.x, TofuCraft 12.x)
-  └── On-Demand JAR Inspector, Bytecode ID Tracer & Decompiler (adm-zip, pack script search, <clinit> field tracer, javap, Vineflower 1.12.0)
+  ├── Tier 1: Native Vanilla Parsers (mcp-server/src/parsers/nativeParsers.ts)
+  ├── Tier 2: Version-Scoped Built-in Major Mod Parsers (mcp-server/src/parsers/modParsers/)
+  └── Tier 3: Primary Evidence, Bytecode ID Tracer & Decompiler (adm-zip, pack script search, <clinit> field tracer, javap, Vineflower 1.12.0)
 ```
 
-Mechanical parsing covers Minecraft's native systems (Tier 1) and explicitly version-gated major mod parsers (Tier 2). When a built-in mod parser's `modVersionRange` does not match the running mod version, it refuses to guess (`parserVersionMismatch`) and passes verbatim raw evidence to the AI. Parsed responses omit `rawJson` by default (`includeRaw=false`) and include it automatically whenever mechanical parsing is unavailable or `includeRaw=true`.
+### 2.1 Three-Layer Observation Strategy
+
+1. **Tier 1 — Native Minecraft Parsers (`mcp-server/src/parsers/nativeParsers.ts`)**:
+   Mechanically normalizes Minecraft's built-in data formats: vanilla crafting/smelting/stonecutting/smithing recipes, dynamic worldgen (`configured_feature` ore veins, `placed_feature` height/count rules, biome climate/spawners, structures, biome modifiers), loot tables & Global Loot Modifiers, and registries/tags.
+2. **Tier 2 — Version-Scoped Major Mod Parsers (`mcp-server/src/parsers/modParsers/`)**:
+   Built-in parsers for major mods (`create` 6.x, `mekanism` 10.7.x, `ae2` 19.x, `oritech` 1.x, `farmersdelight` 1.x, `ars_nouveau` 5.x, `tofucraft` 12.x), strictly gated by `semver` `modVersionRange` against live loaded mod versions. When a mod version falls outside the tested range, the parser refuses to guess (`parserVersionMismatch`) and passes verbatim raw JSON to the AI. Parsed responses omit `rawJson` by default (`includeRaw=false`) and include it automatically whenever mechanical parsing is unavailable or `includeRaw=true`.
+3. **Tier 3 — Primary Evidence & Bytecode Introspection**:
+   For any other mod, multiblock, or undocumented in-world mechanic, the server exposes `Recipe.CODEC` raw JSON (with KubeJS/datapack changes applied), optional JEI categories/catalysts/info descriptions, BlockEntity NBT, loaded guides/quests (Patchouli, GuideME, FTB Quests, Create Ponder, Oracle Index, lang files), runtime block metadata (`isRandomlyTicking`, `stateProperties`, `destroySpeed`), runtime class reflection, and on-demand JAR inspection, deterministic `<clinit>` ID-to-field bytecode tracing (`trace_id`), and **Vineflower 1.12.0** / `javap` Java decompilation.
+
+### 2.2 Transport, Security & Isolation Design
+
+- **Zero Native Window / GLFW Dependencies**: The mod exposes structured runtime data over a pure JDK loopback HTTP server (`com.sun.net.httpserver.HttpServer` bound strictly to `127.0.0.1:25580..25599`) and never touches GLFW or screen capture hooks.
+- **Pure Read-Only & Stateless**: Neither the mod nor the MCP server mutates world state or maintains persistent server-side session state. Client-only installs expose recipes, inventory, raycast targets, and guides on multiplayer servers; singleplayer or server-side installs additionally expose authoritative BlockEntity NBT and dynamic loot tables.
+- **MCP `2026-07-28` Transport**: Built on `@modelcontextprotocol/server` v2.4 and `@modelcontextprotocol/node` v2.1, supporting stateless Streamable HTTP (`/mcp`, `/health`, with `localhostHostValidation()` and `localhostOriginValidation()`) and `stdio`.
 
 ---
 
-## 2. Mod Local HTTP API (`/api/v1/...`)
+## 3. Mod Local HTTP API (`/api/v1/...`)
 
-All endpoints bind strictly to `127.0.0.1` using `com.sun.net.httpserver.HttpServer`. Every response is JSON. Errors return `{ "ok": false, "code": "...", "error": "..." }`.
+All endpoints bind strictly to `127.0.0.1` using `com.sun.net.httpserver.HttpServer`. Every response is JSON. Errors return `{ "ok": false, "code": "...", "error": "..." }`. If `authToken` is configured in `config/mcinsight.json`, requests must send `Authorization: Bearer <token>`.
 
 | Endpoint | Method | Description |
 |---|---|---|
@@ -53,13 +81,14 @@ All endpoints bind strictly to `127.0.0.1` using `com.sun.net.httpserver.HttpSer
 
 All HTTP responses include `X-McInsight-MainThread-Us`, `X-McInsight-Total-Us`, and `X-McInsight-Cache` (`hit`/`miss`) diagnostic headers.
 
-### 2.1 Threading & Caching Architecture
+### 3.1 Threading & Caching Architecture
+
 - **Static & Reload-Scoped Data (0ms Warm Main-Thread Overhead)**: `RecipeCollector`, `RegistryCollector`, `WorldgenAndLootCollector`, `TradeCollector`, `ResourceGuideCollector`, `StatusCollector`, and `ClassIntrospector` perform indexing, Codec encoding, file I/O, and filtering on HTTP worker threads using generation-stamped caches (`InsightCacheManager`) invalidated automatically on datapack/resource reloads and world lifecycle transitions.
 - **Live World & Player Data (Two-Phase Collection)**: `WorldTargetCollector`, `PlayerStateCollector`, and `AdvancementCollector` acquire minimal raw snapshots (`LevelChunkSection` direct reads skipping `hasOnlyAir()` sections, chunk-level `getBlockEntities()`, copied `ItemStack`s, biome climate/light samples, advancement progress snapshots) on the owning game thread, then run sorting, NBT conversion, tag lookup, and Gson serialization off-thread.
 
 ---
 
-## 3. MCP Tools (11 Agent-Semantic Primitives)
+## 4. MCP Tools (11 Agent-Semantic Primitives)
 
 | Tool | Semantic Purpose |
 |---|---|
@@ -67,7 +96,7 @@ All HTTP responses include `X-McInsight-MainThread-Us`, `X-McInsight-Total-Us`, 
 | `mc_player_state` | Live player state, inventory, open screen, and current environment (`biomeBaseTemperature`, `canSeeSky`, light, precipitation) |
 | `mc_observe_world` | Raycast crosshair target (`looking_at`) or nearby area scan (`area`) |
 | `mc_search_registry` | Resolve item/block/fluid/entity/tag IDs by ID or localized display name |
-| `mc_inspect` | Inspect item/block metadata (`isRandomlyTicking`, `stateProperties`, `jeiInformation`) or tag members |
+| `mc_inspect` | Inspect item/block metadata (`isRandomlyTicking`, `stateProperties`, `destroySpeed`, `jeiInformation`) or tag members |
 | `mc_query_item_flow` | Cross-query how to obtain or use an item (recipes, loot + GLMs, trades, data maps, JEI info) |
 | `mc_query_recipes` | List recipe types / built-in mod parsers (`listTypes=true`) or query recipes (`includeRaw` supported) |
 | `mc_query_world_data` | Query worldgen (with biome `minTemp`/`maxTemp`), loot tables, trades, and data maps (`includeRaw` + pagination) |

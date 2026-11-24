@@ -1,5 +1,6 @@
+#!/usr/bin/env node
+import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { McHttpClient } from './client/mcClient.js';
 import { JarInspector } from './decompiler/jarInspector.js';
 import { ServerDeps } from './server.js';
@@ -16,10 +17,19 @@ interface CliOptions {
   toolsDir: string;
 }
 
-function parseArgs(argv: string[]): CliOptions {
-  const __dirname = path.dirname(fileURLToPath(import.meta.url));
-  const pkgRoot = path.resolve(__dirname, '..');
+function getDefaultToolsDir(): string {
+  if (process.platform === 'win32') {
+    const base = process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local');
+    return path.join(base, 'mcinsight-mcp', 'tools');
+  }
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Caches', 'mcinsight-mcp', 'tools');
+  }
+  const base = process.env.XDG_CACHE_HOME ?? path.join(os.homedir(), '.cache');
+  return path.join(base, 'mcinsight-mcp', 'tools');
+}
 
+function parseArgs(argv: string[]): CliOptions {
   const opts: CliOptions = {
     mode: 'stdio',
     port: Number(process.env.MCP_PORT ?? 3876),
@@ -27,7 +37,7 @@ function parseArgs(argv: string[]): CliOptions {
     authToken: process.env.MCINSIGHT_TOKEN,
     modsDir: process.env.MCINSIGHT_MODS_DIR,
     gameDir: process.env.MCINSIGHT_GAME_DIR,
-    toolsDir: path.join(pkgRoot, '.tools'),
+    toolsDir: process.env.MCINSIGHT_TOOLS_DIR || getDefaultToolsDir(),
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -39,6 +49,7 @@ function parseArgs(argv: string[]): CliOptions {
     else if (arg === '--token' && argv[i + 1]) opts.authToken = argv[++i];
     else if (arg === '--mods-dir' && argv[i + 1]) opts.modsDir = argv[++i];
     else if (arg === '--game-dir' && argv[i + 1]) opts.gameDir = argv[++i];
+    else if (arg === '--tools-dir' && argv[i + 1]) opts.toolsDir = argv[++i];
   }
 
   return opts;

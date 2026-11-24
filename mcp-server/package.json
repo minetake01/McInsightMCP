@@ -1,11 +1,43 @@
 {
   "name": "mcinsight-mcp-server",
-  "version": "1.0.0",
-  "description": "MCP 2026-07-28 compliant self-extending Minecraft game system insight server",
+  "version": "0.1.0-beta.1",
+  "description": "MCP 2026-07-28 server connecting AI assistants to live Minecraft worlds via the McInsight mod",
+  "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "mcinsight-mcp-server": "dist/index.js",
+    "mcinsight-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/minetake01/McInsightMCP.git",
+    "directory": "mcp-server"
+  },
+  "homepage": "https://github.com/minetake01/McInsightMCP#readme",
+  "bugs": {
+    "url": "https://github.com/minetake01/McInsightMCP/issues"
+  },
+  "keywords": [
+    "minecraft",
+    "mcp",
+    "model-context-protocol",
+    "neoforge",
+    "fabric",
+    "ai-assistant"
+  ],
   "scripts": {
     "build": "tsc",
+    "prepack": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && npm run build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "start:http": "node dist/index.js --http",

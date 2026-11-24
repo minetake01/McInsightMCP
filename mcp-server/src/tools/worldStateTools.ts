@@ -27,7 +27,7 @@ export function registerWorldStateTools(server: McpServer, mcClient: McHttpClien
     {
       title: 'Minecraft Runtime Status',
       description:
-        'Check connection to the running McInsight mod (NeoForge/Fabric 1.21.1), active world state, JEI/guide integrations, and loaded mod list.',
+        'Check connection to the running McInsight mod (NeoForge/Fabric), active world state, JEI/guide integrations, and loaded mod list.',
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: STATUS_SCHEMA,
     },

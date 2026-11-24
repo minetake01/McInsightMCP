@@ -2,114 +2,175 @@
 
 **English** | [日本語](README.ja.md)
 
-A generic, read-only, stateless **Minecraft 1.21.1** (NeoForge + Fabric) runtime introspection mod paired with an **MCP `2026-07-28`** compliant TypeScript server (stateless Streamable HTTP & stdio) organized around agent-semantic observation tools.
+[![CI](https://github.com/minetake01/McInsightMCP/actions/workflows/ci.yml/badge.svg)](https://github.com/minetake01/McInsightMCP/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/minetake01/McInsightMCP?include_prereleases&label=release)](https://github.com/minetake01/McInsightMCP/releases)
+[![Status: Beta](https://img.shields.io/badge/Status-Beta-yellow.svg)](CHANGELOG.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Minecraft](https://img.shields.io/badge/Minecraft-NeoForge%20%7C%20Fabric-62B47A.svg)](https://github.com/minetake01/McInsightMCP/releases)
+
+**Ask your AI assistant about the Minecraft world you are actually playing.**
+
+McInsightMCP connects MCP-compatible AI assistants (Claude Desktop, Cursor, Claude Code, VS Code, and others) directly to your running **Minecraft** game. Instead of guessing from outdated wikis, your AI can look up real recipes in your modpack (including KubeJS and datapack tweaks), see what block or machine you are looking at, check your inventory, read in-game guidebooks and quests, and inspect how unfamiliar mods actually work.
+
+> [!NOTE]
+> **Beta Release (`0.1.0-beta.1`)**: McInsightMCP is currently in beta. MCP tool schemas, response formats, and configuration options may change before `1.0.0`. Bug reports and feedback are welcome via [GitHub Issues](https://github.com/minetake01/McInsightMCP/issues).
 
 ---
 
-## Design Philosophy
+## Why Use McInsightMCP?
 
-Modded Minecraft packs combine hundreds of mods, KubeJS overrides, datapacks, multiblock structures, and custom in-world mechanics that cannot be captured by a single rigid recipe schema. McInsightMCP separates runtime observation into two mechanical parser tiers plus direct primary-evidence access:
-
-1. **Tier 1 — Native Minecraft Parsers (`src/parsers/nativeParsers.ts`)**:
-   Mechanically normalizes Minecraft's built-in data formats: vanilla crafting/smelting/stonecutting/smithing recipes, dynamic worldgen (`configured_feature` ore veins, `placed_feature` height/count rules, biome climate/spawners, structures, biome modifiers), loot tables & Global Loot Modifiers, and registries/tags.
-2. **Tier 2 — Version-Scoped Major Mod Parsers (`src/parsers/modParsers/`)**:
-   Built-in parsers for major 1.21.1 mods (`create` 6.x, `mekanism` 10.7.x, `ae2` 19.x, `oritech` 1.x, `farmersdelight` 1.x, `ars_nouveau` 5.x, `tofucraft` 12.x), strictly gated by semver `modVersionRange` against live loaded mod versions. When a mod version falls outside the tested range, the parser refuses to guess (`parserVersionMismatch`) and passes verbatim raw data to the AI.
-3. **Primary Evidence & Bytecode Introspection**:
-   For any other mod, multiblock, or undocumented in-world mechanic, the server exposes `Recipe.CODEC` raw JSON (with KubeJS/datapack changes applied), optional JEI categories/catalysts/info descriptions, BlockEntity NBT, loaded guides/quests (Patchouli, GuideME, FTB Quests, Create Ponder, Oracle Index, lang files), runtime class reflection, and on-demand JAR inspection, deterministic ID-to-field bytecode tracing, and **Vineflower 1.12.0** / `javap` Java decompilation.
+- **Accurate to Your Modpack**: Reads live recipes, ore generation, loot tables, villager trades, advancements, and KubeJS/datapack overrides straight from the running game.
+- **100% Read-Only & Safe**: Never breaks blocks, edits your world, moves your player, or sends commands. It only observes.
+- **Local-Only by Default**: Runs on `127.0.0.1` on your machine — no external servers, no telemetry, and no screen capture.
+- **Client-Friendly Multiplayer**: Works on multiplayer servers even when installed only on your client (recipes, inventory, raycast target, and guides). In singleplayer — or when also installed on the server — it additionally reads full machine/chest NBT and dynamic loot tables.
+- **Works With Any Modpack**: Automatically integrates with optional mods when installed, and can even inspect mod resources or decompile mod classes when documentation is missing.
 
 ---
 
-## Key Features
+## What You Can Ask Your AI
 
-- **Zero Hard Mod Dependencies (Multiloader MC 1.21.1)**:
-  Runs standalone on NeoForge or Fabric with any modpack. Optional integrations (JEI runtime, Patchouli, GuideME, FTB Quests, Create Ponder) attach automatically when present.
-- **Pure Read-Only & Stateless**:
-  Never modifies the game world or maintains persistent server-side state. Works on multiplayer servers even when McInsight is only installed on the client, and exposes authoritative BlockEntity NBT and dynamic loot tables in singleplayer or when installed server-side.
-- **No Native Window / GLFW Dependencies**:
-  Exposes structured data over a pure JDK loopback HTTP API (`127.0.0.1:25580..25599`) — never touches GLFW or screen capture hooks.
-- **MCP `2026-07-28` Compliant**:
-  Built on `@modelcontextprotocol/server` v2.4 and `@modelcontextprotocol/node` v2.1 with stateless Streamable HTTP (`/mcp`, `server/discover`, Host/Origin localhost guards) and `stdio`.
+- *"How do I craft or obtain `mekanism:atomic_alloy` in this pack, and do I already have the materials in my inventory?"*
+- *"What is this machine I'm looking at right now, and why isn't it running?"*
+- *"At what Y-level and in which biomes does this modpack's osmium or platinum ore generate?"*
+- *"Search the Patchouli / FTB Quests / Create Ponder / GuideME docs for how to automate this resource."*
+- *"I can't find any wiki page for this modded item — check the mod itself and explain how the mechanic works."*
 
 ---
 
-## Repository Structure
+## Requirements & Supported Integrations
 
+| Component | Requirement |
+|---|---|
+| **Minecraft** | Currently `1.21.1` (Java 21) — see [Releases](https://github.com/minetake01/McInsightMCP/releases) for supported versions |
+| **NeoForge** | Standalone — no required mod dependencies |
+| **Fabric** | Requires [Fabric API](https://modrinth.com/mod/fabric-api) |
+| **MCP Server** | [Node.js](https://nodejs.org/) `>= 20` |
+
+### Optional In-Game Integrations (Auto-Detected)
+- **JEI** (categories, catalysts, and JEI item info pages)
+- **In-Game Guides & Quests**: Patchouli, GuideME, FTB Quests, Create Ponder, Oracle Index, and mod language files
+
+### Built-In Mod Recipe Formatting
+Works with **any** modpack via raw recipe data, and includes dedicated structured recipe formatting for **Create**, **Mekanism**, **Applied Energistics 2**, **Oritech**, **Farmer's Delight**, **Ars Nouveau**, and **TofuCraftReload**.
+
+---
+
+## Quick Start
+
+### Step 1: Install the Minecraft Mod
+
+1. Download the mod JAR for your Minecraft version and loader from [GitHub Releases](https://github.com/minetake01/McInsightMCP/releases):
+   - **NeoForge**: `mcinsight-neoforge-<mc_version>-<version>.jar`
+   - **Fabric**: `mcinsight-fabric-<mc_version>-<version>.jar` (also make sure **Fabric API** is in `mods/`)
+2. Place the JAR into your Minecraft instance's `mods/` folder.
+3. Launch Minecraft and load into a world.
+
+### Step 2: Connect Your AI Client
+
+#### Option A: `stdio` via `npx` / `pnpx` (Recommended for Claude Desktop, Cursor, Claude Code, VS Code)
+
+Add this to your MCP client configuration:
+
+```json
+{
+  "mcpServers": {
+    "mcinsight": {
+      "command": "npx",
+      "args": ["-y", "mcinsight-mcp-server@beta", "--stdio"]
+    }
+  }
+}
 ```
-McInsightMCP/
-├── docs/
-│   └── ARCHITECTURE.md     # HTTP API contract & parser/tool design
-├── mod/                    # MC 1.21.1 Multiloader Gradle project (common / neoforge / fabric)
-└── mcp-server/             # TypeScript MCP server (2026-07-28)
-```
 
-For full HTTP endpoint contracts and MCP tool details, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+With `pnpm`, you can also use `"command": "pnpx"` and `"args": ["mcinsight-mcp-server@beta", "--stdio"]`.
 
----
+#### Option B: Streamable HTTP
 
-## Build & Run
-
-### 1. Build the Minecraft Mod (JDK 21)
+Start the server locally:
 
 ```bash
+npx -y mcinsight-mcp-server@beta --http --port 3876
+# or with pnpm:
+pnpx mcinsight-mcp-server@beta --http --port 3876
+```
+
+Then point your MCP client to `http://127.0.0.1:3876/mcp`.
+
+#### Manual / Offline Setup (GitHub Releases)
+
+You can also download and extract `mcinsight-mcp-server-<version>` from [GitHub Releases](https://github.com/minetake01/McInsightMCP/releases), install runtime dependencies inside the extracted folder (`pnpm install --prod` or `npm install --omit=dev`), and run `node /path/to/mcinsight-mcp-server/dist/index.js --stdio` (or build from source — see below).
+
+> **Tip**: By default, the MCP server automatically discovers a running McInsight mod on `127.0.0.1` ports `25580..25599` — no manual port configuration needed.
+
+---
+
+## Optional Configuration
+
+### Minecraft Mod (`config/mcinsight.json`)
+
+Generated automatically on first launch:
+
+| Key | Default | Description |
+|---|---|---|
+| `enabled` | `true` | Enable or disable the local HTTP API |
+| `port` | `25580` | Starting loopback port to bind (`1024..65535`) |
+| `portRangeSize` | `20` | Number of consecutive ports to try if the port is busy (`1..50`) |
+| `authToken` | `""` | Optional Bearer token required for API requests |
+| `maxScanRadius` | `16` | Maximum radius for nearby area scans (`1..32`) |
+| `maxRecipeResults` | `100` | Maximum recipes returned per query (`1..500`) |
+
+### MCP Server CLI Flags & Environment Variables
+
+| CLI Flag | Environment Variable | Purpose |
+|---|---|---|
+| `--stdio` | — | Run over stdio (default) |
+| `--http` | — | Run as a local Streamable HTTP server |
+| `--port <port>` | `MCP_PORT` | HTTP server port (default `3876`) |
+| `--mc-url <url>` | `MCINSIGHT_URL` | Explicit mod URL (skips port auto-discovery) |
+| `--token <token>` | `MCINSIGHT_TOKEN` | Bearer token matching `authToken` in `mcinsight.json` |
+| `--mods-dir <path>` | `MCINSIGHT_MODS_DIR` | Mods folder path for offline JAR inspection |
+| `--game-dir <path>` | `MCINSIGHT_GAME_DIR` | Game folder path for offline KubeJS / FTB Quests scanning |
+| `--tools-dir <path>` | `MCINSIGHT_TOOLS_DIR` | Cache directory for downloaded decompiler tools (Vineflower) |
+
+---
+
+## Available AI Tools
+
+McInsightMCP exposes 11 tools to your AI assistant:
+
+- **World & Player**: `mc_status`, `mc_player_state`, `mc_observe_world` (what you are looking at or nearby blocks/entities)
+- **Items & Blocks**: `mc_search_registry`, `mc_inspect` (block properties, tags, JEI info)
+- **Progression & Crafting**: `mc_query_item_flow`, `mc_query_recipes`, `mc_query_world_data` (worldgen, loot tables, trades, NeoForge data maps), `mc_query_advancements`
+- **Guides & Mod Internals**: `mc_guides` (Patchouli, GuideME, FTB Quests, Ponder, Oracle Index, lang), `mc_inspect_code` (resource/script search & Java class inspection)
+
+---
+
+## Building from Source
+
+Requires **JDK 21** for the mod and **Node.js >= 20** + **pnpm** for the MCP server.
+
+```bash
+# 1. Build the NeoForge and Fabric mod JARs
 cd mod
 ./gradlew :neoforge:build :fabric:build
-```
+# Output JARs:
+#   mod/neoforge/build/libs/mcinsight-neoforge-<mc_version>-0.1.0-beta.1.jar
+#   mod/fabric/build/libs/mcinsight-fabric-<mc_version>-0.1.0-beta.1.jar
 
-Generated artifacts:
-- `mod/neoforge/build/libs/mcinsight-neoforge-1.21.1-1.0.0.jar`
-- `mod/fabric/build/libs/mcinsight-fabric-1.21.1-1.0.0.jar`
-
-Drop the appropriate JAR into your Minecraft `mods/` folder. No extra dependencies are required (JEI is optional).
-
-### 2. Build, Test, and Run the MCP Server (Node.js >= 20, pnpm)
-
-```bash
-cd mcp-server
+# 2. Build and test the MCP server
+cd ../mcp-server
 pnpm install
 pnpm typecheck
 pnpm build
 pnpm test
 ```
 
-Start in **Stateless Streamable HTTP** mode (`http://127.0.0.1:3876/mcp`):
-
-```bash
-node dist/index.js --http --port 3876
-```
-
-Start in **stdio** mode:
-
-```bash
-node dist/index.js --stdio
-```
-
-Optional CLI flags / environment variables:
-- `--mc-url <url>` (`MCINSIGHT_URL`): Explicit mod API URL (auto-discovers `127.0.0.1` / `[::1]` ports `25580..25599` by default)
-- `--mods-dir <path>` (`MCINSIGHT_MODS_DIR`): Mods directory for offline JAR inspection/decompilation
-- `--game-dir <path>` (`MCINSIGHT_GAME_DIR`): Game directory for offline KubeJS/FTB Quests scanning
-
 ---
 
-## MCP Tools Overview (11 Semantic Tools)
+## Documentation & Links
 
-- **World & Player State**:
-  - `mc_status`: Runtime status, active world state, integrations, and loaded mod list
-  - `mc_player_state`: Position, biome, live environment (`biomeBaseTemperature`, `canSeeSky`, `skyLight`, `blockLight`, `precipitation`), vitals, inventory, and open screen slots
-  - `mc_observe_world`: Raycast crosshair target (`looking_at`) or scan surrounding area (`area`)
-- **Registry & Metadata**:
-  - `mc_search_registry`: Search items, blocks, fluids, entities, and tags
-  - `mc_inspect`: Inspect item/block metadata (`isRandomlyTicking`, `stateProperties`, `destroySpeed`, `jeiInformation`) or tag members
-- **Game Mechanics & Systems**:
-  - `mc_query_item_flow`: Cross-query how to obtain or use an item across recipes, loot tables + GLMs, trades, data maps, and JEI info
-  - `mc_query_recipes`: List recipe types / built-in mod parsers or query recipes by type, mod, or item (`includeRaw` supported)
-  - `mc_query_world_data`: Query worldgen (with biome temperature filters and `includeRaw`), loot tables, villager trades, and NeoForge data maps
-  - `mc_query_advancements`: Query advancement definitions, rewards, and live player progress
-- **Documentation & Code**:
-  - `mc_guides`: Search, list, and read Patchouli, GuideME, FTB Quests, Create Ponder, Oracle Index, and lang docs
-  - `mc_inspect_code`: Trace ID registrations & field references in JVM bytecode (`trace_id`), grep JARs/pack scripts (`search`), read JAR resources (`read_resource`), decompile Java classes via Vineflower/`javap` (`decompile`), or reflect live JVM classes (`reflect`)
-
----
-
-## License
-
-[MIT](LICENSE)
+- [Architecture & Protocol Specification](docs/ARCHITECTURE.md) — Technical details, parser tiers, HTTP endpoints, and threading model
+- [Contributing Guide](CONTRIBUTING.md) — Development setup, testing, and how to add mod parsers
+- [Security Policy](SECURITY.md) — Read-only & loopback guarantees and vulnerability reporting
+- [Changelog](CHANGELOG.md) — Release history
+- [License (MIT)](LICENSE)

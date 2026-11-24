@@ -7,7 +7,13 @@
   "authors": [
     "${mod_author}"
   ],
+  "contact": {
+    "homepage": "${mod_homepage}",
+    "sources": "${mod_sources}",
+    "issues": "${mod_issues}"
+  },
   "license": "${license}",
+  "icon": "mcinsight.png",
   "environment": "*",
   "entrypoints": {
     "client": [
