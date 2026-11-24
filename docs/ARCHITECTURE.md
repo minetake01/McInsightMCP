@@ -37,14 +37,18 @@ All endpoints bind strictly to `127.0.0.1` using `com.sun.net.httpserver.HttpSer
 | `/api/v1/player` | GET | Player position, vitals, effects, inventory, open screen & container slots |
 | `/api/v1/looking-at` | GET | Raycast block/entity target (`maxDistance`, default `16`) |
 | `/api/v1/scan` | GET | Nearby blocks, block entities, and entities (`radius`, `filter`) |
-| `/api/v1/registry/search` | GET | Search registries (`kind=item\|block\|fluid\|entity\|tag`, `q`, `mod`, `limit`, `offset`) |
+| `/api/v1/registry/search` | GET | Search registries (`kind=item\|block\|fluid\|entity\|tag\|item_tag\|block_tag\|fluid_tag\|entity_tag`, `q`, `mod`, `limit`, `offset`) |
 | `/api/v1/registry/item` | GET | Detailed metadata for `id=namespace:path` |
+| `/api/v1/registry/tag` | GET | List members of an `item`/`block`/`fluid`/`entity` tag (`kind`, `id`, `limit`) |
 | `/api/v1/recipes/types` | GET | All `RecipeType` IDs + counts and JEI category UIDs + catalysts |
 | `/api/v1/recipes/query` | GET | Unified `RecipeManager` raw JSON + JEI viewer extraction (`item`, `role`, `type`, `mod`, `source`, `limit`, `offset`) |
-| `/api/v1/worldgen/summary` | GET | Dynamic registry counts for dimensions, biomes, structures, placed/configured features |
-| `/api/v1/worldgen/query` | GET | Raw JSON for `placed_feature`, `configured_feature`, `biome`, `structure`, `dimension_type` |
-| `/api/v1/loot/query` | GET | Raw JSON for `LootTable`s (server reloadable registries or `ResourceManager` fallback) |
-| `/api/v1/guides/list` | GET | Discovered guide books, quests, and lang docs (`source`, `mod`) |
+| `/api/v1/worldgen/summary` | GET | Dynamic registry counts for dimensions, biomes, structures, placed/configured features, and biome modifiers |
+| `/api/v1/worldgen/query` | GET | Raw JSON for `placed_feature`, `configured_feature`, `biome`, `structure`, `dimension_type`, `biome_modifier` (`searchContent`) |
+| `/api/v1/loot/query` | GET | Raw JSON for `LootTable`s & NeoForge Global Loot Modifiers with reverse `item` lookup (`q`, `item`, `mod`, `includeModifiers`, `limit`) |
+| `/api/v1/datamaps/query` | GET | NeoForge `data_maps` JSON definitions & filtered values (`q`, `registry`, `mod`, `limit`) |
+| `/api/v1/trades/query` | GET | Registered `VillagerTrades` & `WanderingTrader` offers (`item`, `profession`, `mod`, `limit`) |
+| `/api/v1/advancements/query` | GET | Advancement definitions, rewards, and live player progress (`q`, `mod`, `status`, `includeRecipes`, `limit`) |
+| `/api/v1/guides/list` | GET | Discovered guide books (`assets/` + `data/`), quests, and lang docs (`source`, `mod`) |
 | `/api/v1/guides/search` | GET | Case-insensitive search across guide/quest/ponder/lang entries (`q`, `lang`, `limit`) |
 | `/api/v1/guides/page` | GET | Full raw content of a guide/quest page (`id`) |
 | `/api/v1/introspect/class` | GET | Runtime class reflection (`name=fqcn`) |
@@ -53,8 +57,8 @@ All endpoints bind strictly to `127.0.0.1` using `com.sun.net.httpserver.HttpSer
 All HTTP responses include `X-McInsight-MainThread-Us`, `X-McInsight-Total-Us`, and `X-McInsight-Cache` (`hit`/`miss`) diagnostic headers.
 
 ### 2.1 Threading & Caching Architecture
-- **Static & Reload-Scoped Data (0ms Warm Main-Thread Overhead)**: `RecipeCollector`, `RegistryCollector`, `WorldgenAndLootCollector`, `ResourceGuideCollector`, `StatusCollector`, and `ClassIntrospector` perform indexing, Codec encoding, file I/O, and filtering on HTTP worker threads using generation-stamped caches (`InsightCacheManager`) invalidated automatically on datapack/resource reloads and world lifecycle transitions.
-- **Live World & Player Data (Two-Phase Collection)**: `WorldTargetCollector` and `PlayerStateCollector` acquire minimal raw snapshots (`LevelChunkSection` direct reads skipping `hasOnlyAir()` sections, chunk-level `getBlockEntities()`, copied `ItemStack`s) on the owning game thread, then run sorting, NBT conversion, tag lookup, and Gson serialization off-thread.
+- **Static & Reload-Scoped Data (0ms Warm Main-Thread Overhead)**: `RecipeCollector`, `RegistryCollector`, `WorldgenAndLootCollector`, `TradeCollector`, `ResourceGuideCollector`, `StatusCollector`, and `ClassIntrospector` perform indexing, Codec encoding, file I/O, and filtering on HTTP worker threads using generation-stamped caches (`InsightCacheManager`) invalidated automatically on datapack/resource reloads and world lifecycle transitions.
+- **Live World & Player Data (Two-Phase Collection)**: `WorldTargetCollector`, `PlayerStateCollector`, and `AdvancementCollector` acquire minimal raw snapshots (`LevelChunkSection` direct reads skipping `hasOnlyAir()` sections, chunk-level `getBlockEntities()`, copied `ItemStack`s, advancement progress snapshots) on the owning game thread, then run sorting, NBT conversion, tag lookup, and Gson serialization off-thread.
 
 ---
 

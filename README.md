@@ -95,10 +95,10 @@ Optional CLI flags / environment variables:
 
 ## MCP Tools Overview
 
-- **Game State**: `mc_status`, `mc_player_state`, `mc_looking_at`, `mc_scan_area`, `mc_search_registry`, `mc_inspect_item`
-- **Recipes, Worldgen & Loot**: `mc_list_recipe_types`, `mc_query_recipes`, `mc_query_worldgen`, `mc_query_loot`
+- **Game State**: `mc_status`, `mc_player_state`, `mc_looking_at`, `mc_scan_area`, `mc_search_registry`, `mc_inspect_item`, `mc_inspect_tag`
+- **Recipes, Worldgen, Loot, Trades & Advancements**: `mc_list_recipe_types`, `mc_query_recipes`, `mc_query_worldgen`, `mc_query_loot`, `mc_query_datamaps`, `mc_query_trades`, `mc_query_advancements`
 - **Guides & Quests**: `mc_search_guides`, `mc_get_guide_page`
-- **Introspection & Decompilation**: `mc_inspect_class`, `mc_search_jars`, `mc_read_jar_resource`, `mc_decompile_class`
+- **Introspection & Decompilation**: `mc_inspect_class`, `mc_search_jars` (`paths` / `content` / `class_strings`), `mc_read_jar_resource`, `mc_decompile_class`
 - **Knowledge & Extractors**: `mc_save_knowledge_note`, `mc_search_knowledge`, `mc_get_knowledge_note`, `mc_register_extractor`, `mc_test_extractor`, `mc_list_knowledge`
 
 ---

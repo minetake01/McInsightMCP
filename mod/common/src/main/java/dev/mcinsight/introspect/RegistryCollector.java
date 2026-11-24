@@ -15,11 +15,14 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
+import net.minecraft.core.Holder;
 import net.minecraft.core.HolderLookup;
+import net.minecraft.core.HolderSet;
 import net.minecraft.core.Registry;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.tags.TagKey;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.food.FoodProperties;
 import net.minecraft.world.item.BlockItem;
@@ -51,10 +54,10 @@ public final class RegistryCollector {
         }
     }
 
-    private record TagEntry(String id, String idLower, String modIdLower) {}
+    private record TagEntry(String kind, String id, String idLower, String modIdLower) {}
 
     private static final ConcurrentHashMap<String, RegistryKindIndex> KIND_CACHE = new ConcurrentHashMap<>();
-    private static final AtomicReference<List<TagEntry>> TAG_CACHE = new AtomicReference<>();
+    private static final AtomicReference<Map<String, List<TagEntry>>> TAG_CACHE = new AtomicReference<>();
     private static volatile HolderLookup.Provider cachedRegistries;
     private static volatile long cachedRegistriesGeneration = -1L;
 
@@ -62,6 +65,12 @@ public final class RegistryCollector {
 
     public static void invalidateDisplayNameCache() {
         KIND_CACHE.clear();
+        TAG_CACHE.set(null);
+        cachedRegistries = null;
+        cachedRegistriesGeneration = -1L;
+    }
+
+    public static void invalidateTagCache() {
         TAG_CACHE.set(null);
         cachedRegistries = null;
         cachedRegistriesGeneration = -1L;
@@ -81,8 +90,12 @@ public final class RegistryCollector {
         int clampedLimit = Math.max(1, Math.min(limit, 200));
         int clampedOffset = Math.max(0, offset);
 
-        if ("tag".equals(normKind)) {
-            return searchTags(normQ, normMod, clampedLimit, clampedOffset);
+        if ("tag".equals(normKind)
+            || "item_tag".equals(normKind)
+            || "block_tag".equals(normKind)
+            || "fluid_tag".equals(normKind)
+            || "entity_tag".equals(normKind)) {
+            return searchTags(normKind, normQ, normMod, clampedLimit, clampedOffset);
         }
 
         String langKey = Services.PLATFORM.isClientSide() ? ClientStateAccessor.getLanguageCode() : "server";
@@ -111,7 +124,7 @@ public final class RegistryCollector {
                     continue;
                 }
             }
-            if (matched < offset) {
+            if (matched < clampedOffset) {
                 matched++;
                 continue;
             }
@@ -178,56 +191,153 @@ public final class RegistryCollector {
         return new RegistryKindIndex(all, byMod);
     }
 
-    private static JsonObject searchTags(String normQ, String normMod, int limit, int offset) {
-        List<TagEntry> tags = TAG_CACHE.get();
-        if (tags != null) {
+    private static Map<String, List<TagEntry>> getOrBuildTagMap() {
+        Map<String, List<TagEntry>> cached = TAG_CACHE.get();
+        if (cached != null) {
             PerfMetrics.markCacheHit();
-        } else {
-            tags = BuiltInRegistries.ITEM.getTagNames()
-                .map(t -> {
-                    ResourceLocation id = t.location();
-                    return new TagEntry(
-                        "#" + id,
-                        id.toString().toLowerCase(Locale.ROOT),
-                        id.getNamespace().toLowerCase(Locale.ROOT)
-                    );
-                })
-                .toList();
-            TAG_CACHE.compareAndSet(null, tags);
+            return cached;
         }
+        Map<String, List<TagEntry>> map = new HashMap<>();
+        map.put("item_tag", collectTagsForRegistry(BuiltInRegistries.ITEM, "item_tag"));
+        map.put("block_tag", collectTagsForRegistry(BuiltInRegistries.BLOCK, "block_tag"));
+        map.put("fluid_tag", collectTagsForRegistry(BuiltInRegistries.FLUID, "fluid_tag"));
+        map.put("entity_tag", collectTagsForRegistry(BuiltInRegistries.ENTITY_TYPE, "entity_tag"));
+        Map<String, List<TagEntry>> frozen = Map.copyOf(map);
+        TAG_CACHE.compareAndSet(null, frozen);
+        return TAG_CACHE.get();
+    }
+
+    private static <T> List<TagEntry> collectTagsForRegistry(Registry<T> reg, String tagKind) {
+        return reg.getTagNames()
+            .map(t -> {
+                ResourceLocation id = t.location();
+                return new TagEntry(
+                    tagKind,
+                    "#" + id,
+                    id.toString().toLowerCase(Locale.ROOT),
+                    id.getNamespace().toLowerCase(Locale.ROOT)
+                );
+            })
+            .toList();
+    }
+
+    private static JsonObject searchTags(
+        String normKind,
+        String normQ,
+        String normMod,
+        int limit,
+        int offset
+    ) {
+        Map<String, List<TagEntry>> tagMap = getOrBuildTagMap();
+        List<String> kindsToSearch = "tag".equals(normKind)
+            ? List.of("item_tag", "block_tag", "fluid_tag", "entity_tag")
+            : List.of(normKind);
 
         JsonArray results = new JsonArray();
         int matched = 0;
         boolean hasMore = false;
 
-        for (TagEntry tag : tags) {
-            if (!normMod.isEmpty() && !tag.modIdLower().equals(normMod)) {
-                continue;
-            }
-            if (!normQ.isEmpty() && !tag.idLower().contains(normQ)) {
-                continue;
-            }
-            if (matched < offset) {
+        outer:
+        for (String tagKind : kindsToSearch) {
+            List<TagEntry> tags = tagMap.getOrDefault(tagKind, List.of());
+            for (TagEntry tag : tags) {
+                if (!normMod.isEmpty() && !tag.modIdLower().equals(normMod)) {
+                    continue;
+                }
+                if (!normQ.isEmpty() && !tag.idLower().contains(normQ)) {
+                    continue;
+                }
+                if (matched < offset) {
+                    matched++;
+                    continue;
+                }
+                if (results.size() >= limit) {
+                    hasMore = true;
+                    break outer;
+                }
+                JsonObject obj = new JsonObject();
+                obj.addProperty("id", tag.id());
+                obj.addProperty("kind", tag.kind());
+                results.add(obj);
                 matched++;
-                continue;
             }
-            if (results.size() >= limit) {
-                hasMore = true;
-                break;
-            }
-            JsonObject obj = new JsonObject();
-            obj.addProperty("id", tag.id());
-            obj.addProperty("kind", "item_tag");
-            results.add(obj);
-            matched++;
         }
 
         JsonObject out = new JsonObject();
         out.addProperty("ok", true);
-        out.addProperty("kind", "tag");
+        out.addProperty("kind", normKind);
         out.addProperty("returned", results.size());
         out.addProperty("hasMore", hasMore);
         out.add("results", results);
+        return out;
+    }
+
+    public static JsonObject inspectTag(String kind, String tagId, int limit) {
+        String normKind = kind == null ? "item" : kind.trim().toLowerCase(Locale.ROOT);
+        if (normKind.endsWith("_tag")) {
+            normKind = normKind.substring(0, normKind.length() - 4);
+        }
+        String rawTag = tagId == null ? "" : tagId.trim();
+        if (rawTag.startsWith("#")) {
+            rawTag = rawTag.substring(1);
+        }
+        ResourceLocation rl = ResourceLocation.tryParse(rawTag);
+        if (rl == null) {
+            return JsonUtil.errorObject("INVALID_ID", "Invalid tag ResourceLocation: " + tagId);
+        }
+
+        int clampedLimit = Math.max(1, Math.min(limit, 500));
+        return switch (normKind) {
+            case "block" -> buildInspectTagResponse(BuiltInRegistries.BLOCK, "block_tag", rl, clampedLimit);
+            case "fluid" -> buildInspectTagResponse(BuiltInRegistries.FLUID, "fluid_tag", rl, clampedLimit);
+            case "entity" -> buildInspectTagResponse(BuiltInRegistries.ENTITY_TYPE, "entity_tag", rl, clampedLimit);
+            case "item" -> buildInspectTagResponse(BuiltInRegistries.ITEM, "item_tag", rl, clampedLimit);
+            default -> JsonUtil.errorObject("INVALID_KIND", "Unsupported tag kind: " + kind);
+        };
+    }
+
+    private static <T> JsonObject buildInspectTagResponse(
+        Registry<T> registry,
+        String tagKindLabel,
+        ResourceLocation rl,
+        int limit
+    ) {
+        TagKey<T> tagKey = TagKey.create(registry.key(), rl);
+        Optional<HolderSet.Named<T>> opt = registry.getTag(tagKey);
+        if (opt.isEmpty()) {
+            return JsonUtil.errorObject("NOT_FOUND", "Tag not found in " + tagKindLabel + ": #" + rl);
+        }
+        HolderSet.Named<T> named = opt.get();
+        int totalMembers = named.size();
+        JsonArray members = new JsonArray();
+        boolean hasMore = false;
+        for (Holder<T> holder : named) {
+            if (members.size() >= limit) {
+                hasMore = true;
+                break;
+            }
+            ResourceLocation memberId = holder.unwrapKey().map(k -> k.location()).orElse(null);
+            if (memberId == null) {
+                continue;
+            }
+            JsonObject mObj = new JsonObject();
+            mObj.addProperty("id", memberId.toString());
+            mObj.addProperty("modId", memberId.getNamespace());
+            String displayName = resolveDisplayName(holder.value());
+            if (displayName != null) {
+                mObj.addProperty("displayName", displayName);
+            }
+            members.add(mObj);
+        }
+
+        JsonObject out = new JsonObject();
+        out.addProperty("ok", true);
+        out.addProperty("kind", tagKindLabel);
+        out.addProperty("id", "#" + rl);
+        out.addProperty("totalMembers", totalMembers);
+        out.addProperty("returned", members.size());
+        out.addProperty("hasMore", hasMore);
+        out.add("members", members);
         return out;
     }
 

@@ -23,6 +23,79 @@ export interface JarSearchHit {
   kind: 'class' | 'resource';
 }
 
+export interface JarContentHit {
+  jarFile: string;
+  entryName: string;
+  kind: 'resource' | 'class_string';
+  snippet: string;
+}
+
+export interface SearchJarContentsOptions {
+  modIdOrJar?: string;
+  filePattern?: string;
+  includeClassStrings?: boolean;
+  limit?: number;
+}
+
+const TEXT_RESOURCE_EXT_RE = /\.(json|json5|md|txt|snbt|toml|mcmeta|lang|cfg|properties|js|zs)$/i;
+
+export function extractClassUtf8Strings(buf: Buffer): string[] {
+  if (buf.length < 10 || buf.readUInt32BE(0) !== 0xcafebabe) {
+    return [];
+  }
+  const cpCount = buf.readUInt16BE(8);
+  const strings: string[] = [];
+  let offset = 10;
+  for (let i = 1; i < cpCount && offset < buf.length; i++) {
+    const tag = buf[offset++]!;
+    switch (tag) {
+      case 1: {
+        // CONSTANT_Utf8
+        if (offset + 2 > buf.length) return strings;
+        const len = buf.readUInt16BE(offset);
+        offset += 2;
+        if (offset + len > buf.length) return strings;
+        const val = buf.subarray(offset, offset + len).toString('utf8');
+        if (val.length > 0) {
+          strings.push(val);
+        }
+        offset += len;
+        break;
+      }
+      case 3: // CONSTANT_Integer
+      case 4: // CONSTANT_Float
+        offset += 4;
+        break;
+      case 5: // CONSTANT_Long
+      case 6: // CONSTANT_Double
+        offset += 8;
+        i++; // Occupies 2 constant-pool entries (JVMS §4.4.5)
+        break;
+      case 7: // CONSTANT_Class
+      case 8: // CONSTANT_String
+      case 16: // CONSTANT_MethodType
+      case 19: // CONSTANT_Module
+      case 20: // CONSTANT_Package
+        offset += 2;
+        break;
+      case 9: // CONSTANT_Fieldref
+      case 10: // CONSTANT_Methodref
+      case 11: // CONSTANT_InterfaceMethodref
+      case 12: // CONSTANT_NameAndType
+      case 17: // CONSTANT_Dynamic
+      case 18: // CONSTANT_InvokeDynamic
+        offset += 4;
+        break;
+      case 15: // CONSTANT_MethodHandle
+        offset += 3;
+        break;
+      default:
+        return strings;
+    }
+  }
+  return strings;
+}
+
 export interface PackFileHit {
   relativePath: string;
   snippet: string;
@@ -280,6 +353,99 @@ export class JarInspector {
       }
     }
     return hits;
+  }
+
+  async searchJarContents(
+    modsDir: string,
+    query: string,
+    options: SearchJarContentsOptions = {},
+  ): Promise<JarContentHit[]> {
+    const limit = Math.max(1, Math.min(options.limit ?? 50, 200));
+    const normQuery = query.trim().toLowerCase();
+    const includeClassStrings = options.includeClassStrings === true;
+    const normPattern = options.filePattern?.trim().toLowerCase() ?? '';
+    const index = await this.getOrBuildDirIndex(modsDir);
+
+    let targetJars: IndexedJarFile[];
+    if (options.modIdOrJar) {
+      const resolvedPath = await this.resolveJarPath(modsDir, options.modIdOrJar, index);
+      const jar = index.jarsByPath.get(resolvedPath);
+      targetJars = jar ? [jar] : [];
+    } else {
+      targetJars = [];
+      for (const p of index.sortedJarPaths) {
+        const jar = index.jarsByPath.get(p);
+        if (jar) targetJars.push(jar);
+      }
+    }
+
+    const hits: JarContentHit[] = [];
+    const concurrency = 8;
+    let nextIdx = 0;
+
+    const worker = async () => {
+      while (true) {
+        if (hits.length >= limit) break;
+        const idx = nextIdx++;
+        if (idx >= targetJars.length) break;
+        const jar = targetJars[idx]!;
+
+        const candidateEntries = jar.entries.filter((e) => {
+          if (normPattern && !e.nameLower.includes(normPattern) && !e.dotClassLower.includes(normPattern)) {
+            return false;
+          }
+          return includeClassStrings ? e.isClass : (!e.isClass && TEXT_RESOURCE_EXT_RE.test(e.name));
+        });
+        if (candidateEntries.length === 0) continue;
+
+        try {
+          const buf = await fs.readFile(jar.jarPath);
+          const zip = new AdmZip(buf);
+          for (const ce of candidateEntries) {
+            if (hits.length >= limit) break;
+            const entry = zip.getEntry(ce.name);
+            if (!entry) continue;
+            const data = entry.getData();
+            if (includeClassStrings) {
+              const cpStrings = extractClassUtf8Strings(data);
+              const matchedStrings: string[] = [];
+              for (const s of cpStrings) {
+                if (normQuery && s.toLowerCase().includes(normQuery)) {
+                  matchedStrings.push(s.length > 160 ? `${s.slice(0, 160)}...` : s);
+                  if (matchedStrings.length >= 6) break;
+                }
+              }
+              if (matchedStrings.length > 0 && hits.length < limit) {
+                hits.push({
+                  jarFile: jar.fileName,
+                  entryName: ce.name,
+                  kind: 'class_string',
+                  snippet: matchedStrings.join(' | '),
+                });
+              }
+            } else {
+              const text = data.toString('utf-8');
+              const idx = normQuery ? text.toLowerCase().indexOf(normQuery) : 0;
+              if (idx >= 0 && hits.length < limit) {
+                const start = Math.max(0, idx - 90);
+                const end = Math.min(text.length, idx + 190);
+                hits.push({
+                  jarFile: jar.fileName,
+                  entryName: ce.name,
+                  kind: 'resource',
+                  snippet: text.slice(start, end).replace(/\s+/g, ' ').trim(),
+                });
+              }
+            }
+          }
+        } catch {
+          // Ignore unreadable JAR
+        }
+      }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(1, targetJars.length)) }, worker));
+    return hits.slice(0, limit);
   }
 
   async searchPackFiles(gameDir: string, query: string, limit = 40): Promise<PackFileHit[]> {

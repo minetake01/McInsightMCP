@@ -5,12 +5,14 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import dev.mcinsight.McInsightConstants;
 import dev.mcinsight.config.McInsightConfig;
+import dev.mcinsight.introspect.AdvancementCollector;
 import dev.mcinsight.introspect.ClassIntrospector;
 import dev.mcinsight.introspect.PlayerStateCollector;
 import dev.mcinsight.introspect.RecipeCollector;
 import dev.mcinsight.introspect.RegistryCollector;
 import dev.mcinsight.introspect.ResourceGuideCollector;
 import dev.mcinsight.introspect.StatusCollector;
+import dev.mcinsight.introspect.TradeCollector;
 import dev.mcinsight.introspect.WorldTargetCollector;
 import dev.mcinsight.introspect.WorldgenAndLootCollector;
 import java.io.IOException;
@@ -141,6 +143,11 @@ public final class InsightHttpServer {
                     parseInt(query.get("offset"), 0)
                 );
                 case "/api/v1/registry/item" -> RegistryCollector.inspectItem(executor, query.get("id"));
+                case "/api/v1/registry/tag" -> RegistryCollector.inspectTag(
+                    query.get("kind"),
+                    query.get("id"),
+                    parseInt(query.get("limit"), 200)
+                );
                 case "/api/v1/recipes/types" -> RecipeCollector.listTypes(executor);
                 case "/api/v1/recipes/query" -> RecipeCollector.queryRecipes(
                     executor,
@@ -170,13 +177,38 @@ public final class InsightHttpServer {
                     query.get("kind"),
                     query.get("q"),
                     query.get("mod"),
+                    "true".equalsIgnoreCase(query.get("searchContent")),
                     parseInt(query.get("limit"), 30)
                 );
                 case "/api/v1/loot/query" -> WorldgenAndLootCollector.queryLoot(
                     executor,
                     query.get("q"),
+                    query.get("item"),
+                    query.get("mod"),
+                    !"false".equalsIgnoreCase(query.get("includeModifiers")),
+                    parseInt(query.get("limit"), 30)
+                );
+                case "/api/v1/datamaps/query" -> WorldgenAndLootCollector.queryDataMaps(
+                    executor,
+                    query.get("q"),
+                    query.get("registry"),
                     query.get("mod"),
                     parseInt(query.get("limit"), 30)
+                );
+                case "/api/v1/trades/query" -> TradeCollector.queryTrades(
+                    executor,
+                    query.get("item"),
+                    query.get("profession"),
+                    query.get("mod"),
+                    parseInt(query.get("limit"), 40)
+                );
+                case "/api/v1/advancements/query" -> AdvancementCollector.queryAdvancements(
+                    executor,
+                    query.get("q"),
+                    query.get("mod"),
+                    query.get("status"),
+                    "true".equalsIgnoreCase(query.get("includeRecipes")),
+                    parseInt(query.get("limit"), 40)
                 );
                 case "/api/v1/introspect/class" -> ClassIntrospector.inspect(query.get("name"));
                 default -> null;

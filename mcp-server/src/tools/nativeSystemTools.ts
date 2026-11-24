@@ -7,6 +7,7 @@ import {
   parseWithBuiltinModParser,
 } from '../parsers/modParsers/index.js';
 import {
+  parseNativeLootModifier,
   parseNativeLootTable,
   parseNativeRecipe,
   parseNativeWorldgen,
@@ -44,18 +45,58 @@ const QUERY_RECIPES_SCHEMA = z.object({
 
 const QUERY_WORLDGEN_SCHEMA = z.object({
   kind: z
-    .enum(['summary', 'placed_feature', 'configured_feature', 'biome', 'structure', 'dimension_type'])
+    .enum([
+      'summary',
+      'placed_feature',
+      'configured_feature',
+      'biome',
+      'structure',
+      'dimension_type',
+      'biome_modifier',
+    ])
     .optional()
     .default('placed_feature'),
-  query: z.string().optional().describe('Substring filter on feature/biome/structure ID'),
+  query: z.string().optional().describe('Substring filter on feature/biome/structure ID (or content when searchContent=true)'),
   modId: z.string().optional().describe('Filter by mod namespace'),
+  searchContent: z.boolean().optional().default(false).describe('Also search inside worldgen JSON definitions'),
   limit: z.number().int().min(1).max(100).optional().default(25),
 });
 
 const QUERY_LOOT_SCHEMA = z.object({
   query: z.string().optional().describe('Substring filter on loot table ID, e.g. iron_ore or chests/'),
+  item: z
+    .string()
+    .optional()
+    .describe('Reverse lookup by dropped item ID or display name across loot tables and NeoForge Global Loot Modifiers'),
   modId: z.string().optional().describe('Filter by mod namespace'),
+  includeModifiers: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe('Include matching NeoForge/Forge Global Loot Modifiers'),
   limit: z.number().int().min(1).max(100).optional().default(25),
+});
+
+const QUERY_DATAMAPS_SCHEMA = z.object({
+  query: z.string().optional().describe('Filter by data map ID or key/item name inside values'),
+  registry: z.string().optional().describe('Target registry filter, e.g. item, block, fluid, entity_type'),
+  modId: z.string().optional().describe('Filter by mod namespace'),
+  limit: z.number().int().min(1).max(100).optional().default(30),
+});
+
+const QUERY_TRADES_SCHEMA = z.object({
+  item: z.string().optional().describe('Filter by traded item ID or display name (cost or result)'),
+  profession: z.string().optional().describe('Filter by villager profession ID or minecraft:wandering_trader'),
+  modId: z.string().optional().describe('Filter by mod namespace'),
+  limit: z.number().int().min(1).max(200).optional().default(40),
+});
+
+const QUERY_ADVANCEMENTS_SCHEMA = z.object({
+  query: z.string().optional().describe('Filter by advancement ID, title, description, icon, or criteria'),
+  modId: z.string().optional().describe('Filter by mod namespace'),
+  status: z.enum(['all', 'completed', 'incomplete']).optional().default('all'),
+  includeRecipes: z.boolean().optional().default(false).describe('Include recipe-unlock advancements under recipes/'),
+  limit: z.number().int().min(1).max(200).optional().default(40),
 });
 
 export function registerNativeSystemTools(
@@ -206,13 +247,13 @@ export function registerNativeSystemTools(
   server.registerTool(
     'mc_query_worldgen',
     {
-      title: 'Query Native Worldgen (Ores, Placements, Biomes, Structures)',
+      title: 'Query Native Worldgen & Biome Modifiers',
       description:
-        'Query Minecraft dynamic worldgen registries (or resource pack fallback) with mechanical parsing for native ore targets, vein size, height ranges, counts, and raw JSON.',
+        'Query Minecraft dynamic worldgen registries (ores, placements, biomes, structures) and NeoForge/Forge biome modifiers (mob spawns, feature injections), with mechanical parsing and optional content search.',
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: QUERY_WORLDGEN_SCHEMA,
     },
-    async ({ kind, query, modId, limit }) => {
+    async ({ kind, query, modId, searchContent, limit }) => {
       if (kind === 'summary') {
         return jsonText(await mcClient.get('/api/v1/worldgen/summary'));
       }
@@ -223,7 +264,7 @@ export function registerNativeSystemTools(
         returned: number;
         hasMore: boolean;
         entries: Array<{ id: string; modId: string; kind: string; rawJson?: unknown }>;
-      }>('/api/v1/worldgen/query', { kind, q: query, mod: modId, limit });
+      }>('/api/v1/worldgen/query', { kind, q: query, mod: modId, searchContent, limit });
 
       const enriched = raw.entries.map((entry) => ({
         id: entry.id,
@@ -246,26 +287,41 @@ export function registerNativeSystemTools(
   server.registerTool(
     'mc_query_loot',
     {
-      title: 'Query Native Loot Tables',
+      title: 'Query Loot Tables & Global Loot Modifiers',
       description:
-        'Query Minecraft loot tables (blocks, chests, entities) with mechanical parsing of pools, rolls, entries, conditions (e.g. silk touch), and functions, plus raw JSON.',
+        'Query Minecraft loot tables (blocks, chests, entities, archaeology, fishing) and NeoForge Global Loot Modifiers. Supports reverse lookup by dropped item ID/name (including transitive table injections).',
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: QUERY_LOOT_SCHEMA,
     },
-    async ({ query, modId, limit }) => {
+    async ({ query, item, modId, includeModifiers, limit }) => {
       const raw = await mcClient.get<{
         ok: boolean;
         source: string;
         returned: number;
         hasMore: boolean;
-        entries: Array<{ id: string; modId: string; rawJson?: unknown }>;
-      }>('/api/v1/loot/query', { q: query, mod: modId, limit });
+        entries: Array<{ id: string; modId: string; source?: string; rawJson?: unknown }>;
+        lootModifiers?: Array<{
+          id: string;
+          modId: string;
+          type?: string;
+          injectedTable?: string;
+          targetTables?: string[];
+          rawJson?: unknown;
+        }>;
+      }>('/api/v1/loot/query', { q: query, item, mod: modId, includeModifiers, limit });
 
       const enriched = raw.entries.map((entry) => ({
         id: entry.id,
         modId: entry.modId,
+        source: entry.source,
         nativeParsed: parseNativeLootTable(entry.id, entry.rawJson) ?? undefined,
         rawJson: entry.rawJson,
+      }));
+      const enrichedModifiers = raw.lootModifiers?.map((m) => ({
+        id: m.id,
+        modId: m.modId,
+        parsed: parseNativeLootModifier(m.id, m.rawJson) ?? undefined,
+        rawJson: m.rawJson,
       }));
       return jsonText({
         ok: true,
@@ -273,7 +329,72 @@ export function registerNativeSystemTools(
         returned: enriched.length,
         hasMore: raw.hasMore,
         entries: enriched,
+        lootModifiers: enrichedModifiers,
       });
+    },
+  );
+
+  server.registerTool(
+    'mc_query_datamaps',
+    {
+      title: 'Query NeoForge Data Maps',
+      description:
+        'Query NeoForge data_maps JSON definitions (furnace fuels, compostables, oxidizables, waxables, and custom mod data tables).',
+      annotations: { readOnlyHint: true, idempotentHint: true },
+      inputSchema: QUERY_DATAMAPS_SCHEMA,
+    },
+    async ({ query, registry, modId, limit }) => {
+      return jsonText(
+        await mcClient.get('/api/v1/datamaps/query', {
+          q: query,
+          registry,
+          mod: modId,
+          limit,
+        }),
+      );
+    },
+  );
+
+  server.registerTool(
+    'mc_query_trades',
+    {
+      title: 'Query Villager & Wandering Trader Trades',
+      description:
+        'Query registered VillagerTrades and Wandering Trader offers across vanilla and modded professions.',
+      annotations: { readOnlyHint: true, idempotentHint: true },
+      inputSchema: QUERY_TRADES_SCHEMA,
+    },
+    async ({ item, profession, modId, limit }) => {
+      return jsonText(
+        await mcClient.get('/api/v1/trades/query', {
+          item,
+          profession,
+          mod: modId,
+          limit,
+        }),
+      );
+    },
+  );
+
+  server.registerTool(
+    'mc_query_advancements',
+    {
+      title: 'Query Advancements & Player Progress',
+      description:
+        'Query advancement definitions, display titles/descriptions, rewards, and live player completion progress when available.',
+      annotations: { readOnlyHint: true, idempotentHint: true },
+      inputSchema: QUERY_ADVANCEMENTS_SCHEMA,
+    },
+    async ({ query, modId, status, includeRecipes, limit }) => {
+      return jsonText(
+        await mcClient.get('/api/v1/advancements/query', {
+          q: query,
+          mod: modId,
+          status,
+          includeRecipes,
+          limit,
+        }),
+      );
     },
   );
 }

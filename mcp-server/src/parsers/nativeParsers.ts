@@ -26,6 +26,26 @@ export interface NativeWorldgenSummary {
   configuredFeatureRef?: string;
   biomes?: unknown;
   spawners?: Record<string, unknown>;
+  features?: unknown;
+  step?: string;
+}
+
+export interface NativeBiomeModifierSummary {
+  id: string;
+  modifierType?: string;
+  biomes?: unknown;
+  spawners?: unknown;
+  features?: unknown;
+  step?: string;
+}
+
+export interface NativeLootModifierSummary {
+  id: string;
+  type?: string;
+  targetLootTables?: string[];
+  injectedTable?: string;
+  items?: string[];
+  conditions?: string[];
 }
 
 export interface NativeLootSummary {
@@ -219,7 +239,37 @@ export function parseNativeWorldgen(kind: string, id: string, rawJson: unknown):
     };
   }
 
+  if (kind === 'biome_modifier') {
+    const parsed = parseNativeBiomeModifier(id, rawJson);
+    if (!parsed) return null;
+    return {
+      kind,
+      id,
+      featureType: parsed.modifierType,
+      biomes: parsed.biomes,
+      spawners: isRecord(parsed.spawners)
+        ? parsed.spawners
+        : parsed.spawners !== undefined
+          ? { entries: parsed.spawners }
+          : undefined,
+      features: parsed.features,
+      step: parsed.step,
+    };
+  }
+
   return null;
+}
+
+export function parseNativeBiomeModifier(id: string, rawJson: unknown): NativeBiomeModifierSummary | null {
+  if (!isRecord(rawJson)) return null;
+  return {
+    id,
+    modifierType: typeof rawJson.type === 'string' ? rawJson.type : undefined,
+    biomes: rawJson.biomes,
+    spawners: rawJson.spawners,
+    features: rawJson.features,
+    step: typeof rawJson.step === 'string' ? rawJson.step : undefined,
+  };
 }
 
 function summarizeConditions(raw: unknown): string[] | undefined {
@@ -272,5 +322,60 @@ export function parseNativeLootTable(id: string, rawJson: unknown): NativeLootSu
       entries: flattenEntries(pool.entries),
       conditions: summarizeConditions(pool.conditions),
     })),
+  };
+}
+
+function collectLootModifierTargets(raw: unknown, out: string[]): void {
+  if (!Array.isArray(raw)) return;
+  for (const c of raw) {
+    if (!isRecord(c)) continue;
+    if (typeof c.loot_table_id === 'string') {
+      out.push(c.loot_table_id);
+    }
+    if (isRecord(c.term)) {
+      collectLootModifierTargets([c.term], out);
+    }
+    if (Array.isArray(c.terms)) {
+      collectLootModifierTargets(c.terms, out);
+    }
+  }
+}
+
+function collectNamespacedStrings(val: unknown, out: Set<string>): void {
+  if (typeof val === 'string') {
+    if (val.includes(':')) out.add(val);
+    return;
+  }
+  if (Array.isArray(val)) {
+    for (const item of val) collectNamespacedStrings(item, out);
+    return;
+  }
+  if (isRecord(val)) {
+    for (const v of Object.values(val)) collectNamespacedStrings(v, out);
+  }
+}
+
+export function parseNativeLootModifier(id: string, rawJson: unknown): NativeLootModifierSummary | null {
+  if (!isRecord(rawJson)) return null;
+  const targetLootTables: string[] = [];
+  collectLootModifierTargets(rawJson.conditions, targetLootTables);
+  const injectedTable =
+    typeof rawJson.table === 'string'
+      ? rawJson.table
+      : typeof rawJson.loot_table === 'string'
+        ? rawJson.loot_table
+        : undefined;
+  const itemSet = new Set<string>();
+  for (const [k, v] of Object.entries(rawJson)) {
+    if (k === 'type' || k === 'conditions' || k === 'table' || k === 'loot_table') continue;
+    collectNamespacedStrings(v, itemSet);
+  }
+  return {
+    id,
+    type: typeof rawJson.type === 'string' ? rawJson.type : undefined,
+    targetLootTables: targetLootTables.length > 0 ? targetLootTables : undefined,
+    injectedTable,
+    items: itemSet.size > 0 ? Array.from(itemSet) : undefined,
+    conditions: summarizeConditions(rawJson.conditions),
   };
 }

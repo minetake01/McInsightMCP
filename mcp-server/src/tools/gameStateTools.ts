@@ -26,11 +26,20 @@ const SCAN_AREA_SCHEMA = z.object({
 });
 
 const SEARCH_REGISTRY_SCHEMA = z.object({
-  kind: z.enum(['item', 'block', 'fluid', 'entity', 'tag']).optional().default('item'),
+  kind: z
+    .enum(['item', 'block', 'fluid', 'entity', 'tag', 'item_tag', 'block_tag', 'fluid_tag', 'entity_tag'])
+    .optional()
+    .default('item'),
   query: z.string().optional().describe('Substring match on ID or display name'),
   modId: z.string().optional().describe('Filter by mod namespace'),
   limit: z.number().int().min(1).max(200).optional().default(50),
   offset: z.number().int().min(0).optional().default(0),
+});
+
+const INSPECT_TAG_SCHEMA = z.object({
+  kind: z.enum(['item', 'block', 'fluid', 'entity']).optional().default('item'),
+  tagId: z.string().min(1).describe('Namespaced tag ID (with or without #), e.g. #minecraft:planks or #ars_nouveau:whirlisprig/greatly_likes'),
+  limit: z.number().int().min(1).max(500).optional().default(200),
 });
 
 const INSPECT_ITEM_SCHEMA = z.object({
@@ -138,6 +147,25 @@ export function registerGameStateTools(
         offset,
       });
       return jsonText(data);
+    },
+  );
+
+  server.registerTool(
+    'mc_inspect_tag',
+    {
+      title: 'Inspect Tag Members',
+      description: 'List all registered items, blocks, fluids, or entities belonging to a specific tag ID.',
+      annotations: { readOnlyHint: true, idempotentHint: true },
+      inputSchema: INSPECT_TAG_SCHEMA,
+    },
+    async ({ kind, tagId, limit }) => {
+      return jsonText(
+        await mcClient.get('/api/v1/registry/tag', {
+          kind,
+          id: tagId,
+          limit,
+        }),
+      );
     },
   );
 

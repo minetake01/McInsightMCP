@@ -18,6 +18,12 @@ const INSPECT_CLASS_SCHEMA = z.object({
 const SEARCH_JARS_SCHEMA = z.object({
   query: z.string().min(1).describe('Case-insensitive substring to search for'),
   scope: z.enum(['jars', 'pack_scripts', 'both']).optional().default('jars'),
+  mode: z
+    .enum(['paths', 'content', 'class_strings'])
+    .optional()
+    .default('paths')
+    .describe('paths: entry/class names; content: grep inside JSON/lang/markdown/script JAR entries; class_strings: grep JVM constant-pool UTF-8 strings in .class files'),
+  filePattern: z.string().optional().describe('Optional path/class substring filter when mode is content or class_strings'),
   modIdOrJar: z.string().optional().describe('Limit JAR search to a specific mod ID or JAR filename'),
   limit: z.number().int().min(1).max(200).optional().default(50),
   modsDir: z.string().optional(),
@@ -72,21 +78,30 @@ export function registerIntrospectTools(server: McpServer, deps: IntrospectDeps)
   server.registerTool(
     'mc_search_jars',
     {
-      title: 'Search Classes & Resources Across Mod JARs / Pack Scripts',
+      title: 'Search Classes, Resources & Contents Across Mod JARs / Pack Scripts',
       description:
-        'Search .class names, data/assets entries inside mods/*.jar, or search KubeJS/globalpacks/FTB Quests files in the game directory.',
+        'Search .class/resource names, grep inside text resources or .class constant-pool strings inside mods/*.jar, or search KubeJS/globalpacks/FTB Quests files in the game directory.',
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: SEARCH_JARS_SCHEMA,
     },
-    async ({ query, scope, modIdOrJar, limit, modsDir, gameDir }) => {
-      const out: Record<string, unknown> = { ok: true, query };
+    async ({ query, scope, mode, filePattern, modIdOrJar, limit, modsDir, gameDir }) => {
+      const out: Record<string, unknown> = { ok: true, query, mode };
       const tasks: Array<Promise<void>> = [];
       if (scope === 'jars' || scope === 'both') {
         tasks.push(
           (async () => {
             const resolvedMods = await resolveModsDir(deps, modsDir);
             out.modsDir = resolvedMods;
-            out.jarHits = await deps.jarInspector.searchJarEntries(resolvedMods, query, modIdOrJar, limit);
+            if (mode === 'paths') {
+              out.jarHits = await deps.jarInspector.searchJarEntries(resolvedMods, query, modIdOrJar, limit);
+            } else {
+              out.jarContentHits = await deps.jarInspector.searchJarContents(resolvedMods, query, {
+                modIdOrJar,
+                filePattern,
+                includeClassStrings: mode === 'class_strings',
+                limit,
+              });
+            }
           })(),
         );
       }

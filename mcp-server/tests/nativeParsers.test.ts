@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  parseNativeBiomeModifier,
+  parseNativeLootModifier,
   parseNativeLootTable,
   parseNativeRecipe,
   parseNativeWorldgen,
@@ -117,5 +119,37 @@ describe('nativeParsers', () => {
       'minecraft:iron_ore',
       'minecraft:raw_iron',
     ]);
+  });
+
+  it('parses NeoForge global loot modifiers and biome modifiers', () => {
+    const lm = parseNativeLootModifier('tofucraft:tofustick_ship', {
+      type: 'neoforge:add_table',
+      conditions: [{ condition: 'neoforge:loot_table_id', loot_table_id: 'minecraft:chests/shipwreck_treasure' }],
+      table: 'tofucraft:injections/tofustick',
+    });
+    expect(lm).toEqual({
+      id: 'tofucraft:tofustick_ship',
+      type: 'neoforge:add_table',
+      targetLootTables: ['minecraft:chests/shipwreck_treasure'],
+      injectedTable: 'tofucraft:injections/tofustick',
+      items: undefined,
+      conditions: ['neoforge:loot_table_id'],
+    });
+
+    const bm = parseNativeBiomeModifier('ars_nouveau:whirlisprig_spawn', {
+      type: 'neoforge:add_spawns',
+      biomes: '#minecraft:is_forest',
+      spawners: { type: 'ars_nouveau:whirlisprig', weight: 15, minCount: 1, maxCount: 2 },
+    });
+    expect(bm?.modifierType).toBe('neoforge:add_spawns');
+    expect(bm?.biomes).toBe('#minecraft:is_forest');
+
+    const wgBm = parseNativeWorldgen('biome_modifier', 'ars_nouveau:whirlisprig_spawn', {
+      type: 'neoforge:add_spawns',
+      biomes: '#minecraft:is_forest',
+      spawners: { type: 'ars_nouveau:whirlisprig', weight: 15 },
+    });
+    expect(wgBm?.featureType).toBe('neoforge:add_spawns');
+    expect(wgBm?.spawners).toMatchObject({ type: 'ars_nouveau:whirlisprig' });
   });
 });

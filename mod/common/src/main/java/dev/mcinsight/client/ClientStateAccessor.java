@@ -5,9 +5,12 @@ import com.google.gson.JsonObject;
 import dev.mcinsight.server.JsonUtil;
 import java.util.ArrayList;
 import java.util.List;
+import net.minecraft.advancements.AdvancementHolder;
+import net.minecraft.advancements.AdvancementNode;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.world.entity.player.Player;
@@ -55,6 +58,19 @@ public final class ClientStateAccessor {
 
     public static boolean isLocalServerRunning() {
         return Minecraft.getInstance().getSingleplayerServer() != null;
+    }
+
+    public static List<AdvancementHolder> captureClientAdvancements() {
+        Minecraft mc = Minecraft.getInstance();
+        ClientPacketListener connection = mc.getConnection();
+        if (connection == null) {
+            return List.of();
+        }
+        List<AdvancementHolder> list = new ArrayList<>();
+        for (AdvancementNode node : connection.getAdvancements().getTree().nodes()) {
+            list.add(node.holder());
+        }
+        return list;
     }
 
     public record ScreenSlotSample(int slotIndex, String containerClass, ItemStack stack) {}

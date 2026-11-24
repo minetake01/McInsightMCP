@@ -26,6 +26,9 @@ public final class InsightCacheManager {
         DATA_GENERATION.incrementAndGet();
         RecipeCollector.invalidateCache();
         WorldgenAndLootCollector.invalidateCache();
+        TradeCollector.invalidateCache();
+        RegistryCollector.invalidateTagCache();
+        ResourceGuideCollector.invalidateCache();
         JsonUtil.invalidateTagCache();
     }
 

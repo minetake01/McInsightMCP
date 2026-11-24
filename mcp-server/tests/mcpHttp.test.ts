@@ -138,6 +138,107 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP', () => {
         return;
       }
 
+      if (url.pathname === '/api/v1/loot/query') {
+        res.end(JSON.stringify({
+          ok: true,
+          source: 'server_registry',
+          returned: 1,
+          hasMore: false,
+          entries: [
+            {
+              id: 'tofucraft:injections/tofustick',
+              modId: 'tofucraft',
+              source: 'server_registry',
+              rawJson: {
+                pools: [{ rolls: 1, entries: [{ type: 'minecraft:item', name: 'tofucraft:tofustick', weight: 1 }] }],
+              },
+            },
+          ],
+          lootModifiers: [
+            {
+              id: 'tofucraft:tofustick_ship',
+              modId: 'tofucraft',
+              type: 'neoforge:add_table',
+              injectedTable: 'tofucraft:injections/tofustick',
+              targetTables: ['minecraft:chests/shipwreck_treasure'],
+              rawJson: {
+                type: 'neoforge:add_table',
+                conditions: [{ condition: 'neoforge:loot_table_id', loot_table_id: 'minecraft:chests/shipwreck_treasure' }],
+                table: 'tofucraft:injections/tofustick',
+              },
+            },
+          ],
+        }));
+        return;
+      }
+
+      if (url.pathname === '/api/v1/worldgen/query') {
+        res.end(JSON.stringify({
+          ok: true,
+          kind: url.searchParams.get('kind') ?? 'placed_feature',
+          source: 'resource_manager',
+          returned: 1,
+          hasMore: false,
+          entries: [
+            {
+              id: 'ars_nouveau:whirlisprig_spawn',
+              modId: 'ars_nouveau',
+              kind: 'biome_modifier',
+              rawJson: {
+                type: 'neoforge:add_spawns',
+                biomes: '#minecraft:is_forest',
+                spawners: { type: 'ars_nouveau:whirlisprig', weight: 15 },
+              },
+            },
+          ],
+        }));
+        return;
+      }
+
+      if (url.pathname === '/api/v1/datamaps/query') {
+        res.end(JSON.stringify({
+          ok: true,
+          returned: 1,
+          hasMore: false,
+          entries: [{ id: 'neoforge:item/furnace_fuels', modId: 'neoforge', registry: 'item', totalValueCount: 10 }],
+        }));
+        return;
+      }
+
+      if (url.pathname === '/api/v1/trades/query') {
+        res.end(JSON.stringify({
+          ok: true,
+          returned: 1,
+          hasMore: false,
+          trades: [{ profession: 'tofucraft:tofu_craftsman', level: 1 }],
+        }));
+        return;
+      }
+
+      if (url.pathname === '/api/v1/advancements/query') {
+        res.end(JSON.stringify({
+          ok: true,
+          hasPlayerProgress: true,
+          returned: 1,
+          hasMore: false,
+          advancements: [{ id: 'tofucraft:tofustick', modId: 'tofucraft', progress: { done: false, percent: 0 } }],
+        }));
+        return;
+      }
+
+      if (url.pathname === '/api/v1/registry/tag') {
+        res.end(JSON.stringify({
+          ok: true,
+          kind: 'block_tag',
+          id: '#ars_nouveau:whirlisprig/greatly_likes',
+          totalMembers: 1,
+          returned: 1,
+          hasMore: false,
+          members: [{ id: 'minecraft:oak_log', modId: 'minecraft', displayName: 'Oak Log' }],
+        }));
+        return;
+      }
+
       res.end(JSON.stringify({ ok: true }));
     });
 
@@ -196,6 +297,11 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP', () => {
     const toolNames = listJson.result.tools.map((t) => t.name);
     expect(toolNames).toContain('mc_query_recipes');
     expect(toolNames).toContain('mc_query_worldgen');
+    expect(toolNames).toContain('mc_query_loot');
+    expect(toolNames).toContain('mc_query_datamaps');
+    expect(toolNames).toContain('mc_query_trades');
+    expect(toolNames).toContain('mc_query_advancements');
+    expect(toolNames).toContain('mc_inspect_tag');
     expect(toolNames).toContain('mc_decompile_class');
     expect(toolNames).toContain('mc_save_knowledge_note');
 
@@ -258,5 +364,47 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP', () => {
     expect(customFusion?.nativeParsed).toBeUndefined();
     expect(customFusion?.modParsed).toBeUndefined();
     expect(customFusion?.rawJson).toBeDefined();
+
+    // 6. Verify new/upgraded tools over HTTP
+    const lootRes = await rpcCall(handle.url, {
+      jsonrpc: '2.0',
+      id: 4,
+      method: 'tools/call',
+      params: { name: 'mc_query_loot', arguments: { item: 'tofucraft:tofustick' } },
+    });
+    const lootJson = JSON.parse(
+      (JSON.parse(lootRes.body) as { result: { content: Array<{ text: string }> } }).result.content[0]!.text,
+    ) as { lootModifiers?: Array<{ parsed?: { targetLootTables?: string[]; injectedTable?: string } }> };
+    expect(lootJson.lootModifiers?.[0]?.parsed?.targetLootTables).toContain('minecraft:chests/shipwreck_treasure');
+
+    const bmRes = await rpcCall(handle.url, {
+      jsonrpc: '2.0',
+      id: 5,
+      method: 'tools/call',
+      params: { name: 'mc_query_worldgen', arguments: { kind: 'biome_modifier', query: 'whirlisprig' } },
+    });
+    const bmJson = JSON.parse(
+      (JSON.parse(bmRes.body) as { result: { content: Array<{ text: string }> } }).result.content[0]!.text,
+    ) as { entries: Array<{ nativeParsed?: { featureType?: string } }> };
+    expect(bmJson.entries[0]?.nativeParsed?.featureType).toBe('neoforge:add_spawns');
+
+    for (const [id, name, args] of [
+      [6, 'mc_query_datamaps', { query: 'fuel' }],
+      [7, 'mc_query_trades', { modId: 'tofucraft' }],
+      [8, 'mc_query_advancements', { query: 'tofustick' }],
+      [9, 'mc_inspect_tag', { kind: 'block', tagId: '#ars_nouveau:whirlisprig/greatly_likes' }],
+    ] as const) {
+      const r = await rpcCall(handle.url, {
+        jsonrpc: '2.0',
+        id,
+        method: 'tools/call',
+        params: { name, arguments: args },
+      });
+      expect(r.status).toBe(200);
+      const parsed = JSON.parse(
+        (JSON.parse(r.body) as { result: { content: Array<{ text: string }> } }).result.content[0]!.text,
+      ) as { ok: boolean };
+      expect(parsed.ok).toBe(true);
+    }
   });
 });

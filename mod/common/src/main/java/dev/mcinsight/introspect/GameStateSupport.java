@@ -75,10 +75,14 @@ public final class GameStateSupport {
         return level != null ? level.registryAccess() : null;
     }
 
-    public static ResourceManager getResourceManager(MainThreadExecutor executor) {
+    public static ResourceManager getAssetResourceManager(MainThreadExecutor executor) {
         if (Services.PLATFORM.isClientSide()) {
             return ClientStateAccessor.getResourceManager();
         }
+        return null;
+    }
+
+    public static ResourceManager getDataResourceManager(MainThreadExecutor executor) {
         MinecraftServer server = executor.getActiveServer();
         return server != null ? server.getResourceManager() : null;
     }

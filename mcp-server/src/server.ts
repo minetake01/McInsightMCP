@@ -102,9 +102,10 @@ export function createMcInsightServer(deps: ServerDeps): McpServer {
             text: [
               `Investigate the Minecraft mod system or item "${target}":`,
               '1. Check mc_search_knowledge first to see if notes already exist.',
-              '2. Call mc_query_recipes / mc_inspect_item / mc_search_guides for primary runtime evidence (rawJson, JEI ingredients, guides/quests).',
-              '3. If the mechanic involves undocumented behavior (e.g. multiblocks, in-world ticks, custom machine rules), use mc_search_jars and mc_decompile_class (Vineflower) to read the exact Java implementation.',
-              '4. Persist a concise, accurate Markdown summary via mc_save_knowledge_note (and optionally mc_register_extractor if repetitive rawJson extraction helps) so future queries get the answer immediately.',
+              '2. Call mc_query_recipes / mc_inspect_item / mc_inspect_tag / mc_search_guides for primary runtime evidence (rawJson, JEI ingredients, guides/quests).',
+              '3. Check acquisition and world rules with mc_query_loot(item=...) (includes Global Loot Modifiers), mc_query_trades, mc_query_advancements, mc_query_worldgen(kind="biome_modifier"), and mc_query_datamaps.',
+              '4. If the mechanic involves undocumented behavior (e.g. multiblocks, in-world ticks, custom machine rules), use mc_search_jars(mode="content"|"class_strings") and mc_decompile_class (Vineflower) to read the exact Java implementation.',
+              '5. Persist a concise, accurate Markdown summary via mc_save_knowledge_note (and optionally mc_register_extractor if repetitive rawJson extraction helps) so future queries get the answer immediately.',
             ].join('\n'),
           },
         },

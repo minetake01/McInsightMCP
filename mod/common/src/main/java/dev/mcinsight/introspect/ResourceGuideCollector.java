@@ -20,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
@@ -31,6 +32,17 @@ public final class ResourceGuideCollector {
 
     private static final int MAX_PAGE_BYTES = 131072;
     private static final int MAX_CACHED_PAGES = 256;
+    private static final String[] GUIDE_LANG_KEY_MARKERS = {
+        ".ponder.", "tooltip", "guide", "jei.", "jei_", "book", "desc", "page",
+        "lore", ".info", ".entry", ".manual", ".ritual", ".glyph", ".familiar",
+        ".perk", "advancement", ".text", ".tip", ".help", ".hint"
+    };
+    private static final String[] UI_NOISE_PREFIXES = {
+        "key.", "options.", "chat.", "commands.", "disconnect.", "gui.narrate",
+        "menu.", "subtitles.", "death.attack.", "stat.", "sound.", "config.",
+        "telemetry.", "multiplayer.", "selectworld.", "createworld.", "addserver.",
+        "lanserver.", "realms.", "mco."
+    };
 
     private static final AtomicReference<GuideIndex> INDEX_REF = new AtomicReference<>();
     private static final Object INDEX_BUILD_LOCK = new Object();
@@ -41,6 +53,12 @@ public final class ResourceGuideCollector {
         INDEX_REF.set(null);
     }
 
+    private enum ManagerKind {
+        ASSET,
+        DATA,
+        FILE
+    }
+
     private record GuideEntry(
         String id,
         String idLower,
@@ -48,6 +66,7 @@ public final class ResourceGuideCollector {
         String modId,
         String modIdLower,
         String displayPath,
+        ManagerKind managerKind,
         ResourceLocation rl,
         Path fsPath,
         String langCodeLower
@@ -56,17 +75,27 @@ public final class ResourceGuideCollector {
     private record LangEntry(String key, String keyLower, String value, String valueLower) {}
 
     private static final class GuideIndex {
-        final long generation;
-        final ResourceManager resourceManager;
+        final long resourceGeneration;
+        final long dataGeneration;
+        final ResourceManager assetRm;
+        final ResourceManager dataRm;
         final List<GuideEntry> entries;
         final Map<String, GuideEntry> byId;
         final ConcurrentHashMap<String, String> contentCache = new ConcurrentHashMap<>();
         final ConcurrentHashMap<String, String> contentLowerCache = new ConcurrentHashMap<>();
         final ConcurrentHashMap<String, List<LangEntry>> langCache = new ConcurrentHashMap<>();
 
-        GuideIndex(long generation, ResourceManager resourceManager, List<GuideEntry> entries) {
-            this.generation = generation;
-            this.resourceManager = resourceManager;
+        GuideIndex(
+            long resourceGeneration,
+            long dataGeneration,
+            ResourceManager assetRm,
+            ResourceManager dataRm,
+            List<GuideEntry> entries
+        ) {
+            this.resourceGeneration = resourceGeneration;
+            this.dataGeneration = dataGeneration;
+            this.assetRm = assetRm;
+            this.dataRm = dataRm;
             this.entries = entries;
             Map<String, GuideEntry> map = new HashMap<>(entries.size() * 2);
             for (GuideEntry ge : entries) {
@@ -80,7 +109,7 @@ public final class ResourceGuideCollector {
             if (cached != null) {
                 return cached;
             }
-            String loaded = readEntryContent(resourceManager, entry);
+            String loaded = readEntryContent(assetRm, dataRm, entry);
             if (loaded != null && contentCache.size() < MAX_CACHED_PAGES) {
                 contentCache.putIfAbsent(entry.id(), loaded);
             }
@@ -114,34 +143,41 @@ public final class ResourceGuideCollector {
         }
     }
 
+    private record ManagerPair(ResourceManager assetRm, ResourceManager dataRm) {}
+
     private static GuideIndex getOrBuildIndex(MainThreadExecutor executor) throws Exception {
-        long gen = InsightCacheManager.getResourceGeneration();
+        long resGen = InsightCacheManager.getResourceGeneration();
+        long dataGen = InsightCacheManager.getDataGeneration();
         GuideIndex existing = INDEX_REF.get();
-        if (existing != null && existing.generation == gen) {
+        if (existing != null && existing.resourceGeneration == resGen && existing.dataGeneration == dataGen) {
             PerfMetrics.markCacheHit();
             return existing;
         }
 
         synchronized (INDEX_BUILD_LOCK) {
-            gen = InsightCacheManager.getResourceGeneration();
+            resGen = InsightCacheManager.getResourceGeneration();
+            dataGen = InsightCacheManager.getDataGeneration();
             existing = INDEX_REF.get();
-            if (existing != null && existing.generation == gen) {
+            if (existing != null && existing.resourceGeneration == resGen && existing.dataGeneration == dataGen) {
                 PerfMetrics.markCacheHit();
                 return existing;
             }
 
-            // Step 1: Tiny main-thread hop only to grab ResourceManager reference
-            ResourceManager rm = executor.supplyOnGameThread(
-                () -> GameStateSupport.getResourceManager(executor),
+            // Step 1: Tiny main-thread hop only to grab ResourceManager references
+            ManagerPair rms = executor.supplyOnGameThread(
+                () -> new ManagerPair(
+                    GameStateSupport.getAssetResourceManager(executor),
+                    GameStateSupport.getDataResourceManager(executor)
+                ),
                 10000
             );
-            if (rm == null) {
+            if (rms == null || (rms.assetRm() == null && rms.dataRm() == null)) {
                 return null;
             }
 
             // Step 2: Off-thread resource & FTB Quests directory indexing
-            List<GuideEntry> entries = collectGuideEntries(rm);
-            GuideIndex built = new GuideIndex(gen, rm, entries);
+            List<GuideEntry> entries = collectGuideEntries(rms.assetRm(), rms.dataRm());
+            GuideIndex built = new GuideIndex(resGen, dataGen, rms.assetRm(), rms.dataRm(), entries);
             INDEX_REF.set(built);
             return built;
         }
@@ -271,34 +307,45 @@ public final class ResourceGuideCollector {
         return out;
     }
 
-    private static List<GuideEntry> collectGuideEntries(ResourceManager rm) {
+    private static List<GuideEntry> collectGuideEntries(ResourceManager assetRm, ResourceManager dataRm) {
         Map<String, GuideEntry> map = new LinkedHashMap<>();
 
-        scanPrefix(rm, "patchouli_books", "patchouli", map);
-        scanPrefix(rm, "ae2guide", "guideme", map);
-        scanPrefix(rm, "guides", "guideme", map);
-        scanPrefix(rm, "books", "oracle", map);
-        scanPrefix(rm, "ponder", "ponder", map);
+        if (assetRm != null) {
+            scanPrefix(assetRm, ManagerKind.ASSET, "patchouli_books", "patchouli", map);
+            scanPrefix(assetRm, ManagerKind.ASSET, "ae2guide", "guideme", map);
+            scanPrefix(assetRm, ManagerKind.ASSET, "guides", "guideme", map);
+            scanPrefix(assetRm, ManagerKind.ASSET, "books", "oracle", map);
+            scanPrefix(assetRm, ManagerKind.ASSET, "ponder", "ponder", map);
 
-        rm.listResources("lang", path -> path.getPath().endsWith(".json")).forEach((rl, res) -> {
-            String p = rl.getPath().toLowerCase(Locale.ROOT);
-            String langCode = "";
-            if (p.startsWith("lang/") && p.endsWith(".json") && p.length() > 10) {
-                langCode = p.substring(5, p.length() - 5);
-            }
-            String id = "lang:" + rl;
-            map.putIfAbsent(id, new GuideEntry(
-                id,
-                id.toLowerCase(Locale.ROOT),
-                "lang",
-                rl.getNamespace(),
-                rl.getNamespace().toLowerCase(Locale.ROOT),
-                rl.toString(),
-                rl,
-                null,
-                langCode
-            ));
-        });
+            assetRm.listResources("lang", path -> path.getPath().endsWith(".json")).forEach((rl, res) -> {
+                String p = rl.getPath().toLowerCase(Locale.ROOT);
+                String langCode = "";
+                if (p.startsWith("lang/") && p.endsWith(".json") && p.length() > 10) {
+                    langCode = p.substring(5, p.length() - 5);
+                }
+                String id = "lang:" + rl;
+                map.putIfAbsent(id, new GuideEntry(
+                    id,
+                    id.toLowerCase(Locale.ROOT),
+                    "lang",
+                    rl.getNamespace(),
+                    rl.getNamespace().toLowerCase(Locale.ROOT),
+                    rl.toString(),
+                    ManagerKind.ASSET,
+                    rl,
+                    null,
+                    langCode
+                ));
+            });
+        }
+
+        if (dataRm != null) {
+            scanPrefix(dataRm, ManagerKind.DATA, "patchouli_books", "patchouli", map);
+            scanPrefix(dataRm, ManagerKind.DATA, "ae2guide", "guideme", map);
+            scanPrefix(dataRm, ManagerKind.DATA, "guides", "guideme", map);
+            scanPrefix(dataRm, ManagerKind.DATA, "books", "oracle", map);
+            scanPrefix(dataRm, ManagerKind.DATA, "ponder", "ponder", map);
+        }
 
         Path questsDir = Services.PLATFORM.getGameDir().resolve("config").resolve("ftbquests").resolve("quests");
         if (Files.isDirectory(questsDir)) {
@@ -315,6 +362,7 @@ public final class ResourceGuideCollector {
                             "ftbquests",
                             "ftbquests",
                             rel,
+                            ManagerKind.FILE,
                             null,
                             p,
                             null
@@ -328,6 +376,7 @@ public final class ResourceGuideCollector {
 
     private static void scanPrefix(
         ResourceManager rm,
+        ManagerKind kind,
         String prefix,
         String sourceTag,
         Map<String, GuideEntry> out
@@ -336,14 +385,16 @@ public final class ResourceGuideCollector {
             String p = path.getPath().toLowerCase(Locale.ROOT);
             return p.endsWith(".json") || p.endsWith(".md") || p.endsWith(".txt");
         }).forEach((rl, res) -> {
-            String id = sourceTag + ":" + rl;
+            String id = kind == ManagerKind.DATA ? (sourceTag + ":data/" + rl) : (sourceTag + ":" + rl);
+            String displayPath = kind == ManagerKind.DATA ? ("data/" + rl) : rl.toString();
             out.putIfAbsent(id, new GuideEntry(
                 id,
                 id.toLowerCase(Locale.ROOT),
                 sourceTag,
                 rl.getNamespace(),
                 rl.getNamespace().toLowerCase(Locale.ROOT),
-                rl.toString(),
+                displayPath,
+                kind,
                 rl,
                 null,
                 null
@@ -351,15 +402,16 @@ public final class ResourceGuideCollector {
         });
     }
 
-    private static String readEntryContent(ResourceManager rm, GuideEntry entry) {
+    private static String readEntryContent(ResourceManager assetRm, ResourceManager dataRm, GuideEntry entry) {
         try {
-            if (entry.fsPath() != null) {
+            if (entry.managerKind() == ManagerKind.FILE && entry.fsPath() != null) {
                 byte[] bytes = Files.readAllBytes(entry.fsPath());
                 int len = Math.min(bytes.length, MAX_PAGE_BYTES);
                 return new String(bytes, 0, len, StandardCharsets.UTF_8);
             }
-            if (entry.rl() != null) {
-                var opt = rm.getResource(entry.rl());
+            ResourceManager targetRm = entry.managerKind() == ManagerKind.DATA ? dataRm : assetRm;
+            if (targetRm != null && entry.rl() != null) {
+                Optional<Resource> opt = targetRm.getResource(entry.rl());
                 if (opt.isEmpty()) return null;
                 Resource res = opt.get();
                 try (InputStream is = res.open();
@@ -378,6 +430,23 @@ public final class ResourceGuideCollector {
         return null;
     }
 
+    private static boolean isUsefulGuideLangEntry(String keyLower, String value) {
+        for (String marker : GUIDE_LANG_KEY_MARKERS) {
+            if (keyLower.contains(marker)) {
+                return true;
+            }
+        }
+        if (value.length() >= 28) {
+            for (String prefix : UI_NOISE_PREFIXES) {
+                if (keyLower.startsWith(prefix)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
     private static List<LangEntry> parseLangEntries(String content) {
         try {
             JsonElement parsed = JsonParser.parseString(content);
@@ -385,16 +454,16 @@ public final class ResourceGuideCollector {
             JsonObject obj = parsed.getAsJsonObject();
             List<LangEntry> list = new ArrayList<>();
             for (Map.Entry<String, JsonElement> e : obj.entrySet()) {
+                if (!e.getValue().isJsonPrimitive()) continue;
                 String k = e.getKey();
-                if (!(k.contains(".ponder.") || k.contains("tooltip") || k.contains("guide")
-                    || k.contains("jei.") || k.contains("book") || k.contains("description"))) {
+                String v = e.getValue().getAsString();
+                String kLower = k.toLowerCase(Locale.ROOT);
+                if (!isUsefulGuideLangEntry(kLower, v)) {
                     continue;
                 }
-                if (!e.getValue().isJsonPrimitive()) continue;
-                String v = e.getValue().getAsString();
                 list.add(new LangEntry(
                     k,
-                    k.toLowerCase(Locale.ROOT),
+                    kLower,
                     v,
                     v.toLowerCase(Locale.ROOT)
                 ));
