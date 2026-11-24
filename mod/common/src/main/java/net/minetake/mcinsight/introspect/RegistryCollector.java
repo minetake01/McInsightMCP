@@ -102,7 +102,13 @@ public final class RegistryCollector {
             return searchTags(normKind, normQ, normMod, clampedLimit, clampedOffset);
         }
 
-        String langKey = Services.PLATFORM.isClientSide() ? ClientStateAccessor.getLanguageCode() : "server";
+        String langKey = "server";
+        if (Services.PLATFORM.isClientSide()) {
+            langKey = executor.supplyOnClientThread(ClientStateAccessor::getLanguageCode, 5000);
+            if (langKey == null || langKey.isBlank()) {
+                langKey = "en_us";
+            }
+        }
         String cacheKey = normKind + ":" + langKey + ":" + InsightCacheManager.getResourceGeneration();
 
         RegistryKindIndex index = KIND_CACHE.get(cacheKey);
@@ -276,7 +282,7 @@ public final class RegistryCollector {
         return out;
     }
 
-    public static JsonObject inspectTag(String kind, String tagId, int limit) {
+    public static JsonObject inspectTag(String kind, String tagId, int limit, int offset) {
         String normKind = kind == null ? "item" : kind.trim().toLowerCase(Locale.ROOT);
         if (normKind.endsWith("_tag")) {
             normKind = normKind.substring(0, normKind.length() - 4);
@@ -291,11 +297,12 @@ public final class RegistryCollector {
         }
 
         int clampedLimit = Math.max(1, Math.min(limit, 500));
+        int clampedOffset = Math.max(0, offset);
         return switch (normKind) {
-            case "block" -> buildInspectTagResponse(BuiltInRegistries.BLOCK, "block_tag", rl, clampedLimit);
-            case "fluid" -> buildInspectTagResponse(BuiltInRegistries.FLUID, "fluid_tag", rl, clampedLimit);
-            case "entity" -> buildInspectTagResponse(BuiltInRegistries.ENTITY_TYPE, "entity_tag", rl, clampedLimit);
-            case "item" -> buildInspectTagResponse(BuiltInRegistries.ITEM, "item_tag", rl, clampedLimit);
+            case "block" -> buildInspectTagResponse(BuiltInRegistries.BLOCK, "block_tag", rl, clampedLimit, clampedOffset);
+            case "fluid" -> buildInspectTagResponse(BuiltInRegistries.FLUID, "fluid_tag", rl, clampedLimit, clampedOffset);
+            case "entity" -> buildInspectTagResponse(BuiltInRegistries.ENTITY_TYPE, "entity_tag", rl, clampedLimit, clampedOffset);
+            case "item" -> buildInspectTagResponse(BuiltInRegistries.ITEM, "item_tag", rl, clampedLimit, clampedOffset);
             default -> JsonUtil.errorObject("INVALID_KIND", "Unsupported tag kind: " + kind);
         };
     }
@@ -304,7 +311,8 @@ public final class RegistryCollector {
         Registry<T> registry,
         String tagKindLabel,
         ResourceLocation rl,
-        int limit
+        int limit,
+        int offset
     ) {
         TagKey<T> tagKey = TagKey.create(registry.key(), rl);
         Optional<HolderSet.Named<T>> opt = registry.getTag(tagKey);
@@ -314,33 +322,33 @@ public final class RegistryCollector {
         HolderSet.Named<T> named = opt.get();
         int totalMembers = named.size();
         JsonArray members = new JsonArray();
-        boolean hasMore = false;
+        int idx = 0;
         for (Holder<T> holder : named) {
-            if (members.size() >= limit) {
-                hasMore = true;
-                break;
-            }
             ResourceLocation memberId = holder.unwrapKey().map(k -> k.location()).orElse(null);
             if (memberId == null) {
                 continue;
             }
-            JsonObject mObj = new JsonObject();
-            mObj.addProperty("id", memberId.toString());
-            mObj.addProperty("modId", memberId.getNamespace());
-            String displayName = resolveDisplayName(holder.value());
-            if (displayName != null) {
-                mObj.addProperty("displayName", displayName);
+            if (idx >= offset && members.size() < limit) {
+                JsonObject mObj = new JsonObject();
+                mObj.addProperty("id", memberId.toString());
+                mObj.addProperty("modId", memberId.getNamespace());
+                String displayName = resolveDisplayName(holder.value());
+                if (displayName != null) {
+                    mObj.addProperty("displayName", displayName);
+                }
+                members.add(mObj);
             }
-            members.add(mObj);
+            idx++;
         }
 
         JsonObject out = new JsonObject();
         out.addProperty("ok", true);
         out.addProperty("kind", tagKindLabel);
         out.addProperty("id", "#" + rl);
+        out.addProperty("offset", offset);
         out.addProperty("totalMembers", totalMembers);
         out.addProperty("returned", members.size());
-        out.addProperty("hasMore", hasMore);
+        out.addProperty("hasMore", idx > offset + members.size());
         out.add("members", members);
         return out;
     }

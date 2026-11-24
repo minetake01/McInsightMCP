@@ -7,6 +7,8 @@ import com.google.gson.JsonParser;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.DataResult;
 import com.mojang.serialization.JsonOps;
+import net.minetake.mcinsight.McInsightConstants;
+import net.minetake.mcinsight.platform.Services;
 import net.minetake.mcinsight.server.JsonUtil;
 import net.minetake.mcinsight.server.MainThreadExecutor;
 import net.minetake.mcinsight.server.PerfMetrics;
@@ -35,6 +37,7 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.packs.resources.Resource;
 import net.minecraft.server.packs.resources.ResourceManager;
+import net.minecraft.tags.TagKey;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.level.biome.Biome;
@@ -58,13 +61,16 @@ public final class WorldgenAndLootCollector {
         SNAPSHOT_REF.set(null);
     }
 
+    private static boolean isNeoForgeLoader() {
+        return "neoforge".equalsIgnoreCase(Services.PLATFORM.getLoaderName());
+    }
+
     private static final class DataSnapshot {
         final long generation;
         final HolderLookup.Provider registries;
         final RegistryOps<JsonElement> jsonOps;
         final Registry<LootTable> lootRegistry;
         final ResourceManager dataRm;
-        final ResourceManager assetRm;
         final ConcurrentHashMap<String, JsonElement> encodedCache = new ConcurrentHashMap<>();
         final ConcurrentHashMap<String, String> encodedLowerCache = new ConcurrentHashMap<>();
         final ConcurrentHashMap<String, List<ResourceJsonRef>> folderIndexCache = new ConcurrentHashMap<>();
@@ -78,23 +84,18 @@ public final class WorldgenAndLootCollector {
             long generation,
             HolderLookup.Provider registries,
             Registry<LootTable> lootRegistry,
-            ResourceManager dataRm,
-            ResourceManager assetRm
+            ResourceManager dataRm
         ) {
             this.generation = generation;
             this.registries = registries;
             this.jsonOps = registries != null ? registries.createSerializationContext(JsonOps.INSTANCE) : null;
             this.lootRegistry = lootRegistry;
             this.dataRm = dataRm;
-            this.assetRm = assetRm;
-        }
-
-        ResourceManager effectiveDataRm() {
-            return dataRm != null ? dataRm : assetRm;
         }
     }
 
     private record ResourceJsonRef(
+        ResourceLocation rl,
         String id,
         String modId,
         String idLower,
@@ -168,13 +169,12 @@ public final class WorldgenAndLootCollector {
             DataSnapshot built = executor.supplyOnGameThread(() -> {
                 HolderLookup.Provider regs = GameStateSupport.getRegistryAccess(executor);
                 ResourceManager dataRm = GameStateSupport.getDataResourceManager(executor);
-                ResourceManager assetRm = GameStateSupport.getAssetResourceManager(executor);
                 MinecraftServer server = executor.getActiveServer();
                 Registry<LootTable> lootReg = null;
                 if (server != null) {
                     lootReg = server.reloadableRegistries().get().registry(Registries.LOOT_TABLE).orElse(null);
                 }
-                return new DataSnapshot(InsightCacheManager.getDataGeneration(), regs, lootReg, dataRm, assetRm);
+                return new DataSnapshot(InsightCacheManager.getDataGeneration(), regs, lootReg, dataRm);
             }, 10000);
 
             SNAPSHOT_REF.set(built);
@@ -188,6 +188,13 @@ public final class WorldgenAndLootCollector {
             return snap.cachedSummary;
         }
 
+        if (snap.registries == null && snap.dataRm == null) {
+            return JsonUtil.errorObject(
+                "NO_WORLDGEN_DATA",
+                "Worldgen registries and datapack resources are unavailable without an active server or server sync."
+            );
+        }
+
         JsonObject counts = new JsonObject();
         if (snap.registries != null) {
             counts.addProperty("dimension_type", countRegistry(snap.registries, Registries.DIMENSION_TYPE));
@@ -197,13 +204,12 @@ public final class WorldgenAndLootCollector {
             counts.addProperty("configured_feature", countRegistry(snap.registries, Registries.CONFIGURED_FEATURE));
         }
 
-        ResourceManager dataRm = snap.effectiveDataRm();
-        if (dataRm != null) {
+        if (snap.dataRm != null && isNeoForgeLoader()) {
             int bmCount = 0;
             for (String folder : BIOME_MODIFIER_FOLDERS) {
                 List<ResourceJsonRef> refs = snap.folderIndexCache.computeIfAbsent(
                     folder,
-                    f -> buildFolderIndex(dataRm, f)
+                    f -> buildFolderIndex(snap.dataRm, f)
                 );
                 bmCount += refs.size();
             }
@@ -214,7 +220,6 @@ public final class WorldgenAndLootCollector {
         out.addProperty("ok", true);
         out.addProperty("hasDynamicRegistries", snap.registries != null);
         out.addProperty("hasDataResources", snap.dataRm != null);
-        out.addProperty("hasResourceFallback", dataRm != null);
         out.add("counts", counts);
         snap.cachedSummary = out;
         return out;
@@ -235,25 +240,33 @@ public final class WorldgenAndLootCollector {
         String normKind = kind == null ? "placed_feature" : kind.trim().toLowerCase(Locale.ROOT);
         String normQ = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
         String normMod = modId == null ? "" : modId.trim().toLowerCase(Locale.ROOT);
-        int maxAllowed = summaryOnly ? 250 : 100;
+        int maxAllowed = (summaryOnly && "biome".equals(normKind)) ? 250 : 100;
         int clampedLimit = Math.max(1, Math.min(limit, maxAllowed));
         int clampedOffset = Math.max(0, offset);
 
         DataSnapshot snap = getOrCreateSnapshot(executor);
 
         if ("biome_modifier".equals(normKind)) {
-            ResourceManager rm = snap.effectiveDataRm();
-            if (rm == null) {
-                return JsonUtil.errorObject("NO_WORLDGEN_DATA", "ResourceManager is not available for biome modifiers.");
+            if (!isNeoForgeLoader()) {
+                return JsonUtil.errorObject(
+                    "UNSUPPORTED_ON_LOADER",
+                    "biome_modifier datapack queries are NeoForge-specific and unsupported on loader '" + Services.PLATFORM.getLoaderName() + "'."
+                );
+            }
+            if (snap.dataRm == null) {
+                return JsonUtil.errorObject(
+                    "NO_WORLDGEN_DATA",
+                    "Server datapack ResourceManager is unavailable for biome modifiers (remote multiplayer without server sync)."
+                );
             }
             return queryResourceJsonFolder(
                 snap,
-                rm,
+                snap.dataRm,
                 BIOME_MODIFIER_FOLDERS,
                 "biome_modifier",
                 normQ,
                 normMod,
-                true,
+                searchContent,
                 minTemp,
                 maxTemp,
                 summaryOnly,
@@ -263,6 +276,10 @@ public final class WorldgenAndLootCollector {
         }
 
         return switch (normKind) {
+            case "placed_feature" -> queryWorldgenRegistryOrResource(
+                snap, Registries.PLACED_FEATURE, PlacedFeature.DIRECT_CODEC,
+                "worldgen/placed_feature", normKind, normQ, normMod, searchContent, minTemp, maxTemp, summaryOnly, clampedLimit, clampedOffset
+            );
             case "configured_feature" -> queryWorldgenRegistryOrResource(
                 snap, Registries.CONFIGURED_FEATURE, ConfiguredFeature.DIRECT_CODEC,
                 "worldgen/configured_feature", normKind, normQ, normMod, searchContent, minTemp, maxTemp, summaryOnly, clampedLimit, clampedOffset
@@ -279,9 +296,9 @@ public final class WorldgenAndLootCollector {
                 snap, Registries.DIMENSION_TYPE, DimensionType.DIRECT_CODEC,
                 "dimension_type", normKind, normQ, normMod, searchContent, minTemp, maxTemp, summaryOnly, clampedLimit, clampedOffset
             );
-            default -> queryWorldgenRegistryOrResource(
-                snap, Registries.PLACED_FEATURE, PlacedFeature.DIRECT_CODEC,
-                "worldgen/placed_feature", "placed_feature", normQ, normMod, searchContent, minTemp, maxTemp, summaryOnly, clampedLimit, clampedOffset
+            default -> JsonUtil.errorObject(
+                "INVALID_KIND",
+                "Unsupported worldgen kind: " + kind + ". Expected one of placed_feature, configured_feature, biome, structure, dimension_type, biome_modifier."
             );
         };
     }
@@ -306,18 +323,29 @@ public final class WorldgenAndLootCollector {
         if (lootIndex == null) {
             return JsonUtil.errorObject(
                 "NO_LOOT_DATA",
-                "Neither server reloadable registries nor ResourceManager is available."
+                "Loot tables are server-side and unavailable without an active server or McInsight server sync."
             );
         }
 
-        ResourceLocation exactRl = (!normItem.isEmpty() && normItem.indexOf(':') > 0)
-            ? ResourceLocation.tryParse(normItem)
+        String rawItemNoHash = normItem.startsWith("#") ? normItem.substring(1) : normItem;
+        ResourceLocation exactRl = (!rawItemNoHash.isEmpty() && rawItemNoHash.indexOf(':') > 0)
+            ? ResourceLocation.tryParse(rawItemNoHash)
             : null;
-        boolean isExactItem = exactRl != null && BuiltInRegistries.ITEM.containsKey(exactRl);
+        boolean isTagQuery = normItem.startsWith("#") && exactRl != null;
+        boolean isExactItem = !isTagQuery && exactRl != null && BuiltInRegistries.ITEM.containsKey(exactRl);
         String quotedNeedle = isExactItem ? ("\"" + normItem + "\"") : "";
 
         Set<String> candidateItemIds;
-        if (isExactItem) {
+        if (isTagQuery) {
+            candidateItemIds = new LinkedHashSet<>();
+            candidateItemIds.add("#" + exactRl.toString().toLowerCase(Locale.ROOT));
+            TagKey<Item> tagKey = TagKey.create(Registries.ITEM, exactRl);
+            BuiltInRegistries.ITEM.getTag(tagKey).ifPresent(tagSet -> {
+                for (Holder<Item> h : tagSet) {
+                    h.unwrapKey().ifPresent(k -> candidateItemIds.add(k.location().toString().toLowerCase(Locale.ROOT)));
+                }
+            });
+        } else if (isExactItem) {
             candidateItemIds = new LinkedHashSet<>();
             candidateItemIds.add(normItem);
             BuiltInRegistries.ITEM.getHolder(exactRl).ifPresent(holder ->
@@ -328,10 +356,9 @@ public final class WorldgenAndLootCollector {
         }
 
         Set<String> matchedTableIdsLower = new HashSet<>();
-
         if (!normItem.isEmpty()) {
             for (IndexedLootTable table : lootIndex.tables) {
-                if (lootTableMatchesItem(table, candidateItemIds, normItem, isExactItem)) {
+                if (lootTableMatchesItem(table, candidateItemIds, normItem, isExactItem || isTagQuery)) {
                     matchedTableIdsLower.add(table.idLower());
                 }
             }
@@ -373,31 +400,32 @@ public final class WorldgenAndLootCollector {
         boolean hasMore = totalMatched > clampedOffset + results.size();
 
         JsonArray modResults = new JsonArray();
-        if (includeModifiers) {
+        int totalMatchedModifiers = 0;
+        if (includeModifiers && isNeoForgeLoader()) {
             for (IndexedLootModifier mod : lootIndex.modifiers) {
                 if (!normMod.isEmpty() && !mod.modIdLower().equals(normMod)) continue;
-                boolean matches = true;
-                if (!normItem.isEmpty()) {
-                    matches = lootModifierMatchesItem(mod, matchedTableIdsLower, candidateItemIds, normItem, isExactItem, quotedNeedle);
-                } else if (!normQ.isEmpty()) {
-                    matches = mod.idLower().contains(normQ) || mod.rawJsonLower().contains(normQ);
+                if (!normQ.isEmpty() && !mod.idLower().contains(normQ) && !mod.rawJsonLower().contains(normQ)) {
+                    continue;
                 }
-                if (!matches) continue;
-                if (modResults.size() >= clampedLimit) {
-                    break;
+                if (!normItem.isEmpty()
+                    && !lootModifierMatchesItem(mod, matchedTableIdsLower, candidateItemIds, normItem, isExactItem || isTagQuery, quotedNeedle)) {
+                    continue;
                 }
-                JsonObject mObj = new JsonObject();
-                mObj.addProperty("id", mod.id());
-                mObj.addProperty("modId", mod.modId());
-                if (mod.type() != null) mObj.addProperty("type", mod.type());
-                if (mod.injectedTable() != null) mObj.addProperty("injectedTable", mod.injectedTable());
-                if (!mod.targetTables().isEmpty()) {
-                    JsonArray targets = new JsonArray();
-                    for (String t : mod.targetTables()) targets.add(t);
-                    mObj.add("targetTables", targets);
+                if (totalMatchedModifiers >= clampedOffset && modResults.size() < clampedLimit) {
+                    JsonObject mObj = new JsonObject();
+                    mObj.addProperty("id", mod.id());
+                    mObj.addProperty("modId", mod.modId());
+                    if (mod.type() != null) mObj.addProperty("type", mod.type());
+                    if (mod.injectedTable() != null) mObj.addProperty("injectedTable", mod.injectedTable());
+                    if (!mod.targetTables().isEmpty()) {
+                        JsonArray targets = new JsonArray();
+                        for (String t : mod.targetTables()) targets.add(t);
+                        mObj.add("targetTables", targets);
+                    }
+                    if (mod.rawJson() != null) mObj.add("rawJson", mod.rawJson());
+                    modResults.add(mObj);
                 }
-                if (mod.rawJson() != null) mObj.add("rawJson", mod.rawJson());
-                modResults.add(mObj);
+                totalMatchedModifiers++;
             }
         }
 
@@ -410,7 +438,16 @@ public final class WorldgenAndLootCollector {
         out.addProperty("hasMore", hasMore);
         out.add("entries", results);
         if (includeModifiers) {
-            out.add("lootModifiers", modResults);
+            if (!isNeoForgeLoader()) {
+                out.addProperty(
+                    "lootModifiersUnsupportedReason",
+                    "Global Loot Modifiers are NeoForge-specific and unavailable on loader '" + Services.PLATFORM.getLoaderName() + "'."
+                );
+            } else {
+                out.addProperty("totalModifiers", totalMatchedModifiers);
+                out.addProperty("hasMoreModifiers", totalMatchedModifiers > clampedOffset + modResults.size());
+                out.add("lootModifiers", modResults);
+            }
         }
         return out;
     }
@@ -420,9 +457,17 @@ public final class WorldgenAndLootCollector {
         String query,
         String registryFilter,
         String modId,
+        boolean includeRaw,
         int limit,
         int offset
     ) throws Exception {
+        if (!isNeoForgeLoader()) {
+            return JsonUtil.errorObject(
+                "UNSUPPORTED_ON_LOADER",
+                "NeoForge data_maps are unsupported on loader '" + Services.PLATFORM.getLoaderName() + "'."
+            );
+        }
+
         String normQ = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
         String normReg = registryFilter == null ? "" : registryFilter.trim().toLowerCase(Locale.ROOT);
         String normMod = modId == null ? "" : modId.trim().toLowerCase(Locale.ROOT);
@@ -430,12 +475,14 @@ public final class WorldgenAndLootCollector {
         int clampedOffset = Math.max(0, offset);
 
         DataSnapshot snap = getOrCreateSnapshot(executor);
-        ResourceManager rm = snap.effectiveDataRm();
-        if (rm == null) {
-            return JsonUtil.errorObject("NO_DATAMAPS", "ResourceManager is not available.");
+        if (snap.dataRm == null) {
+            return JsonUtil.errorObject(
+                "NO_DATAMAPS",
+                "Server datapack ResourceManager is unavailable for data_maps without an active server or server sync."
+            );
         }
 
-        List<DataMapEntry> allMaps = getOrBuildDataMaps(snap, rm);
+        List<DataMapEntry> allMaps = getOrBuildDataMaps(snap, snap.dataRm);
         Set<String> candidateEntryIds = normQ.isEmpty() ? Set.of() : resolveCandidateRegistryIds(normQ);
 
         JsonArray results = new JsonArray();
@@ -449,6 +496,7 @@ public final class WorldgenAndLootCollector {
             boolean idHit = normQ.isEmpty() || dm.idLower().contains(normQ);
             JsonObject matchedValues = null;
             int totalValues = 0;
+            int totalMatchedValues = 0;
             if (dm.rawJson() != null && dm.rawJson().isJsonObject()) {
                 JsonObject rawObj = dm.rawJson().getAsJsonObject();
                 if (rawObj.has("values") && rawObj.get("values").isJsonObject()) {
@@ -463,8 +511,11 @@ public final class WorldgenAndLootCollector {
                                 || vLower.contains(normQ)
                                 || candidateEntryIds.contains(kLower)
                                 || (kLower.startsWith("#") && candidateEntryIds.contains(kLower.substring(1)));
-                            if (keyHit && matchedValues.size() < 50) {
-                                matchedValues.add(ve.getKey(), ve.getValue());
+                            if (keyHit) {
+                                totalMatchedValues++;
+                                if (matchedValues.size() < 50) {
+                                    matchedValues.add(ve.getKey(), ve.getValue());
+                                }
                             }
                         }
                     }
@@ -483,8 +534,12 @@ public final class WorldgenAndLootCollector {
                 obj.addProperty("totalValueCount", totalValues);
                 if (hasContentHit) {
                     obj.add("matchedValues", matchedValues);
+                    obj.addProperty("totalMatchedValues", totalMatchedValues);
+                    if (totalMatchedValues > matchedValues.size()) {
+                        obj.addProperty("matchedValuesTruncated", true);
+                    }
                 }
-                if (dm.rawJson() != null && (totalValues <= 100 || normQ.isEmpty())) {
+                if (dm.rawJson() != null && (includeRaw || totalValues <= 100 || normQ.isEmpty())) {
                     obj.add("rawJson", dm.rawJson());
                 }
                 results.add(obj);
@@ -512,7 +567,7 @@ public final class WorldgenAndLootCollector {
             if (existing != null) {
                 return existing;
             }
-            ResourceManager rm = snap.effectiveDataRm();
+            ResourceManager rm = snap.dataRm;
             if (snap.lootRegistry == null && rm == null) {
                 return null;
             }
@@ -530,12 +585,14 @@ public final class WorldgenAndLootCollector {
                 }
             } else {
                 source = "resource_manager";
+                Set<String> seenTableIds = new HashSet<>();
                 for (String folder : new String[]{"loot_table", "loot_tables"}) {
                     List<ResourceJsonRef> refs = snap.folderIndexCache.computeIfAbsent(
                         folder,
                         f -> buildFolderIndex(rm, f)
                     );
                     for (ResourceJsonRef ref : refs) {
+                        if (!seenTableIds.add(ref.idLower())) continue;
                         JsonElement raw = snap.encodedCache.computeIfAbsent(
                             "res:loot_table:" + ref.id(),
                             k -> readJson(ref.resource())
@@ -546,7 +603,8 @@ public final class WorldgenAndLootCollector {
             }
 
             List<IndexedLootModifier> modifiers = new ArrayList<>();
-            if (rm != null) {
+            if (rm != null && isNeoForgeLoader()) {
+                Set<String> activeGlmIds = resolveActiveGlmIds(rm);
                 List<ResourceJsonRef> modRefs = snap.folderIndexCache.computeIfAbsent(
                     "loot_modifiers",
                     f -> buildFolderIndex(rm, f)
@@ -554,6 +612,9 @@ public final class WorldgenAndLootCollector {
                 for (ResourceJsonRef ref : modRefs) {
                     if ("neoforge:global_loot_modifiers".equals(ref.idLower())
                         || "forge:global_loot_modifiers".equals(ref.idLower())) {
+                        continue;
+                    }
+                    if (!activeGlmIds.contains(ref.idLower())) {
                         continue;
                     }
                     JsonElement raw = snap.encodedCache.computeIfAbsent(
@@ -568,6 +629,39 @@ public final class WorldgenAndLootCollector {
             snap.lootIndex = built;
             return built;
         }
+    }
+
+    private static Set<String> resolveActiveGlmIds(ResourceManager rm) {
+        List<JsonObject> layers = new ArrayList<>();
+        for (String ns : new String[]{"neoforge", "forge"}) {
+            ResourceLocation rl = ResourceLocation.fromNamespaceAndPath(ns, "loot_modifiers/global_loot_modifiers.json");
+            List<Resource> stack = rm.getResourceStack(rl);
+            for (Resource r : stack) {
+                JsonElement el = readJson(r);
+                if (el != null && el.isJsonObject()) {
+                    layers.add(el.getAsJsonObject());
+                }
+            }
+        }
+        return parseActiveGlmIds(layers);
+    }
+
+    public static Set<String> parseActiveGlmIds(List<JsonObject> layersLowToHigh) {
+        Set<String> active = new LinkedHashSet<>();
+        for (JsonObject layer : layersLowToHigh) {
+            if (layer == null) continue;
+            if (layer.has("replace") && layer.get("replace").isJsonPrimitive() && layer.get("replace").getAsBoolean()) {
+                active.clear();
+            }
+            if (layer.has("entries") && layer.get("entries").isJsonArray()) {
+                for (JsonElement el : layer.getAsJsonArray("entries")) {
+                    if (el.isJsonPrimitive() && el.getAsJsonPrimitive().isString()) {
+                        active.add(el.getAsString().trim().toLowerCase(Locale.ROOT));
+                    }
+                }
+            }
+        }
+        return Set.copyOf(active);
     }
 
     private static IndexedLootTable indexLootTable(
@@ -636,6 +730,22 @@ public final class WorldgenAndLootCollector {
                 }
                 if (entry.has("tag") && entry.get("tag").isJsonPrimitive()) {
                     droppedItems.add("#" + entry.get("tag").getAsString().toLowerCase(Locale.ROOT));
+                }
+            }
+            if (entry.has("functions") && entry.get("functions").isJsonArray()) {
+                for (JsonElement fnEl : entry.getAsJsonArray("functions")) {
+                    if (!fnEl.isJsonObject()) continue;
+                    JsonObject fn = fnEl.getAsJsonObject();
+                    String fnName = fn.has("function") && fn.get("function").isJsonPrimitive()
+                        ? fn.get("function").getAsString().toLowerCase(Locale.ROOT)
+                        : "";
+                    if (("minecraft:set_contents".equals(fnName) || "set_contents".equals(fnName))
+                        && fn.has("entries") && fn.get("entries").isJsonArray()) {
+                        walkLootEntries(fn.getAsJsonArray("entries"), droppedItems, refTables);
+                    } else if (("minecraft:set_loot_table".equals(fnName) || "set_loot_table".equals(fnName))
+                        && fn.has("name") && fn.get("name").isJsonPrimitive()) {
+                        refTables.add(fn.get("name").getAsString().toLowerCase(Locale.ROOT));
+                    }
                 }
             }
             if (entry.has("children") && entry.get("children").isJsonArray()) {
@@ -776,10 +886,10 @@ public final class WorldgenAndLootCollector {
         IndexedLootTable table,
         Set<String> candidateItemIds,
         String normItem,
-        boolean isExactItem
+        boolean exactOrTag
     ) {
         for (String dropped : table.droppedItemsLower()) {
-            if (candidateItemIds.contains(dropped) || (!isExactItem && dropped.contains(normItem))) {
+            if (candidateItemIds.contains(dropped) || (!exactOrTag && dropped.contains(normItem))) {
                 return true;
             }
         }
@@ -791,18 +901,18 @@ public final class WorldgenAndLootCollector {
         Set<String> matchedTableIdsLower,
         Set<String> candidateItemIds,
         String normItem,
-        boolean isExactItem,
+        boolean exactOrTag,
         String quotedNeedle
     ) {
         if (mod.injectedTableLower() != null && matchedTableIdsLower.contains(mod.injectedTableLower())) {
             return true;
         }
         for (String direct : mod.directItemsLower()) {
-            if (candidateItemIds.contains(direct) || (!isExactItem && direct.contains(normItem))) {
+            if (candidateItemIds.contains(direct) || (!exactOrTag && direct.contains(normItem))) {
                 return true;
             }
         }
-        if (isExactItem) {
+        if (exactOrTag && !quotedNeedle.isEmpty()) {
             return mod.rawJsonLower().contains(quotedNeedle);
         }
         for (String cand : candidateItemIds) {
@@ -829,14 +939,24 @@ public final class WorldgenAndLootCollector {
             );
             List<DataMapEntry> built = new ArrayList<>(refs.size());
             for (ResourceJsonRef ref : refs) {
-                JsonElement raw = snap.encodedCache.computeIfAbsent(
-                    "res:data_map:" + ref.id(),
-                    k -> readJson(ref.resource())
-                );
+                List<Resource> stack = rm.getResourceStack(ref.rl());
+                List<JsonObject> layers = new ArrayList<>(stack.size());
+                JsonElement fallbackSingle = null;
+                for (Resource layerRes : stack) {
+                    JsonElement parsed = readJson(layerRes);
+                    if (parsed != null && parsed.isJsonObject()) {
+                        layers.add(parsed.getAsJsonObject());
+                    } else if (fallbackSingle == null) {
+                        fallbackSingle = parsed;
+                    }
+                }
+                JsonElement merged = layers.isEmpty()
+                    ? (fallbackSingle != null ? fallbackSingle : readJson(ref.resource()))
+                    : mergeDataMapLayers(layers);
+
                 int colon = ref.id().indexOf(':');
-                String pathPart = colon >= 0 ? ref.id().substring(colon + 1) : ref.id();
-                int slash = pathPart.indexOf('/');
-                String reg = slash > 0 ? pathPart.substring(0, slash) : "unknown";
+                String cleanPath = colon >= 0 ? ref.id().substring(colon + 1) : ref.id();
+                String reg = extractDataMapRegistry(cleanPath);
                 built.add(new DataMapEntry(
                     ref.id(),
                     ref.idLower(),
@@ -844,13 +964,58 @@ public final class WorldgenAndLootCollector {
                     ref.modIdLower(),
                     reg,
                     reg.toLowerCase(Locale.ROOT),
-                    raw
+                    merged
                 ));
             }
             List<DataMapEntry> frozen = List.copyOf(built);
             snap.dataMapsCache = frozen;
             return frozen;
         }
+    }
+
+    public static String extractDataMapRegistry(String cleanPath) {
+        if (cleanPath == null || cleanPath.isBlank()) return "unknown";
+        String[] parts = cleanPath.split("/");
+        if (parts.length >= 3) {
+            // Custom namespaced registry layout: data_maps/<reg_ns>/<reg_path>/<map>.json
+            return parts[0] + ":" + parts[1];
+        }
+        if (parts.length == 2) {
+            return parts[0];
+        }
+        return "unknown";
+    }
+
+    public static JsonObject mergeDataMapLayers(List<JsonObject> layersLowToHigh) {
+        JsonObject mergedValues = new JsonObject();
+        for (JsonObject layer : layersLowToHigh) {
+            if (layer == null) continue;
+            if (layer.has("replace") && layer.get("replace").isJsonPrimitive() && layer.get("replace").getAsBoolean()) {
+                mergedValues = new JsonObject();
+            }
+            if (layer.has("remove")) {
+                JsonElement rem = layer.get("remove");
+                if (rem.isJsonArray()) {
+                    for (JsonElement el : rem.getAsJsonArray()) {
+                        if (el.isJsonPrimitive() && el.getAsJsonPrimitive().isString()) {
+                            mergedValues.remove(el.getAsString());
+                        }
+                    }
+                } else if (rem.isJsonObject()) {
+                    for (String k : rem.getAsJsonObject().keySet()) {
+                        mergedValues.remove(k);
+                    }
+                }
+            }
+            if (layer.has("values") && layer.get("values").isJsonObject()) {
+                for (Map.Entry<String, JsonElement> e : layer.getAsJsonObject("values").entrySet()) {
+                    mergedValues.add(e.getKey(), e.getValue().deepCopy());
+                }
+            }
+        }
+        JsonObject out = new JsonObject();
+        out.add("values", mergedValues);
+        return out;
     }
 
     private static <T> int countRegistry(HolderLookup.Provider registries, ResourceKey<? extends Registry<T>> key) {
@@ -937,11 +1102,10 @@ public final class WorldgenAndLootCollector {
             }
         }
 
-        ResourceManager rm = snap.effectiveDataRm();
-        if (rm != null) {
+        if (snap.dataRm != null) {
             return queryResourceJsonFolder(
                 snap,
-                rm,
+                snap.dataRm,
                 new String[]{resourceFolder},
                 kindLabel,
                 normQ,
@@ -954,7 +1118,10 @@ public final class WorldgenAndLootCollector {
                 offset
             );
         }
-        return JsonUtil.errorObject("NO_WORLDGEN_DATA", "Neither dynamic registries nor ResourceManager is available.");
+        return JsonUtil.errorObject(
+            "NO_WORLDGEN_DATA",
+            "Worldgen '" + kindLabel + "' data is unavailable on a remote multiplayer client without server sync."
+        );
     }
 
     private static JsonElement summarizeBiomeJson(JsonElement encoded) {
@@ -963,7 +1130,7 @@ public final class WorldgenAndLootCollector {
         }
         JsonObject src = encoded.getAsJsonObject();
         JsonObject compact = new JsonObject();
-        for (String key : new String[]{"temperature", "downfall", "has_precipitation", "temperature_modifier"}) {
+        for (String key : new String[]{"temperature", "downfall", "has_precipitation", "temperature_modifier", "spawners"}) {
             if (src.has(key)) {
                 compact.add(key, src.get(key));
             }
@@ -986,7 +1153,9 @@ public final class WorldgenAndLootCollector {
                 snap.encodedCache.putIfAbsent(cacheKey, res.get());
                 return res.get();
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            McInsightConstants.LOG.debug("Failed encoding {}: {}", cacheKey, e.getMessage());
+        }
         return null;
     }
 
@@ -1090,6 +1259,7 @@ public final class WorldgenAndLootCollector {
                 }
                 String fullId = rl.getNamespace() + ":" + cleanPath;
                 return new ResourceJsonRef(
+                    rl,
                     fullId,
                     rl.getNamespace(),
                     fullId.toLowerCase(Locale.ROOT),
@@ -1104,7 +1274,8 @@ public final class WorldgenAndLootCollector {
         try (InputStream is = res.open();
              InputStreamReader reader = new InputStreamReader(is, StandardCharsets.UTF_8)) {
             return JsonParser.parseReader(reader);
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            McInsightConstants.LOG.debug("Failed reading JSON resource: {}", e.getMessage());
             return null;
         }
     }

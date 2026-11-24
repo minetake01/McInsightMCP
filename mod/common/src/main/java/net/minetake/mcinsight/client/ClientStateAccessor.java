@@ -1,8 +1,5 @@
 package net.minetake.mcinsight.client;
 
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
-import net.minetake.mcinsight.server.JsonUtil;
 import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.advancements.AdvancementHolder;
@@ -11,7 +8,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.client.multiplayer.ClientPacketListener;
-import net.minecraft.core.HolderLookup;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.ProjectileUtil;
@@ -106,34 +102,6 @@ public final class ClientStateAccessor {
             return new ScreenSnapshot(screenClass, title, menu.getClass().getName(), slots);
         }
         return new ScreenSnapshot(screenClass, title, null, List.of());
-    }
-
-    public static JsonObject getOpenScreenInfo(HolderLookup.Provider registries) {
-        Minecraft mc = Minecraft.getInstance();
-        Screen screen = mc.screen;
-        if (screen == null) {
-            return null;
-        }
-        JsonObject obj = new JsonObject();
-        obj.addProperty("screenClass", screen.getClass().getName());
-        obj.addProperty("title", screen.getTitle().getString());
-
-        if (screen instanceof AbstractContainerScreen<?> containerScreen) {
-            AbstractContainerMenu menu = containerScreen.getMenu();
-            obj.addProperty("menuClass", menu.getClass().getName());
-            JsonArray slots = new JsonArray();
-            for (int i = 0; i < menu.slots.size(); i++) {
-                Slot slot = menu.slots.get(i);
-                if (slot.hasItem()) {
-                    JsonObject slotObj = JsonUtil.serializeItemStack(slot.getItem(), registries);
-                    slotObj.addProperty("slotIndex", i);
-                    slotObj.addProperty("containerClass", slot.container.getClass().getSimpleName());
-                    slots.add(slotObj);
-                }
-            }
-            obj.add("containerSlots", slots);
-        }
-        return obj;
     }
 
     public static HitResult raycast(double maxDistance) {

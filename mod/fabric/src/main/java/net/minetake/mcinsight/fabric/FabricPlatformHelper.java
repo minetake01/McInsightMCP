@@ -42,10 +42,7 @@ public final class FabricPlatformHelper implements IPlatformHelper {
             net.fabricmc.loader.api.metadata.ModMetadata meta = container.getMetadata();
             String jarPath = "";
             try {
-                ModOrigin origin = container.getOrigin();
-                if (origin.getKind() == ModOrigin.Kind.PATH && !origin.getPaths().isEmpty()) {
-                    jarPath = origin.getPaths().get(0).toAbsolutePath().toString();
-                }
+                jarPath = resolveOriginJarPath(container.getOrigin());
             } catch (Exception ignored) {}
             out.add(new IPlatformHelper.ModMetadata(
                 meta.getId(),
@@ -79,5 +76,24 @@ public final class FabricPlatformHelper implements IPlatformHelper {
     @Override
     public boolean isClientSide() {
         return FabricLoader.getInstance().getEnvironmentType() == EnvType.CLIENT;
+    }
+
+    private static String resolveOriginJarPath(ModOrigin origin) {
+        if (origin == null) return "";
+        if (origin.getKind() == ModOrigin.Kind.PATH && !origin.getPaths().isEmpty()) {
+            return origin.getPaths().get(0).toAbsolutePath().toString();
+        }
+        if (origin.getKind() == ModOrigin.Kind.NESTED) {
+            String parentPath = FabricLoader.getInstance()
+                .getModContainer(origin.getParentModId())
+                .map(c -> resolveOriginJarPath(c.getOrigin()))
+                .orElse("");
+            String sub = origin.getParentSubLocation();
+            if (!parentPath.isEmpty() && sub != null && !sub.isBlank()) {
+                return parentPath + "!" + sub.replaceAll("^/+", "");
+            }
+            return parentPath;
+        }
+        return "";
     }
 }

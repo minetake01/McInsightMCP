@@ -4,7 +4,6 @@ import net.minetake.mcinsight.client.ClientStateAccessor;
 import net.minetake.mcinsight.platform.Services;
 import net.minetake.mcinsight.server.MainThreadExecutor;
 import net.minecraft.core.HolderLookup;
-import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.packs.resources.ResourceManager;
@@ -15,23 +14,6 @@ import net.minecraft.world.level.Level;
 public final class GameStateSupport {
 
     private GameStateSupport() {}
-
-    public static Level getBestLevel(MainThreadExecutor executor) {
-        if (Services.PLATFORM.isClientSide()) {
-            Level clientLevel = ClientStateAccessor.getLevel();
-            MinecraftServer server = executor.getActiveServer();
-            if (server != null && clientLevel != null) {
-                ResourceKey<Level> dim = clientLevel.dimension();
-                Level serverLevel = server.getLevel(dim);
-                if (serverLevel != null) {
-                    return serverLevel;
-                }
-            }
-            return clientLevel;
-        }
-        MinecraftServer server = executor.getActiveServer();
-        return server != null ? server.overworld() : null;
-    }
 
     public static Level getClientOrServerLevel(MainThreadExecutor executor) {
         if (Services.PLATFORM.isClientSide()) {

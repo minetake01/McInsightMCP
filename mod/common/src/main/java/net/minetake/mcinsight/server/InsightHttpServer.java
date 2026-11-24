@@ -20,9 +20,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -95,10 +92,6 @@ public final class InsightHttpServer {
         McInsightConstants.LOG.info("McInsight HTTP server stopped.");
     }
 
-    public int getBoundPort() {
-        return boundPort;
-    }
-
     private void handleRequest(HttpExchange exchange) throws IOException {
         String path = exchange.getRequestURI().getPath();
         PerfMetrics.RequestTrace trace = PerfMetrics.beginRequest(path);
@@ -113,24 +106,24 @@ public final class InsightHttpServer {
                 return;
             }
 
-            Map<String, String> query = parseQuery(exchange.getRequestURI().getRawQuery());
+            Map<String, String> query = HttpQueryParser.parseQuery(exchange.getRequestURI().getRawQuery());
 
             JsonObject response = switch (path) {
                 case "/api/v1/status" -> StatusCollector.collectStatus(
                     executor,
                     boundPort,
-                    "true".equalsIgnoreCase(query.get("includeMods"))
+                    HttpQueryParser.parseBoolean(query.get("includeMods"), false, "includeMods")
                 );
                 case "/api/v1/mods" -> StatusCollector.collectMods();
                 case "/api/v1/metrics" -> PerfMetrics.collectMetricsJson(executor);
                 case "/api/v1/player" -> PlayerStateCollector.collect(executor);
                 case "/api/v1/looking-at" -> WorldTargetCollector.collectLookingAt(
                     executor,
-                    parseDouble(query.get("maxDistance"), 16.0)
+                    HttpQueryParser.parseDouble(query.get("maxDistance"), 16.0, "maxDistance")
                 );
                 case "/api/v1/scan" -> WorldTargetCollector.scanArea(
                     executor,
-                    parseInt(query.get("radius"), 8),
+                    HttpQueryParser.parseInt(query.get("radius"), 8, "radius"),
                     query.get("filter"),
                     config.maxScanRadius
                 );
@@ -139,14 +132,15 @@ public final class InsightHttpServer {
                     query.get("kind"),
                     query.get("q"),
                     query.get("mod"),
-                    parseInt(query.get("limit"), 50),
-                    parseInt(query.get("offset"), 0)
+                    HttpQueryParser.parseInt(query.get("limit"), 50, "limit"),
+                    HttpQueryParser.parseInt(query.get("offset"), 0, "offset")
                 );
                 case "/api/v1/registry/item" -> RegistryCollector.inspectItem(executor, query.get("id"));
                 case "/api/v1/registry/tag" -> RegistryCollector.inspectTag(
                     query.get("kind"),
                     query.get("id"),
-                    parseInt(query.get("limit"), 200)
+                    HttpQueryParser.parseInt(query.get("limit"), 200, "limit"),
+                    HttpQueryParser.parseInt(query.get("offset"), 0, "offset")
                 );
                 case "/api/v1/recipes/types" -> RecipeCollector.listTypes(executor);
                 case "/api/v1/recipes/query" -> RecipeCollector.queryRecipes(
@@ -156,21 +150,25 @@ public final class InsightHttpServer {
                     query.get("type"),
                     query.get("mod"),
                     query.get("source"),
-                    Math.min(parseInt(query.get("limit"), 50), config.maxRecipeResults),
-                    parseInt(query.get("offset"), 0)
+                    Math.min(HttpQueryParser.parseInt(query.get("limit"), 50, "limit"), config.maxRecipeResults),
+                    HttpQueryParser.parseInt(query.get("offset"), 0, "offset")
                 );
                 case "/api/v1/guides/list" -> ResourceGuideCollector.listGuides(
                     executor,
                     query.get("source"),
-                    query.get("mod")
+                    query.get("mod"),
+                    HttpQueryParser.parseInt(query.get("limit"), 50, "limit"),
+                    HttpQueryParser.parseInt(query.get("offset"), 0, "offset")
                 );
                 case "/api/v1/guides/search" -> ResourceGuideCollector.searchGuides(
                     executor,
                     query.get("q"),
                     query.get("source"),
+                    query.get("mod"),
                     query.get("lang"),
-                    "true".equalsIgnoreCase(query.get("includeAllLang")),
-                    parseInt(query.get("limit"), 20)
+                    HttpQueryParser.parseBoolean(query.get("includeAllLang"), false, "includeAllLang"),
+                    HttpQueryParser.parseInt(query.get("limit"), 20, "limit"),
+                    HttpQueryParser.parseInt(query.get("offset"), 0, "offset")
                 );
                 case "/api/v1/guides/page" -> ResourceGuideCollector.getGuidePage(executor, query.get("id"));
                 case "/api/v1/worldgen/summary" -> WorldgenAndLootCollector.getWorldgenSummary(executor);
@@ -179,44 +177,47 @@ public final class InsightHttpServer {
                     query.get("kind"),
                     query.get("q"),
                     query.get("mod"),
-                    "true".equalsIgnoreCase(query.get("searchContent")),
-                    parseNullableDouble(query.get("minTemp")),
-                    parseNullableDouble(query.get("maxTemp")),
-                    "true".equalsIgnoreCase(query.get("summaryOnly")),
-                    parseInt(query.get("limit"), 30),
-                    parseInt(query.get("offset"), 0)
+                    HttpQueryParser.parseBoolean(query.get("searchContent"), false, "searchContent"),
+                    HttpQueryParser.parseNullableDouble(query.get("minTemp"), "minTemp"),
+                    HttpQueryParser.parseNullableDouble(query.get("maxTemp"), "maxTemp"),
+                    HttpQueryParser.parseBoolean(query.get("summaryOnly"), false, "summaryOnly"),
+                    HttpQueryParser.parseInt(query.get("limit"), 30, "limit"),
+                    HttpQueryParser.parseInt(query.get("offset"), 0, "offset")
                 );
                 case "/api/v1/loot/query" -> WorldgenAndLootCollector.queryLoot(
                     executor,
                     query.get("q"),
                     query.get("item"),
                     query.get("mod"),
-                    !"false".equalsIgnoreCase(query.get("includeModifiers")),
-                    parseInt(query.get("limit"), 30),
-                    parseInt(query.get("offset"), 0)
+                    HttpQueryParser.parseBoolean(query.get("includeModifiers"), true, "includeModifiers"),
+                    HttpQueryParser.parseInt(query.get("limit"), 30, "limit"),
+                    HttpQueryParser.parseInt(query.get("offset"), 0, "offset")
                 );
                 case "/api/v1/datamaps/query" -> WorldgenAndLootCollector.queryDataMaps(
                     executor,
                     query.get("q"),
                     query.get("registry"),
                     query.get("mod"),
-                    parseInt(query.get("limit"), 30),
-                    parseInt(query.get("offset"), 0)
+                    HttpQueryParser.parseBoolean(query.get("includeRaw"), false, "includeRaw"),
+                    HttpQueryParser.parseInt(query.get("limit"), 30, "limit"),
+                    HttpQueryParser.parseInt(query.get("offset"), 0, "offset")
                 );
                 case "/api/v1/trades/query" -> TradeCollector.queryTrades(
                     executor,
                     query.get("item"),
                     query.get("profession"),
                     query.get("mod"),
-                    parseInt(query.get("limit"), 40)
+                    HttpQueryParser.parseInt(query.get("limit"), 40, "limit"),
+                    HttpQueryParser.parseInt(query.get("offset"), 0, "offset")
                 );
                 case "/api/v1/advancements/query" -> AdvancementCollector.queryAdvancements(
                     executor,
                     query.get("q"),
                     query.get("mod"),
                     query.get("status"),
-                    "true".equalsIgnoreCase(query.get("includeRecipes")),
-                    parseInt(query.get("limit"), 40)
+                    HttpQueryParser.parseBoolean(query.get("includeRecipes"), false, "includeRecipes"),
+                    HttpQueryParser.parseInt(query.get("limit"), 40, "limit"),
+                    HttpQueryParser.parseInt(query.get("offset"), 0, "offset")
                 );
                 case "/api/v1/introspect/class" -> ClassIntrospector.inspect(query.get("name"));
                 default -> null;
@@ -226,14 +227,33 @@ public final class InsightHttpServer {
                 sendJson(exchange, 404, JsonUtil.errorObject("NOT_FOUND", "Unknown endpoint: " + path), trace);
                 return;
             }
-            int status = (response.has("ok") && !response.get("ok").getAsBoolean()) ? 400 : 200;
+            trace.markKnownEndpoint();
+            int status = resolveStatusCode(response);
             sendJson(exchange, status, response, trace);
+        } catch (HttpQueryParser.QueryParseException qpe) {
+            sendJson(exchange, 400, JsonUtil.errorObject(qpe.getCode(), qpe.getMessage()), trace);
         } catch (Exception e) {
-            McInsightConstants.LOG.warn("Error handling HTTP request {}: {}", exchange.getRequestURI(), e.getMessage());
-            sendJson(exchange, 500, JsonUtil.errorObject("INTERNAL_ERROR", e.getMessage()), trace);
+            String msg = e.getMessage() != null && !e.getMessage().isBlank()
+                ? e.getMessage()
+                : e.getClass().getSimpleName();
+            McInsightConstants.LOG.warn("Error handling HTTP request {}: {}", exchange.getRequestURI(), msg);
+            sendJson(exchange, 500, JsonUtil.errorObject("INTERNAL_ERROR", msg), trace);
         } finally {
             PerfMetrics.finishRequest(trace);
         }
+    }
+
+    private static int resolveStatusCode(JsonObject response) {
+        if (!response.has("ok") || response.get("ok").getAsBoolean()) {
+            return 200;
+        }
+        String code = response.has("code") && response.get("code").isJsonPrimitive()
+            ? response.get("code").getAsString()
+            : "";
+        if ("NOT_FOUND".equals(code) || "CLASS_NOT_FOUND".equals(code)) {
+            return 404;
+        }
+        return 400;
     }
 
     private static void drainRequestBody(HttpExchange exchange) {
@@ -270,68 +290,6 @@ public final class InsightHttpServer {
         exchange.sendResponseHeaders(statusCode, bytes.length);
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
-        }
-    }
-
-    private static Map<String, String> parseQuery(String rawQuery) {
-        Map<String, String> map = new LinkedHashMap<>();
-        if (rawQuery == null || rawQuery.isBlank()) {
-            return map;
-        }
-        int len = rawQuery.length();
-        int start = 0;
-        while (start < len) {
-            int amp = rawQuery.indexOf('&', start);
-            int end = amp >= 0 ? amp : len;
-            if (end > start) {
-                int eq = rawQuery.indexOf('=', start);
-                String keyRaw;
-                String valRaw;
-                if (eq >= 0 && eq < end) {
-                    keyRaw = rawQuery.substring(start, eq);
-                    valRaw = rawQuery.substring(eq + 1, end);
-                } else {
-                    keyRaw = rawQuery.substring(start, end);
-                    valRaw = "";
-                }
-                map.put(decodeComponent(keyRaw), decodeComponent(valRaw));
-            }
-            start = end + 1;
-        }
-        return map;
-    }
-
-    private static String decodeComponent(String raw) {
-        if (raw.indexOf('%') < 0 && raw.indexOf('+') < 0) {
-            return raw;
-        }
-        return URLDecoder.decode(raw, StandardCharsets.UTF_8);
-    }
-
-    private static int parseInt(String raw, int fallback) {
-        if (raw == null || raw.isBlank()) return fallback;
-        try {
-            return Integer.parseInt(raw.trim());
-        } catch (NumberFormatException e) {
-            return fallback;
-        }
-    }
-
-    private static double parseDouble(String raw, double fallback) {
-        if (raw == null || raw.isBlank()) return fallback;
-        try {
-            return Double.parseDouble(raw.trim());
-        } catch (NumberFormatException e) {
-            return fallback;
-        }
-    }
-
-    private static Double parseNullableDouble(String raw) {
-        if (raw == null || raw.isBlank()) return null;
-        try {
-            return Double.parseDouble(raw.trim());
-        } catch (NumberFormatException e) {
-            return null;
         }
     }
 }

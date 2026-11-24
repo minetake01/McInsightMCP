@@ -53,19 +53,26 @@ public final class McInsightConfig {
 
     private void sanitize() {
         if (port < 1024 || port > 65535) {
+            McInsightConstants.LOG.warn("Config 'port' ({}) out of range 1024..65535; resetting to {}.", port, DEFAULT_PORT);
             port = DEFAULT_PORT;
         }
         if (portRangeSize < 1 || portRangeSize > 50) {
-            portRangeSize = 20;
+            int clamped = Math.min(Math.max(portRangeSize, 1), 50);
+            McInsightConstants.LOG.warn("Config 'portRangeSize' ({}) out of range 1..50; resetting to 20.", portRangeSize);
+            portRangeSize = clamped == portRangeSize ? 20 : 20;
         }
         if (authToken == null) {
             authToken = "";
         }
         if (maxScanRadius < 1 || maxScanRadius > HARD_MAX_SCAN_RADIUS) {
-            maxScanRadius = Math.min(Math.max(maxScanRadius, 1), HARD_MAX_SCAN_RADIUS);
+            int clamped = Math.min(Math.max(maxScanRadius, 1), HARD_MAX_SCAN_RADIUS);
+            McInsightConstants.LOG.warn("Config 'maxScanRadius' ({}) out of range 1..{}; clamping to {}.", maxScanRadius, HARD_MAX_SCAN_RADIUS, clamped);
+            maxScanRadius = clamped;
         }
         if (maxRecipeResults < 1 || maxRecipeResults > HARD_MAX_RECIPE_RESULTS) {
-            maxRecipeResults = Math.min(Math.max(maxRecipeResults, 1), HARD_MAX_RECIPE_RESULTS);
+            int clamped = Math.min(Math.max(maxRecipeResults, 1), HARD_MAX_RECIPE_RESULTS);
+            McInsightConstants.LOG.warn("Config 'maxRecipeResults' ({}) out of range 1..{}; clamping to {}.", maxRecipeResults, HARD_MAX_RECIPE_RESULTS, clamped);
+            maxRecipeResults = clamped;
         }
     }
 }

@@ -4,10 +4,13 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import net.minetake.mcinsight.McInsightConstants;
+import net.minetake.mcinsight.client.ClientStateAccessor;
 import net.minetake.mcinsight.platform.Services;
 import net.minetake.mcinsight.server.JsonUtil;
 import net.minetake.mcinsight.server.MainThreadExecutor;
 import net.minetake.mcinsight.server.PerfMetrics;
+import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
@@ -21,7 +24,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 import net.minecraft.resources.ResourceLocation;
@@ -30,8 +32,10 @@ import net.minecraft.server.packs.resources.ResourceManager;
 
 public final class ResourceGuideCollector {
 
-    private static final int MAX_PAGE_BYTES = 131072;
+    private static final int MAX_PAGE_CHARS = 131_072;
+    private static final int MAX_LANG_CHARS = 8 * 1024 * 1024;
     private static final int MAX_CACHED_PAGES = 256;
+    private static final int MAX_CACHED_LANG_FILES = 256;
     private static final String[] GUIDE_LANG_KEY_MARKERS = {
         ".ponder.", "tooltip", "guide", "jei.", "jei_", "book", "desc", "page",
         "lore", ".info", ".entry", ".manual", ".ritual", ".glyph", ".familiar",
@@ -72,29 +76,41 @@ public final class ResourceGuideCollector {
         String langCodeLower
     ) {}
 
-    private record LangEntry(String key, String keyLower, String value, String valueLower) {}
+    public record LangEntry(String key, String keyLower, String value, String valueLower) {}
+
+    private static <V> Map<String, V> newLruCache(int maxSize) {
+        return Collections.synchronizedMap(new LinkedHashMap<>(64, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<String, V> eldest) {
+                return size() > maxSize;
+            }
+        });
+    }
 
     private static final class GuideIndex {
         final long resourceGeneration;
         final long dataGeneration;
+        final String activeClientLang;
         final ResourceManager assetRm;
         final ResourceManager dataRm;
         final List<GuideEntry> entries;
         final Map<String, GuideEntry> byId;
-        final ConcurrentHashMap<String, String> contentCache = new ConcurrentHashMap<>();
-        final ConcurrentHashMap<String, String> contentLowerCache = new ConcurrentHashMap<>();
-        final ConcurrentHashMap<String, List<LangEntry>> langCache = new ConcurrentHashMap<>();
-        final ConcurrentHashMap<String, List<LangEntry>> allLangCache = new ConcurrentHashMap<>();
+        final Map<String, String> contentCache = newLruCache(MAX_CACHED_PAGES);
+        final Map<String, String> contentLowerCache = newLruCache(MAX_CACHED_PAGES);
+        final Map<String, List<LangEntry>> langCache = newLruCache(MAX_CACHED_LANG_FILES);
+        final Map<String, List<LangEntry>> allLangCache = newLruCache(MAX_CACHED_LANG_FILES);
 
         GuideIndex(
             long resourceGeneration,
             long dataGeneration,
+            String activeClientLang,
             ResourceManager assetRm,
             ResourceManager dataRm,
             List<GuideEntry> entries
         ) {
             this.resourceGeneration = resourceGeneration;
             this.dataGeneration = dataGeneration;
+            this.activeClientLang = activeClientLang;
             this.assetRm = assetRm;
             this.dataRm = dataRm;
             this.entries = entries;
@@ -106,13 +122,16 @@ public final class ResourceGuideCollector {
         }
 
         String getContent(GuideEntry entry) {
-            String cached = contentCache.get(entry.id());
-            if (cached != null) {
-                return cached;
+            boolean isLang = "lang".equals(entry.source());
+            if (!isLang) {
+                String cached = contentCache.get(entry.id());
+                if (cached != null) {
+                    return cached;
+                }
             }
-            String loaded = readEntryContent(assetRm, dataRm, entry);
-            if (loaded != null && contentCache.size() < MAX_CACHED_PAGES) {
-                contentCache.putIfAbsent(entry.id(), loaded);
+            String loaded = readEntryContent(assetRm, dataRm, entry, isLang ? MAX_LANG_CHARS : MAX_PAGE_CHARS);
+            if (!isLang && loaded != null) {
+                contentCache.put(entry.id(), loaded);
             }
             return loaded;
         }
@@ -123,14 +142,12 @@ public final class ResourceGuideCollector {
                 return cached;
             }
             String lower = content.toLowerCase(Locale.ROOT);
-            if (contentLowerCache.size() < MAX_CACHED_PAGES) {
-                contentLowerCache.putIfAbsent(entry.id(), lower);
-            }
+            contentLowerCache.put(entry.id(), lower);
             return lower;
         }
 
         List<LangEntry> getLangEntries(GuideEntry ge, boolean includeAll) {
-            ConcurrentHashMap<String, List<LangEntry>> targetCache = includeAll ? allLangCache : langCache;
+            Map<String, List<LangEntry>> targetCache = includeAll ? allLangCache : langCache;
             List<LangEntry> cached = targetCache.get(ge.id());
             if (cached != null) {
                 return cached;
@@ -140,12 +157,12 @@ public final class ResourceGuideCollector {
                 return List.of();
             }
             List<LangEntry> parsed = parseLangEntries(content, includeAll);
-            targetCache.putIfAbsent(ge.id(), parsed);
+            targetCache.put(ge.id(), parsed);
             return parsed;
         }
     }
 
-    private record ManagerPair(ResourceManager assetRm, ResourceManager dataRm) {}
+    private record ManagerPair(ResourceManager assetRm, ResourceManager dataRm, String activeLang) {}
 
     private static GuideIndex getOrBuildIndex(MainThreadExecutor executor) throws Exception {
         long resGen = InsightCacheManager.getResourceGeneration();
@@ -165,21 +182,33 @@ public final class ResourceGuideCollector {
                 return existing;
             }
 
-            // Step 1: Tiny main-thread hop only to grab ResourceManager references
+            // Step 1: Tiny main-thread hop only to grab ResourceManager references & active language
             ManagerPair rms = executor.supplyOnGameThread(
-                () -> new ManagerPair(
-                    GameStateSupport.getAssetResourceManager(executor),
-                    GameStateSupport.getDataResourceManager(executor)
-                ),
+                () -> {
+                    String lang = Services.PLATFORM.isClientSide()
+                        ? ClientStateAccessor.getLanguageCode()
+                        : "en_us";
+                    String normLang = (lang == null || lang.isBlank())
+                        ? "en_us"
+                        : lang.trim().toLowerCase(Locale.ROOT);
+                    return new ManagerPair(
+                        GameStateSupport.getAssetResourceManager(executor),
+                        GameStateSupport.getDataResourceManager(executor),
+                        normLang
+                    );
+                },
                 10000
             );
-            if (rms == null || (rms.assetRm() == null && rms.dataRm() == null)) {
+
+            Path questsDir = Services.PLATFORM.getConfigDir().resolve("ftbquests").resolve("quests");
+            boolean hasQuestsDir = Files.isDirectory(questsDir);
+            if (rms == null || (rms.assetRm() == null && rms.dataRm() == null && !hasQuestsDir)) {
                 return null;
             }
 
             // Step 2: Off-thread resource & FTB Quests directory indexing
-            List<GuideEntry> entries = collectGuideEntries(rms.assetRm(), rms.dataRm());
-            GuideIndex built = new GuideIndex(resGen, dataGen, rms.assetRm(), rms.dataRm(), entries);
+            List<GuideEntry> entries = collectGuideEntries(rms.assetRm(), rms.dataRm(), questsDir);
+            GuideIndex built = new GuideIndex(resGen, dataGen, rms.activeLang(), rms.assetRm(), rms.dataRm(), entries);
             INDEX_REF.set(built);
             return built;
         }
@@ -188,10 +217,16 @@ public final class ResourceGuideCollector {
     public static JsonObject listGuides(
         MainThreadExecutor executor,
         String sourceFilter,
-        String modFilter
+        String modFilter,
+        int limit,
+        int offset
     ) throws Exception {
-        String normSource = sourceFilter == null ? "all" : sourceFilter.trim().toLowerCase(Locale.ROOT);
+        String normSource = (sourceFilter == null || sourceFilter.isBlank())
+            ? "all"
+            : sourceFilter.trim().toLowerCase(Locale.ROOT);
         String normMod = modFilter == null ? "" : modFilter.trim().toLowerCase(Locale.ROOT);
+        int clampedLimit = Math.max(1, Math.min(limit, 500));
+        int clampedOffset = Math.max(0, offset);
 
         GuideIndex index = getOrBuildIndex(executor);
         if (index == null) {
@@ -199,20 +234,27 @@ public final class ResourceGuideCollector {
         }
 
         JsonArray arr = new JsonArray();
+        int totalMatched = 0;
         for (GuideEntry ge : index.entries) {
             if (!"all".equals(normSource) && !ge.source().equals(normSource)) continue;
             if (!normMod.isEmpty() && !ge.modIdLower().equals(normMod)) continue;
-            JsonObject obj = new JsonObject();
-            obj.addProperty("id", ge.id());
-            obj.addProperty("source", ge.source());
-            obj.addProperty("modId", ge.modId());
-            obj.addProperty("path", ge.displayPath());
-            arr.add(obj);
+            if (totalMatched >= clampedOffset && arr.size() < clampedLimit) {
+                JsonObject obj = new JsonObject();
+                obj.addProperty("id", ge.id());
+                obj.addProperty("source", ge.source());
+                obj.addProperty("modId", ge.modId());
+                obj.addProperty("path", ge.displayPath());
+                arr.add(obj);
+            }
+            totalMatched++;
         }
 
         JsonObject out = new JsonObject();
         out.addProperty("ok", true);
+        out.addProperty("offset", clampedOffset);
+        out.addProperty("total", totalMatched);
         out.addProperty("count", arr.size());
+        out.addProperty("hasMore", totalMatched > clampedOffset + arr.size());
         out.add("guides", arr);
         return out;
     }
@@ -221,9 +263,11 @@ public final class ResourceGuideCollector {
         MainThreadExecutor executor,
         String query,
         String sourceFilter,
+        String modFilter,
         String lang,
         boolean includeAllLang,
-        int limit
+        int limit,
+        int offset
     ) throws Exception {
         String normQ = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
         if (normQ.isEmpty()) {
@@ -232,40 +276,47 @@ public final class ResourceGuideCollector {
         String normSource = (sourceFilter == null || sourceFilter.isBlank())
             ? "all"
             : sourceFilter.trim().toLowerCase(Locale.ROOT);
-        String normLang = (lang == null || lang.isBlank()) ? "ja_jp" : lang.trim().toLowerCase(Locale.ROOT);
+        String normMod = modFilter == null ? "" : modFilter.trim().toLowerCase(Locale.ROOT);
+        boolean langExplicit = lang != null && !lang.isBlank();
         int clampedLimit = Math.max(1, Math.min(limit, 50));
+        int clampedOffset = Math.max(0, offset);
 
         GuideIndex index = getOrBuildIndex(executor);
         if (index == null) {
             return JsonUtil.errorObject("NO_RESOURCES", "ResourceManager is not available.");
         }
 
+        String targetLang = langExplicit ? lang.trim().toLowerCase(Locale.ROOT) : index.activeClientLang;
+
         JsonArray hits = new JsonArray();
+        int totalMatched = 0;
+
         for (GuideEntry ge : index.entries) {
-            if (hits.size() >= clampedLimit) {
-                break;
-            }
             if (!"all".equals(normSource) && !ge.source().equals(normSource)) {
                 continue;
             }
+            if (!normMod.isEmpty() && !ge.modIdLower().equals(normMod)) {
+                continue;
+            }
             if ("lang".equals(ge.source())) {
-                if (!"all".equals(normLang)
-                    && !normLang.equals(ge.langCodeLower())
-                    && !"en_us".equals(ge.langCodeLower())) {
+                if (!matchesLangCode(ge.langCodeLower(), targetLang, langExplicit)) {
                     continue;
                 }
                 List<LangEntry> langEntries = index.getLangEntries(ge, includeAllLang);
                 for (LangEntry le : langEntries) {
-                    if (hits.size() >= clampedLimit) break;
                     if (le.valueLower().contains(normQ) || le.keyLower().contains(normQ)) {
-                        JsonObject hit = new JsonObject();
-                        hit.addProperty("id", ge.id());
-                        hit.addProperty("source", "lang");
-                        hit.addProperty("modId", ge.modId());
-                        hit.addProperty("key", le.key());
-                        String v = le.value();
-                        hit.addProperty("snippet", v.length() > 300 ? v.substring(0, 300) + "..." : v);
-                        hits.add(hit);
+                        if (totalMatched >= clampedOffset && hits.size() < clampedLimit) {
+                            JsonObject hit = new JsonObject();
+                            hit.addProperty("id", ge.id());
+                            hit.addProperty("source", "lang");
+                            hit.addProperty("modId", ge.modId());
+                            hit.addProperty("lang", ge.langCodeLower());
+                            hit.addProperty("key", le.key());
+                            String v = le.value();
+                            hit.addProperty("snippet", v.length() > 300 ? v.substring(0, 300) + "..." : v);
+                            hits.add(hit);
+                        }
+                        totalMatched++;
                     }
                 }
             } else {
@@ -274,12 +325,15 @@ public final class ResourceGuideCollector {
                 String lower = index.getContentLower(ge, content);
                 int idx = lower.indexOf(normQ);
                 if (idx >= 0 || ge.idLower().contains(normQ)) {
-                    JsonObject hit = new JsonObject();
-                    hit.addProperty("id", ge.id());
-                    hit.addProperty("source", ge.source());
-                    hit.addProperty("modId", ge.modId());
-                    hit.addProperty("snippet", idx >= 0 ? extractSnippet(content, idx, 240) : ge.displayPath());
-                    hits.add(hit);
+                    if (totalMatched >= clampedOffset && hits.size() < clampedLimit) {
+                        JsonObject hit = new JsonObject();
+                        hit.addProperty("id", ge.id());
+                        hit.addProperty("source", ge.source());
+                        hit.addProperty("modId", ge.modId());
+                        hit.addProperty("snippet", idx >= 0 ? extractSnippet(content, idx, 240) : ge.displayPath());
+                        hits.add(hit);
+                    }
+                    totalMatched++;
                 }
             }
         }
@@ -287,9 +341,24 @@ public final class ResourceGuideCollector {
         JsonObject out = new JsonObject();
         out.addProperty("ok", true);
         out.addProperty("query", query);
+        out.addProperty("lang", targetLang);
+        out.addProperty("offset", clampedOffset);
+        out.addProperty("total", totalMatched);
         out.addProperty("count", hits.size());
+        out.addProperty("hasMore", totalMatched > clampedOffset + hits.size());
         out.add("hits", hits);
         return out;
+    }
+
+    public static boolean matchesLangCode(String entryLangLower, String targetLangLower, boolean langExplicit) {
+        if ("all".equals(targetLangLower)) {
+            return true;
+        }
+        if (targetLangLower.equals(entryLangLower)) {
+            return true;
+        }
+        // When using the auto-detected client language, also include en_us as universal fallback
+        return !langExplicit && "en_us".equals(entryLangLower);
     }
 
     public static JsonObject getGuidePage(MainThreadExecutor executor, String guideId) throws Exception {
@@ -317,15 +386,21 @@ public final class ResourceGuideCollector {
         return out;
     }
 
-    private static List<GuideEntry> collectGuideEntries(ResourceManager assetRm, ResourceManager dataRm) {
-        Map<String, GuideEntry> map = new LinkedHashMap<>();
+    private static List<GuideEntry> collectGuideEntries(
+        ResourceManager assetRm,
+        ResourceManager dataRm,
+        Path questsDir
+    ) {
+        // Place structured guide sources first so large lang files cannot starve guidebooks
+        Map<String, GuideEntry> guidesMap = new LinkedHashMap<>();
+        Map<String, GuideEntry> langMap = new LinkedHashMap<>();
 
         if (assetRm != null) {
-            scanPrefix(assetRm, ManagerKind.ASSET, "patchouli_books", "patchouli", map);
-            scanPrefix(assetRm, ManagerKind.ASSET, "ae2guide", "guideme", map);
-            scanPrefix(assetRm, ManagerKind.ASSET, "guides", "guideme", map);
-            scanPrefix(assetRm, ManagerKind.ASSET, "books", "oracle", map);
-            scanPrefix(assetRm, ManagerKind.ASSET, "ponder", "ponder", map);
+            scanPrefix(assetRm, ManagerKind.ASSET, "patchouli_books", "patchouli", guidesMap);
+            scanPrefix(assetRm, ManagerKind.ASSET, "ae2guide", "guideme", guidesMap);
+            scanPrefix(assetRm, ManagerKind.ASSET, "guides", "guideme", guidesMap);
+            scanPrefix(assetRm, ManagerKind.ASSET, "books", "oracle", guidesMap);
+            scanPrefix(assetRm, ManagerKind.ASSET, "ponder", "ponder", guidesMap);
 
             assetRm.listResources("lang", path -> path.getPath().endsWith(".json")).forEach((rl, res) -> {
                 String p = rl.getPath().toLowerCase(Locale.ROOT);
@@ -334,7 +409,7 @@ public final class ResourceGuideCollector {
                     langCode = p.substring(5, p.length() - 5);
                 }
                 String id = "lang:" + rl;
-                map.putIfAbsent(id, new GuideEntry(
+                langMap.putIfAbsent(id, new GuideEntry(
                     id,
                     id.toLowerCase(Locale.ROOT),
                     "lang",
@@ -350,22 +425,21 @@ public final class ResourceGuideCollector {
         }
 
         if (dataRm != null) {
-            scanPrefix(dataRm, ManagerKind.DATA, "patchouli_books", "patchouli", map);
-            scanPrefix(dataRm, ManagerKind.DATA, "ae2guide", "guideme", map);
-            scanPrefix(dataRm, ManagerKind.DATA, "guides", "guideme", map);
-            scanPrefix(dataRm, ManagerKind.DATA, "books", "oracle", map);
-            scanPrefix(dataRm, ManagerKind.DATA, "ponder", "ponder", map);
+            scanPrefix(dataRm, ManagerKind.DATA, "patchouli_books", "patchouli", guidesMap);
+            scanPrefix(dataRm, ManagerKind.DATA, "ae2guide", "guideme", guidesMap);
+            scanPrefix(dataRm, ManagerKind.DATA, "guides", "guideme", guidesMap);
+            scanPrefix(dataRm, ManagerKind.DATA, "books", "oracle", guidesMap);
+            scanPrefix(dataRm, ManagerKind.DATA, "ponder", "ponder", guidesMap);
         }
 
-        Path questsDir = Services.PLATFORM.getGameDir().resolve("config").resolve("ftbquests").resolve("quests");
-        if (Files.isDirectory(questsDir)) {
-            try (Stream<Path> walk = Files.walk(questsDir, 4)) {
+        if (questsDir != null && Files.isDirectory(questsDir)) {
+            try (Stream<Path> walk = Files.walk(questsDir, 10)) {
                 walk.filter(Files::isRegularFile)
                     .filter(p -> p.getFileName().toString().endsWith(".snbt"))
                     .forEach(p -> {
                         String rel = questsDir.relativize(p).toString().replace('\\', '/');
                         String id = "ftbquests:" + rel;
-                        map.putIfAbsent(id, new GuideEntry(
+                        guidesMap.putIfAbsent(id, new GuideEntry(
                             id,
                             id.toLowerCase(Locale.ROOT),
                             "ftbquests",
@@ -378,10 +452,15 @@ public final class ResourceGuideCollector {
                             null
                         ));
                     });
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                McInsightConstants.LOG.warn("Failed scanning FTB Quests directory {}: {}", questsDir, e.getMessage());
+            }
         }
 
-        return List.copyOf(map.values());
+        List<GuideEntry> ordered = new ArrayList<>(guidesMap.size() + langMap.size());
+        ordered.addAll(guidesMap.values());
+        ordered.addAll(langMap.values());
+        return List.copyOf(ordered);
     }
 
     private static void scanPrefix(
@@ -412,12 +491,33 @@ public final class ResourceGuideCollector {
         });
     }
 
-    private static String readEntryContent(ResourceManager assetRm, ResourceManager dataRm, GuideEntry entry) {
+    private static String readCharsBounded(BufferedReader reader, int maxChars, String label) throws Exception {
+        StringBuilder sb = new StringBuilder(4096);
+        char[] buf = new char[8192];
+        int remaining = maxChars;
+        while (remaining > 0) {
+            int n = reader.read(buf, 0, Math.min(buf.length, remaining));
+            if (n <= 0) break;
+            sb.append(buf, 0, n);
+            remaining -= n;
+        }
+        if (remaining == 0 && reader.read() != -1) {
+            McInsightConstants.LOG.warn("Guide/lang resource '{}' exceeded {} char limit and was truncated.", label, maxChars);
+        }
+        return sb.toString();
+    }
+
+    private static String readEntryContent(
+        ResourceManager assetRm,
+        ResourceManager dataRm,
+        GuideEntry entry,
+        int maxChars
+    ) {
         try {
             if (entry.managerKind() == ManagerKind.FILE && entry.fsPath() != null) {
-                byte[] bytes = Files.readAllBytes(entry.fsPath());
-                int len = Math.min(bytes.length, MAX_PAGE_BYTES);
-                return new String(bytes, 0, len, StandardCharsets.UTF_8);
+                try (BufferedReader reader = Files.newBufferedReader(entry.fsPath(), StandardCharsets.UTF_8)) {
+                    return readCharsBounded(reader, maxChars, entry.id());
+                }
             }
             ResourceManager targetRm = entry.managerKind() == ManagerKind.DATA ? dataRm : assetRm;
             if (targetRm != null && entry.rl() != null) {
@@ -425,18 +525,13 @@ public final class ResourceGuideCollector {
                 if (opt.isEmpty()) return null;
                 Resource res = opt.get();
                 try (InputStream is = res.open();
-                     InputStreamReader reader = new InputStreamReader(is, StandardCharsets.UTF_8)) {
-                    char[] buf = new char[MAX_PAGE_BYTES];
-                    int total = 0;
-                    while (total < buf.length) {
-                        int n = reader.read(buf, total, buf.length - total);
-                        if (n <= 0) break;
-                        total += n;
-                    }
-                    return total > 0 ? new String(buf, 0, total) : "";
+                     BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
+                    return readCharsBounded(reader, maxChars, entry.id());
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            McInsightConstants.LOG.warn("Failed reading guide entry '{}': {}", entry.id(), e.getMessage());
+        }
         return null;
     }
 
@@ -470,7 +565,10 @@ public final class ResourceGuideCollector {
         return false;
     }
 
-    private static List<LangEntry> parseLangEntries(String content, boolean includeAll) {
+    public static List<LangEntry> parseLangEntries(String content, boolean includeAll) {
+        if (content == null || content.isBlank()) {
+            return List.of();
+        }
         try {
             JsonElement parsed = JsonParser.parseString(content);
             if (!parsed.isJsonObject()) return List.of();
@@ -492,7 +590,8 @@ public final class ResourceGuideCollector {
                 ));
             }
             return List.copyOf(list);
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            McInsightConstants.LOG.warn("Failed to parse lang JSON ({} chars): {}", content.length(), e.getMessage());
             return List.of();
         }
     }

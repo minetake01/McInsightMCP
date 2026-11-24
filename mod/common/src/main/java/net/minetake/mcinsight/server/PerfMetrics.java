@@ -19,10 +19,15 @@ public final class PerfMetrics {
         final long startNs;
         long mainThreadNs;
         boolean cacheHit;
+        boolean knownEndpoint;
 
         RequestTrace(String endpoint, long startNs) {
             this.endpoint = endpoint;
             this.startNs = startNs;
+        }
+
+        public void markKnownEndpoint() {
+            this.knownEndpoint = true;
         }
 
         public long getMainThreadUs() {
@@ -96,8 +101,10 @@ public final class PerfMetrics {
             return 0L;
         }
         long totalElapsedNs = Math.max(0L, System.nanoTime() - trace.startNs);
-        EndpointStats stats = STATS.computeIfAbsent(trace.endpoint, k -> new EndpointStats());
-        stats.record(totalElapsedNs, trace.mainThreadNs, trace.cacheHit);
+        if (trace.knownEndpoint) {
+            EndpointStats stats = STATS.computeIfAbsent(trace.endpoint, k -> new EndpointStats());
+            stats.record(totalElapsedNs, trace.mainThreadNs, trace.cacheHit);
+        }
         return totalElapsedNs;
     }
 

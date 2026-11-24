@@ -162,10 +162,21 @@ public final class JsonUtil {
     }
 
     public static JsonElement snapshotObject(Object obj, int maxDepth) {
-        return snapshotObject(obj, maxDepth, new IdentityHashMap<>());
+        return snapshotObject(obj, maxDepth, null);
     }
 
-    private static JsonElement snapshotObject(Object obj, int depth, Map<Object, Boolean> visited) {
+    public static JsonElement snapshotObject(Object obj, int maxDepth, RegistryOps<JsonElement> ops) {
+        int[] budget = new int[]{512};
+        return snapshotObject(obj, maxDepth, ops, new IdentityHashMap<>(), budget);
+    }
+
+    private static JsonElement snapshotObject(
+        Object obj,
+        int depth,
+        RegistryOps<JsonElement> ops,
+        Map<Object, Boolean> visited,
+        int[] budget
+    ) {
         if (obj == null) {
             return JsonNull.INSTANCE;
         }
@@ -174,6 +185,12 @@ public final class JsonUtil {
         }
         if (obj instanceof Boolean b) {
             return new JsonPrimitive(b);
+        }
+        if (obj instanceof Double d) {
+            return Double.isFinite(d) ? new JsonPrimitive(d) : new JsonPrimitive(Double.toString(d));
+        }
+        if (obj instanceof Float f) {
+            return Float.isFinite(f) ? new JsonPrimitive(f) : new JsonPrimitive(Float.toString(f));
         }
         if (obj instanceof Number n) {
             return new JsonPrimitive(n);
@@ -197,7 +214,7 @@ public final class JsonUtil {
             return new JsonPrimitive("#" + tag.location());
         }
         if (obj instanceof ItemStack stack) {
-            return serializeItemStack(stack, (RegistryOps<JsonElement>) null);
+            return serializeItemStack(stack, ops);
         }
         if (obj instanceof Block block) {
             return new JsonPrimitive(BuiltInRegistries.BLOCK.getKey(block).toString());
@@ -209,7 +226,7 @@ public final class JsonUtil {
             return new JsonPrimitive(BuiltInRegistries.FLUID.getKey(fluid).toString());
         }
         if (obj instanceof Optional<?> opt) {
-            return opt.isPresent() ? snapshotObject(opt.get(), depth, visited) : JsonNull.INSTANCE;
+            return opt.isPresent() ? snapshotObject(opt.get(), depth, ops, visited, budget) : JsonNull.INSTANCE;
         }
         if (obj instanceof Level || obj instanceof Class<?> || obj instanceof ClassLoader) {
             return new JsonPrimitive("<" + obj.getClass().getSimpleName() + ">");
@@ -217,16 +234,24 @@ public final class JsonUtil {
         if (depth <= 0) {
             return new JsonPrimitive("<maxDepth:" + obj.getClass().getSimpleName() + ">");
         }
+        if (budget[0] <= 0) {
+            return new JsonPrimitive("<budgetExceeded:" + obj.getClass().getSimpleName() + ">");
+        }
         if (visited.containsKey(obj)) {
             return new JsonPrimitive("<cyclic:" + obj.getClass().getSimpleName() + ">");
         }
+        budget[0]--;
         visited.put(obj, Boolean.TRUE);
         try {
             if (obj.getClass().isArray()) {
                 JsonArray arr = new JsonArray();
-                int len = Math.min(Array.getLength(obj), MAX_COLLECTION_ELEMENTS);
+                int total = Array.getLength(obj);
+                int len = Math.min(total, MAX_COLLECTION_ELEMENTS);
                 for (int i = 0; i < len; i++) {
-                    arr.add(snapshotObject(Array.get(obj, i), depth - 1, visited));
+                    arr.add(snapshotObject(Array.get(obj, i), depth - 1, ops, visited, budget));
+                }
+                if (total > MAX_COLLECTION_ELEMENTS) {
+                    arr.add("<truncated:" + (total - MAX_COLLECTION_ELEMENTS) + "_more>");
                 }
                 return arr;
             }
@@ -234,8 +259,12 @@ public final class JsonUtil {
                 JsonArray arr = new JsonArray();
                 int count = 0;
                 for (Object item : col) {
-                    if (count++ >= MAX_COLLECTION_ELEMENTS) break;
-                    arr.add(snapshotObject(item, depth - 1, visited));
+                    if (count >= MAX_COLLECTION_ELEMENTS) {
+                        arr.add("<truncated:" + (col.size() - MAX_COLLECTION_ELEMENTS) + "_more>");
+                        break;
+                    }
+                    arr.add(snapshotObject(item, depth - 1, ops, visited, budget));
+                    count++;
                 }
                 return arr;
             }
@@ -243,8 +272,11 @@ public final class JsonUtil {
                 JsonObject out = new JsonObject();
                 int count = 0;
                 for (Map.Entry<?, ?> entry : map.entrySet()) {
-                    if (count++ >= MAX_FIELDS_PER_OBJECT) break;
-                    out.add(String.valueOf(entry.getKey()), snapshotObject(entry.getValue(), depth - 1, visited));
+                    if (count++ >= MAX_FIELDS_PER_OBJECT) {
+                        out.addProperty("_truncated", true);
+                        break;
+                    }
+                    out.add(String.valueOf(entry.getKey()), snapshotObject(entry.getValue(), depth - 1, ops, visited, budget));
                 }
                 return out;
             }
@@ -256,7 +288,7 @@ public final class JsonUtil {
                 try {
                     Object val = f.get(obj);
                     if (val != null) {
-                        out.add(f.getName(), snapshotObject(val, depth - 1, visited));
+                        out.add(f.getName(), snapshotObject(val, depth - 1, ops, visited, budget));
                     }
                 } catch (Exception ignored) {
                     // Skip field safely.

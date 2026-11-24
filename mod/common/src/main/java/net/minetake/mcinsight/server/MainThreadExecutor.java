@@ -5,6 +5,7 @@ import net.minetake.mcinsight.platform.Services;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import net.minecraft.server.MinecraftServer;
@@ -24,10 +25,6 @@ public final class MainThreadExecutor {
 
     public MinecraftServer getActiveServer() {
         return activeServer.get();
-    }
-
-    public boolean hasClientExecutor() {
-        return clientExecutor.get() != null;
     }
 
     public <T> T supplyOnClientThread(Supplier<T> supplier, long timeoutMs) throws Exception {
@@ -81,22 +78,31 @@ public final class MainThreadExecutor {
 
     private <T> T supplyOnExecutor(Executor exec, Supplier<T> supplier, long timeoutMs) throws Exception {
         CompletableFuture<T> future = new CompletableFuture<>();
-        long[] elapsedHolder = new long[1];
+        AtomicLong elapsedNs = new AtomicLong(0L);
+        AtomicLong taskStartNs = new AtomicLong(0L);
         exec.execute(() -> {
             long t0 = System.nanoTime();
+            taskStartNs.set(t0);
             try {
                 T val = supplier.get();
-                elapsedHolder[0] = System.nanoTime() - t0;
+                elapsedNs.set(System.nanoTime() - t0);
                 future.complete(val);
             } catch (Throwable t) {
-                elapsedHolder[0] = System.nanoTime() - t0;
+                elapsedNs.set(System.nanoTime() - t0);
                 future.completeExceptionally(t);
             }
         });
         try {
             return future.get(timeoutMs, TimeUnit.MILLISECONDS);
         } finally {
-            PerfMetrics.recordMainThreadTime(elapsedHolder[0]);
+            long recorded = elapsedNs.get();
+            if (recorded == 0L) {
+                long started = taskStartNs.get();
+                if (started > 0L) {
+                    recorded = Math.max(0L, System.nanoTime() - started);
+                }
+            }
+            PerfMetrics.recordMainThreadTime(recorded);
         }
     }
 }

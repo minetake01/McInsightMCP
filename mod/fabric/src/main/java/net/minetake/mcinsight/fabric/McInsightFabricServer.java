@@ -11,6 +11,7 @@ public final class McInsightFabricServer implements DedicatedServerModInitialize
         McInsightCommon.init();
 
         ServerLifecycleEvents.SERVER_STARTED.register(McInsightCommon::attachServer);
+        ServerLifecycleEvents.SERVER_STOPPING.register(McInsightCommon::detachServer);
         ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
             McInsightCommon.detachServer(server);
             McInsightCommon.shutdown();

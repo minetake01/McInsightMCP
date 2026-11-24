@@ -24,7 +24,42 @@ public final class StatusCollector {
 
     private StatusCollector() {}
 
-    public static JsonObject collectStatus(MainThreadExecutor executor, int port, boolean includeMods) {
+    private record LiveStatusSnapshot(
+        boolean integratedOrDedicatedServerActive,
+        boolean isSingleplayer,
+        boolean worldLoaded,
+        String dimension,
+        String difficulty,
+        long dayTime,
+        long gameTime,
+        boolean isRaining,
+        boolean isThundering,
+        String languageCode
+    ) {}
+
+    public static JsonObject collectStatus(MainThreadExecutor executor, int port, boolean includeMods) throws Exception {
+        LiveStatusSnapshot snap = executor.supplyOnGameThread(() -> {
+            boolean hasServer = executor.getActiveServer() != null;
+            boolean singleplayer = Services.PLATFORM.isClientSide() && ClientStateAccessor.isLocalServerRunning();
+            String langCode = Services.PLATFORM.isClientSide() ? ClientStateAccessor.getLanguageCode() : "en_us";
+            Level level = GameStateSupport.getClientOrServerLevel(executor);
+            if (level == null) {
+                return new LiveStatusSnapshot(hasServer, singleplayer, false, null, null, 0L, 0L, false, false, langCode);
+            }
+            return new LiveStatusSnapshot(
+                hasServer,
+                singleplayer,
+                true,
+                level.dimension().location().toString(),
+                level.getDifficulty().getKey(),
+                level.getDayTime(),
+                level.getGameTime(),
+                level.isRaining(),
+                level.isThundering(),
+                langCode
+            );
+        }, 5000);
+
         JsonObject out = new JsonObject();
         out.addProperty("ok", true);
         out.addProperty("modId", McInsightConstants.MOD_ID);
@@ -38,23 +73,17 @@ public final class StatusCollector {
         out.addProperty("modsDir", getModsDir());
         out.addProperty("configDir", getConfigDir());
 
-        boolean hasIntegrated = executor.getActiveServer() != null;
-        out.addProperty("integratedOrDedicatedServerActive", hasIntegrated);
-        if (Services.PLATFORM.isClientSide()) {
-            out.addProperty("isSingleplayer", ClientStateAccessor.isLocalServerRunning());
-        } else {
-            out.addProperty("isSingleplayer", false);
-        }
-
-        Level level = GameStateSupport.getClientOrServerLevel(executor);
-        out.addProperty("worldLoaded", level != null);
-        if (level != null) {
-            out.addProperty("dimension", level.dimension().location().toString());
-            out.addProperty("difficulty", level.getDifficulty().getKey());
-            out.addProperty("dayTime", level.getDayTime());
-            out.addProperty("gameTime", level.getGameTime());
-            out.addProperty("isRaining", level.isRaining());
-            out.addProperty("isThundering", level.isThundering());
+        out.addProperty("integratedOrDedicatedServerActive", snap.integratedOrDedicatedServerActive());
+        out.addProperty("isSingleplayer", snap.isSingleplayer());
+        out.addProperty("worldLoaded", snap.worldLoaded());
+        out.addProperty("languageCode", snap.languageCode());
+        if (snap.worldLoaded()) {
+            out.addProperty("dimension", snap.dimension());
+            out.addProperty("difficulty", snap.difficulty());
+            out.addProperty("dayTime", snap.dayTime());
+            out.addProperty("gameTime", snap.gameTime());
+            out.addProperty("isRaining", snap.isRaining());
+            out.addProperty("isThundering", snap.isThundering());
         }
 
         JsonObject integrations = new JsonObject();
@@ -65,7 +94,6 @@ public final class StatusCollector {
         integrations.addProperty("guidemeLoaded", Services.PLATFORM.isModLoaded("guideme"));
         integrations.addProperty("ftbQuestsLoaded", Services.PLATFORM.isModLoaded("ftbquests"));
         integrations.addProperty("createLoaded", Services.PLATFORM.isModLoaded("create"));
-        integrations.addProperty("jadeLoaded", Services.PLATFORM.isModLoaded("jade"));
         out.add("integrations", integrations);
 
         out.addProperty("modCount", Services.PLATFORM.getLoadedModCount());

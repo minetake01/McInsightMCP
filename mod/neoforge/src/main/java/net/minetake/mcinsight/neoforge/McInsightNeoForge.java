@@ -2,14 +2,11 @@ package net.minetake.mcinsight.neoforge;
 
 import net.minetake.mcinsight.McInsightCommon;
 import net.minetake.mcinsight.McInsightConstants;
-import net.minecraft.client.Minecraft;
 import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
-import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 import net.neoforged.fml.loading.FMLEnvironment;
-import net.neoforged.neoforge.client.event.RegisterClientReloadListenersEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.AddReloadListenerEvent;
 import net.neoforged.neoforge.event.GameShuttingDownEvent;
@@ -24,8 +21,7 @@ public final class McInsightNeoForge {
         McInsightCommon.init();
 
         if (FMLEnvironment.dist == Dist.CLIENT) {
-            modEventBus.addListener(McInsightNeoForge::onClientSetup);
-            modEventBus.addListener(McInsightNeoForge::onRegisterClientReloadListeners);
+            McInsightNeoForgeClient.register(modEventBus);
         }
 
         NeoForge.EVENT_BUS.addListener(McInsightNeoForge::onAddReloadListeners);
@@ -33,14 +29,6 @@ public final class McInsightNeoForge {
         NeoForge.EVENT_BUS.addListener(McInsightNeoForge::onServerStarted);
         NeoForge.EVENT_BUS.addListener(McInsightNeoForge::onServerStopping);
         NeoForge.EVENT_BUS.addListener(McInsightNeoForge::onGameShuttingDown);
-    }
-
-    private static void onClientSetup(FMLClientSetupEvent event) {
-        event.enqueueWork(() -> McInsightCommon.attachClientExecutor(Minecraft.getInstance()));
-    }
-
-    private static void onRegisterClientReloadListeners(RegisterClientReloadListenersEvent event) {
-        event.registerReloadListener((ResourceManagerReloadListener) rm -> McInsightCommon.invalidateResourceCaches());
     }
 
     private static void onAddReloadListeners(AddReloadListenerEvent event) {

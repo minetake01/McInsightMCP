@@ -14,14 +14,18 @@ const GUIDES_SCHEMA = z.object({
     .optional()
     .default('all')
     .describe('Filter by guide/documentation source'),
-  modId: z.string().optional().describe('Filter by mod namespace when action=list'),
-  lang: z.string().optional().default('ja_jp').describe('Preferred language code for lang entries when action=search'),
+  modId: z.string().optional().describe('Filter by mod namespace'),
+  lang: z
+    .string()
+    .optional()
+    .describe('Preferred language code (e.g. en_us, ja_jp, or "all"). Defaults to active Minecraft client language + en_us fallback'),
   includeAllLang: z
     .boolean()
     .optional()
     .default(false)
     .describe('Include all lang entries (including short names/labels) rather than guide-length text only'),
   limit: z.number().int().min(1).max(50).optional().default(20),
+  offset: z.number().int().min(0).optional().default(0),
 });
 
 export function registerGuideTools(server: McpServer, mcClient: McHttpClient): void {
@@ -34,9 +38,9 @@ export function registerGuideTools(server: McpServer, mcClient: McHttpClient): v
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: GUIDES_SCHEMA,
     },
-    async ({ action, query, guideId, source, modId, lang, includeAllLang, limit }) => {
+    async ({ action, query, guideId, source, modId, lang, includeAllLang, limit, offset }) => {
       if (action === 'list') {
-        return jsonText(await mcClient.get('/api/v1/guides/list', { source, mod: modId }));
+        return jsonText(await mcClient.get('/api/v1/guides/list', { source, mod: modId, limit, offset }));
       }
       if (action === 'read') {
         if (!guideId || !guideId.trim()) {
@@ -51,9 +55,11 @@ export function registerGuideTools(server: McpServer, mcClient: McHttpClient): v
         await mcClient.get('/api/v1/guides/search', {
           q: query,
           source,
+          mod: modId,
           lang,
           includeAllLang,
           limit,
+          offset,
         }),
       );
     },
