@@ -48,7 +48,7 @@ Please read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before making structura
 When bumping the release version, keep all four version declarations synchronized:
 
 1. `mod/gradle.properties` (`version`)
-2. `mod/common/src/main/java/dev/mcinsight/McInsightConstants.java` (`MOD_VERSION`)
+2. `mod/common/src/main/java/net/minetake/mcinsight/McInsightConstants.java` (`MOD_VERSION`)
 3. `mcp-server/package.json` (`version`)
 4. `mcp-server/src/server.ts` (`version` in `new McpServer(...)`)
 

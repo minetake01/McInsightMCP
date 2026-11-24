@@ -17,13 +17,13 @@
   "environment": "*",
   "entrypoints": {
     "client": [
-      "dev.mcinsight.fabric.McInsightFabricClient"
+      "net.minetake.mcinsight.fabric.McInsightFabricClient"
     ],
     "server": [
-      "dev.mcinsight.fabric.McInsightFabricServer"
+      "net.minetake.mcinsight.fabric.McInsightFabricServer"
     ],
     "jei_mod_plugin": [
-      "dev.mcinsight.compat.jei.JeiPluginEntrypoint"
+      "net.minetake.mcinsight.compat.jei.JeiPluginEntrypoint"
     ]
   },
   "depends": {
