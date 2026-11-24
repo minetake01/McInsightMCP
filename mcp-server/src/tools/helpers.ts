@@ -84,17 +84,33 @@ export function enrichRecipeList(
 }
 
 export async function resolveModsDir(deps: ToolPathDeps, override?: string): Promise<string> {
-  if (override) return override;
-  const live = await deps.mcClient.tryGetModsDir();
-  if (live) return live;
+  const cleanOverride = override?.trim();
+  if (cleanOverride) return cleanOverride;
+  if (deps.mcClient.hasActiveConnection() || !deps.defaultModsDir) {
+    const live = await deps.mcClient.tryGetModsDir();
+    if (live) return live;
+  }
   if (deps.defaultModsDir) return deps.defaultModsDir;
   throw new Error('Could not determine mods directory. Either start Minecraft with McInsight or pass --mods-dir / modsDir.');
 }
 
 export async function resolveGameDir(deps: ToolPathDeps, override?: string): Promise<string> {
-  if (override) return override;
-  const live = await deps.mcClient.tryGetGameDir();
-  if (live) return live;
+  const cleanOverride = override?.trim();
+  if (cleanOverride) return cleanOverride;
+  if (deps.mcClient.hasActiveConnection() || !deps.defaultGameDir) {
+    const live = await deps.mcClient.tryGetGameDir();
+    if (live) return live;
+  }
   if (deps.defaultGameDir) return deps.defaultGameDir;
   throw new Error('Could not determine game directory. Pass --game-dir or start Minecraft with McInsight.');
+}
+
+export async function tryResolveGameDir(deps: ToolPathDeps, override?: string): Promise<string | undefined> {
+  const cleanOverride = override?.trim();
+  if (cleanOverride) return cleanOverride;
+  if (deps.mcClient.hasActiveConnection() || !deps.defaultGameDir) {
+    const live = await deps.mcClient.tryGetGameDir();
+    if (live) return live;
+  }
+  return deps.defaultGameDir;
 }

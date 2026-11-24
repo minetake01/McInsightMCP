@@ -24,24 +24,41 @@ export async function startHttpServer(
   const validateOrigin = localhostOriginValidation();
 
   const httpServer = createServer(async (req, res) => {
-    const pathName = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
-
-    if (pathName === '/health' && req.method === 'GET') {
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: true, server: 'mcinsight-mcp', spec: '2026-07-28' }));
-      return;
-    }
-
-    if (pathName === '/mcp') {
-      if (!validateHost(req, res) || !validateOrigin(req, res)) {
+    try {
+      let pathName: string;
+      try {
+        pathName = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: false, error: 'Malformed request URL.' }));
         return;
       }
-      await nodeMcpHandler(req, res);
-      return;
-    }
 
-    res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ ok: false, error: `Unknown path: ${pathName}. Use /mcp or /health.` }));
+      if (pathName === '/health' && req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, server: 'mcinsight-mcp', spec: '2026-07-28' }));
+        return;
+      }
+
+      if (pathName === '/mcp') {
+        if (!validateHost(req, res) || !validateOrigin(req, res)) {
+          return;
+        }
+        await nodeMcpHandler(req, res);
+        return;
+      }
+
+      res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, error: `Unknown path: ${pathName}. Use /mcp or /health.` }));
+    } catch (err) {
+      console.error('[McInsightMCP] Unhandled HTTP request error:', err);
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: false, error: 'Internal MCP HTTP server error.' }));
+      } else {
+        res.destroy();
+      }
+    }
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -63,6 +80,7 @@ export async function startHttpServer(
     close: async () => {
       await new Promise<void>((resolve, reject) => {
         httpServer.close((err) => (err ? reject(err) : resolve()));
+        httpServer.closeIdleConnections?.();
       });
     },
   };

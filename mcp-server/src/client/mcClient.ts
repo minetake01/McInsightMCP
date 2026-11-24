@@ -41,7 +41,14 @@ export interface McStatusResponse {
   worldLoaded: boolean;
   dimension?: string;
   difficulty?: string;
-  integrations?: Record<string, boolean>;
+  dayTime?: number;
+  gameTime?: number;
+  isRaining?: boolean;
+  isThundering?: boolean;
+  languageCode?: string;
+  serverSyncAvailable?: boolean;
+  remoteServerModVersion?: string;
+  integrations?: Record<string, boolean | string[]>;
   modCount: number;
   mods?: McModInfo[];
 }
@@ -56,12 +63,14 @@ export interface McClientOptions {
 }
 
 const DEFAULT_METADATA_TTL_MS = 60_000;
+const NEGATIVE_CACHE_TTL_MS = 5_000;
 
 export class McHttpClient {
   private discoveredUrl: string | undefined;
   private probeInFlight: Promise<string> | undefined;
+  private negativeDiscoveryUntil = 0;
 
-  private cachedModVersions: { expiresAt: number; map: Map<string, string> } | undefined;
+  private cachedModVersions: { expiresAt: number; map?: Map<string, string> } | undefined;
   private modVersionsInFlight: Promise<Map<string, string> | undefined> | undefined;
 
   private cachedPaths: { expiresAt: number; modsDir?: string; gameDir?: string } | undefined;
@@ -86,11 +95,17 @@ export class McHttpClient {
   invalidateCache(): void {
     this.cachedModVersions = undefined;
     this.cachedPaths = undefined;
+    this.negativeDiscoveryUntil = 0;
+  }
+
+  hasActiveConnection(): boolean {
+    return Boolean(this.explicitUrl || this.discoveredUrl);
   }
 
   private async probeHostParallel(host: string): Promise<string | null> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 500);
+    let sawUnauthorized = false;
     const probes: Array<Promise<string>> = [];
 
     for (let port = this.portStart; port <= this.portEnd; port++) {
@@ -101,6 +116,10 @@ export class McHttpClient {
             headers: this.buildHeaders(),
             signal: controller.signal,
           });
+          if (res.status === 401) {
+            sawUnauthorized = true;
+            throw new Error('HTTP 401');
+          }
           if (!res.ok) {
             throw new Error(`HTTP ${res.status}`);
           }
@@ -118,6 +137,13 @@ export class McHttpClient {
       controller.abort();
       return winner;
     } catch {
+      if (sawUnauthorized) {
+        throw new McApiError(
+          401,
+          'UNAUTHORIZED',
+          'McInsight mod requires a valid bearer token (--token / MCINSIGHT_TOKEN).',
+        );
+      }
       return null;
     } finally {
       clearTimeout(timeoutId);
@@ -139,13 +165,10 @@ export class McHttpClient {
       const ipv4Hit = await this.probeHostParallel('127.0.0.1');
       if (ipv4Hit) {
         this.discoveredUrl = ipv4Hit;
+        this.negativeDiscoveryUntil = 0;
         return ipv4Hit;
       }
-      const ipv6Hit = await this.probeHostParallel('[::1]');
-      if (ipv6Hit) {
-        this.discoveredUrl = ipv6Hit;
-        return ipv6Hit;
-      }
+      this.negativeDiscoveryUntil = Date.now() + NEGATIVE_CACHE_TTL_MS;
       throw new McConnectionError(
         `Could not find a running McInsight mod on 127.0.0.1:${this.portStart}-${this.portEnd}. Ensure Minecraft with the McInsight mod is running (or pass --mc-url / MCINSIGHT_URL).`,
       );
@@ -190,17 +213,24 @@ export class McHttpClient {
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (err) {
-      // Clear cached port/metadata and retry discovery once if explicit URL wasn't pinned
-      if (!this.explicitUrl && this.discoveredUrl) {
+      const isTimeout = err instanceof Error && err.name === 'TimeoutError';
+      // Clear cached port/metadata and retry discovery once only for connection failures on auto-discovered URLs
+      if (!isTimeout && !this.explicitUrl && this.discoveredUrl === baseUrl) {
         this.discoveredUrl = undefined;
         this.invalidateCache();
         const freshBase = await this.probeBaseUrl();
         const retryUrl = new URL(`${freshBase}${endpoint}`);
         retryUrl.search = url.search;
-        res = await fetch(retryUrl, {
-          headers: this.buildHeaders(),
-          signal: AbortSignal.timeout(this.timeoutMs),
-        });
+        try {
+          res = await fetch(retryUrl, {
+            headers: this.buildHeaders(),
+            signal: AbortSignal.timeout(this.timeoutMs),
+          });
+        } catch (retryErr) {
+          throw new McConnectionError(
+            `Failed to connect to McInsight HTTP API at ${retryUrl.toString()}: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`,
+          );
+        }
       } else {
         throw new McConnectionError(
           `Failed to connect to McInsight HTTP API at ${url.toString()}: ${err instanceof Error ? err.message : String(err)}`,
@@ -208,7 +238,26 @@ export class McHttpClient {
       }
     }
 
-    const body = (await res.json()) as Record<string, unknown>;
+    let parsed: unknown;
+    try {
+      parsed = await res.json();
+    } catch {
+      throw new McApiError(
+        res.status,
+        'INVALID_JSON_RESPONSE',
+        `Expected JSON response from ${endpoint}, got HTTP ${res.status}`,
+      );
+    }
+
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new McApiError(
+        res.status,
+        'INVALID_JSON_RESPONSE',
+        `Expected JSON object response from ${endpoint}, got HTTP ${res.status}`,
+      );
+    }
+
+    const body = parsed as Record<string, unknown>;
     if (!res.ok || body.ok === false) {
       throw new McApiError(
         res.status,
@@ -224,6 +273,9 @@ export class McHttpClient {
     if (this.cachedPaths && this.cachedPaths.expiresAt > now) {
       return this.cachedPaths;
     }
+    if (!this.explicitUrl && !this.discoveredUrl && this.negativeDiscoveryUntil > now) {
+      return undefined;
+    }
     if (this.pathsInFlight) {
       return this.pathsInFlight;
     }
@@ -238,7 +290,13 @@ export class McHttpClient {
         };
         this.cachedPaths = entry;
         return entry;
-      } catch {
+      } catch (err) {
+        if (err instanceof McApiError && err.statusCode === 401) {
+          throw err;
+        }
+        this.cachedPaths = {
+          expiresAt: Date.now() + NEGATIVE_CACHE_TTL_MS,
+        };
         return undefined;
       }
     })();
@@ -266,6 +324,9 @@ export class McHttpClient {
     if (this.cachedModVersions && this.cachedModVersions.expiresAt > now) {
       return this.cachedModVersions.map;
     }
+    if (!this.explicitUrl && !this.discoveredUrl && this.negativeDiscoveryUntil > now) {
+      return undefined;
+    }
     if (this.modVersionsInFlight) {
       return this.modVersionsInFlight;
     }
@@ -282,7 +343,14 @@ export class McHttpClient {
           map,
         };
         return map;
-      } catch {
+      } catch (err) {
+        if (err instanceof McApiError && err.statusCode === 401) {
+          throw err;
+        }
+        this.cachedModVersions = {
+          expiresAt: Date.now() + NEGATIVE_CACHE_TTL_MS,
+          map: undefined,
+        };
         return undefined;
       }
     })();
