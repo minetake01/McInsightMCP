@@ -418,18 +418,28 @@ public final class RecipeCollector {
         int offset
     ) {
         Collection<IndexedRecipe> candidates = selectCandidates(index, normItem, normRole, normType, normMod);
+        ResourceLocation exactItemRl = (!normItem.isEmpty() && normItem.indexOf(':') > 0)
+            ? ResourceLocation.tryParse(normItem)
+            : null;
+        boolean isExactItemId = exactItemRl != null && BuiltInRegistries.ITEM.containsKey(exactItemRl);
+        String quotedNeedle = isExactItemId ? ("\"" + normItem + "\"") : "";
+
         JsonArray results = new JsonArray();
+        Set<ResourceLocation> seenIds = new HashSet<>();
         int matched = 0;
         boolean hasMore = false;
 
         for (IndexedRecipe rec : candidates) {
+            if (!seenIds.add(rec.id)) {
+                continue;
+            }
             if (!normType.isEmpty() && !rec.recipeTypeLower.equals(normType)) {
                 continue;
             }
             if (!normMod.isEmpty() && !rec.modIdLower.equals(normMod) && !rec.idNamespaceLower.equals(normMod)) {
                 continue;
             }
-            if (!normItem.isEmpty() && !matchesIndexedRecipe(index, rec, normItem, normRole)) {
+            if (!normItem.isEmpty() && !matchesIndexedRecipe(index, rec, normItem, normRole, isExactItemId, quotedNeedle)) {
                 continue;
             }
 
@@ -519,20 +529,26 @@ public final class RecipeCollector {
         RecipeIndex index,
         IndexedRecipe rec,
         String normItem,
-        String normRole
+        String normRole,
+        boolean isExactItemId,
+        String quotedNeedle
     ) {
         boolean checkOut = "any".equals(normRole) || "output".equals(normRole);
         boolean checkIn = "any".equals(normRole) || "input".equals(normRole);
 
         if (checkOut && rec.resultItemIdLower != null) {
-            if (rec.resultItemIdLower.contains(normItem) || rec.resultNameLower.contains(normItem)) {
+            if (isExactItemId
+                ? rec.resultItemIdLower.equals(normItem)
+                : (rec.resultItemIdLower.contains(normItem) || rec.resultNameLower.contains(normItem))) {
                 return true;
             }
         }
 
         if (checkIn) {
             for (int i = 0; i < rec.inputItemIdsLower.length; i++) {
-                if (rec.inputItemIdsLower[i].contains(normItem) || rec.inputNamesLower[i].contains(normItem)) {
+                if (isExactItemId
+                    ? rec.inputItemIdsLower[i].equals(normItem)
+                    : (rec.inputItemIdsLower[i].contains(normItem) || rec.inputNamesLower[i].contains(normItem))) {
                     return true;
                 }
             }
@@ -547,11 +563,12 @@ public final class RecipeCollector {
         if (rawJson == null) {
             return false;
         }
+        String fallbackNeedle = isExactItemId ? quotedNeedle : normItem;
         if ("output".equals(normRole)) {
             if (rawJson.isJsonObject()) {
                 JsonObject obj = rawJson.getAsJsonObject();
                 for (String key : OUTPUT_FALLBACK_KEYS) {
-                    if (obj.has(key) && obj.get(key).toString().toLowerCase(Locale.ROOT).contains(normItem)) {
+                    if (obj.has(key) && obj.get(key).toString().toLowerCase(Locale.ROOT).contains(fallbackNeedle)) {
                         return true;
                     }
                 }
@@ -562,13 +579,13 @@ public final class RecipeCollector {
             if (rawJson.isJsonObject()) {
                 JsonObject obj = rawJson.getAsJsonObject();
                 for (String key : INPUT_FALLBACK_KEYS) {
-                    if (obj.has(key) && obj.get(key).toString().toLowerCase(Locale.ROOT).contains(normItem)) {
+                    if (obj.has(key) && obj.get(key).toString().toLowerCase(Locale.ROOT).contains(fallbackNeedle)) {
                         return true;
                     }
                 }
             }
             return false;
         }
-        return index.getOrEncodeLowerString(rec).contains(normItem);
+        return index.getOrEncodeLowerString(rec).contains(fallbackNeedle);
     }
 }

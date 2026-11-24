@@ -101,6 +101,337 @@ export interface PackFileHit {
   snippet: string;
 }
 
+export interface DeclaredFieldCandidate {
+  jarFile: string;
+  declaringClass: string;
+  fieldName: string;
+  descriptor: string;
+  matchedLiteral: string;
+}
+
+export interface FieldReferenceHit {
+  jarFile: string;
+  className: string;
+  referencedField: string;
+  isDatagenOrMeta: boolean;
+}
+
+export interface IdTraceResult {
+  query: string;
+  declaredFields: DeclaredFieldCandidate[];
+  fieldReferences: FieldReferenceHit[];
+  directStringMatches: Array<{ jarFile: string; className: string; matchedStrings: string[] }>;
+  resourceMatches: JarContentHit[];
+  packMatches?: PackFileHit[];
+}
+
+export interface TraceIdOptions {
+  modIdOrJar?: string;
+  crossMod?: boolean;
+  gameDir?: string;
+  limit?: number;
+}
+
+interface ParsedClassInfo {
+  thisClassInternal: string;
+  thisClassDot: string;
+  stringLiterals: string[];
+  fieldRefs: Array<{ owner: string; name: string; descriptor: string }>;
+  scanClinitBindings(matchFn: (lit: string) => boolean): Array<{
+    literal: string;
+    owner: string;
+    fieldName: string;
+    descriptor: string;
+  }>;
+}
+
+const DATAGEN_OR_META_CLASS_RE = /(?:^|\.)(?:data|datagen|generator|loot|model|blockstate|tag|creativemodetab|jei|compat)/i;
+
+function getJvmOpcodeLength(code: Buffer, pc: number): number {
+  const op = code[pc]!;
+  if (op === 0xc4) {
+    // wide
+    if (pc + 1 >= code.length) return -1;
+    const sub = code[pc + 1]!;
+    return sub === 0x84 ? 6 : 4;
+  }
+  if (op === 0xaa) {
+    // tableswitch
+    const pad = (4 - ((pc + 1) % 4)) % 4;
+    const pos = pc + 1 + pad;
+    if (pos + 12 > code.length) return -1;
+    const low = code.readInt32BE(pos + 4);
+    const high = code.readInt32BE(pos + 8);
+    if (high < low || high - low > 65536) return -1;
+    return 1 + pad + 12 + (high - low + 1) * 4;
+  }
+  if (op === 0xab) {
+    // lookupswitch
+    const pad = (4 - ((pc + 1) % 4)) % 4;
+    const pos = pc + 1 + pad;
+    if (pos + 8 > code.length) return -1;
+    const npairs = code.readInt32BE(pos + 4);
+    if (npairs < 0 || npairs > 65536) return -1;
+    return 1 + pad + 8 + npairs * 8;
+  }
+  switch (op) {
+    case 0x10: // bipush
+    case 0x12: // ldc
+    case 0x15: // iload
+    case 0x16: // lload
+    case 0x17: // fload
+    case 0x18: // dload
+    case 0x19: // aload
+    case 0x36: // istore
+    case 0x37: // lstore
+    case 0x38: // fstore
+    case 0x39: // dstore
+    case 0x3a: // astore
+    case 0xa9: // ret
+    case 0xbc: // newarray
+      return 2;
+    case 0x11: // sipush
+    case 0x13: // ldc_w
+    case 0x14: // ldc2_w
+    case 0x84: // iinc
+    case 0x99:
+    case 0x9a:
+    case 0x9b:
+    case 0x9c:
+    case 0x9d:
+    case 0x9e:
+    case 0x9f:
+    case 0xa0:
+    case 0xa1:
+    case 0xa2:
+    case 0xa3:
+    case 0xa4:
+    case 0xa5:
+    case 0xa6:
+    case 0xa7: // goto
+    case 0xa8: // jsr
+    case 0xb2: // getstatic
+    case 0xb3: // putstatic
+    case 0xb4: // getfield
+    case 0xb5: // putfield
+    case 0xb6: // invokevirtual
+    case 0xb7: // invokespecial
+    case 0xb8: // invokestatic
+    case 0xbb: // new
+    case 0xbd: // anewarray
+    case 0xc0: // checkcast
+    case 0xc1: // instanceof
+    case 0xc6: // ifnull
+    case 0xc7: // ifnonnull
+      return 3;
+    case 0xc5: // multianewarray
+      return 4;
+    case 0xb9: // invokeinterface
+    case 0xba: // invokedynamic
+    case 0xc8: // goto_w
+    case 0xc9: // jsr_w
+      return 5;
+    default:
+      return 1;
+  }
+}
+
+export function inspectClassBytecode(buf: Buffer): ParsedClassInfo | null {
+  if (buf.length < 10 || buf.readUInt32BE(0) !== 0xcafebabe) {
+    return null;
+  }
+  const cpCount = buf.readUInt16BE(8);
+  const utf8Map = new Map<number, string>();
+  const classNameIndices = new Map<number, number>();
+  const stringTargetIndices = new Map<number, number>();
+  const fieldRefRaw = new Map<number, { classIdx: number; natIdx: number }>();
+  const nameAndTypeRaw = new Map<number, { nameIdx: number; descIdx: number }>();
+
+  let offset = 10;
+  for (let i = 1; i < cpCount && offset < buf.length; i++) {
+    const tag = buf[offset++]!;
+    switch (tag) {
+      case 1: {
+        if (offset + 2 > buf.length) return null;
+        const len = buf.readUInt16BE(offset);
+        offset += 2;
+        if (offset + len > buf.length) return null;
+        utf8Map.set(i, buf.subarray(offset, offset + len).toString('utf8'));
+        offset += len;
+        break;
+      }
+      case 3:
+      case 4:
+        offset += 4;
+        break;
+      case 5:
+      case 6:
+        offset += 8;
+        i++;
+        break;
+      case 7:
+        if (offset + 2 > buf.length) return null;
+        classNameIndices.set(i, buf.readUInt16BE(offset));
+        offset += 2;
+        break;
+      case 8:
+        if (offset + 2 > buf.length) return null;
+        stringTargetIndices.set(i, buf.readUInt16BE(offset));
+        offset += 2;
+        break;
+      case 9:
+        if (offset + 4 > buf.length) return null;
+        fieldRefRaw.set(i, {
+          classIdx: buf.readUInt16BE(offset),
+          natIdx: buf.readUInt16BE(offset + 2),
+        });
+        offset += 4;
+        break;
+      case 10:
+      case 11:
+      case 17:
+      case 18:
+        offset += 4;
+        break;
+      case 12:
+        if (offset + 4 > buf.length) return null;
+        nameAndTypeRaw.set(i, {
+          nameIdx: buf.readUInt16BE(offset),
+          descIdx: buf.readUInt16BE(offset + 2),
+        });
+        offset += 4;
+        break;
+      case 15:
+        offset += 3;
+        break;
+      case 16:
+      case 19:
+      case 20:
+        offset += 2;
+        break;
+      default:
+        return null;
+    }
+  }
+
+  if (offset + 8 > buf.length) {
+    return null;
+  }
+
+  const thisClassIdx = buf.readUInt16BE(offset + 2);
+  const thisClassInternal = utf8Map.get(classNameIndices.get(thisClassIdx) ?? -1) ?? '';
+  const thisClassDot = thisClassInternal.replace(/\//g, '.');
+  const afterSuperOffset = offset + 6;
+
+  const stringCpValues = new Map<number, string>();
+  const stringLiterals: string[] = [];
+  for (const [cpIdx, utfIdx] of stringTargetIndices.entries()) {
+    const val = utf8Map.get(utfIdx);
+    if (val !== undefined) {
+      stringCpValues.set(cpIdx, val);
+      stringLiterals.push(val);
+    }
+  }
+
+  const fieldRefResolved = new Map<number, { owner: string; name: string; descriptor: string }>();
+  const fieldRefs: Array<{ owner: string; name: string; descriptor: string }> = [];
+  for (const [cpIdx, raw] of fieldRefRaw.entries()) {
+    const owner = utf8Map.get(classNameIndices.get(raw.classIdx) ?? -1);
+    const nat = nameAndTypeRaw.get(raw.natIdx);
+    const name = nat ? utf8Map.get(nat.nameIdx) : undefined;
+    const descriptor = nat ? utf8Map.get(nat.descIdx) : undefined;
+    if (owner && name && descriptor) {
+      const resolved = { owner, name, descriptor };
+      fieldRefResolved.set(cpIdx, resolved);
+      fieldRefs.push(resolved);
+    }
+  }
+
+  return {
+    thisClassInternal,
+    thisClassDot,
+    stringLiterals,
+    fieldRefs,
+    scanClinitBindings(matchFn) {
+      const bindings: Array<{ literal: string; owner: string; fieldName: string; descriptor: string }> = [];
+      let pos = afterSuperOffset;
+      if (pos + 2 > buf.length) return bindings;
+      const ifaceCount = buf.readUInt16BE(pos);
+      pos += 2 + ifaceCount * 2;
+
+      if (pos + 2 > buf.length) return bindings;
+      const fieldsCount = buf.readUInt16BE(pos);
+      pos += 2;
+      for (let f = 0; f < fieldsCount; f++) {
+        if (pos + 8 > buf.length) return bindings;
+        const attrCount = buf.readUInt16BE(pos + 6);
+        pos += 8;
+        for (let a = 0; a < attrCount; a++) {
+          if (pos + 6 > buf.length) return bindings;
+          const attrLen = buf.readUInt32BE(pos + 2);
+          pos += 6 + attrLen;
+        }
+      }
+
+      if (pos + 2 > buf.length) return bindings;
+      const methodsCount = buf.readUInt16BE(pos);
+      pos += 2;
+      for (let m = 0; m < methodsCount; m++) {
+        if (pos + 8 > buf.length) return bindings;
+        const nameIdx = buf.readUInt16BE(pos + 2);
+        const attrCount = buf.readUInt16BE(pos + 6);
+        const methodName = utf8Map.get(nameIdx);
+        pos += 8;
+
+        for (let a = 0; a < attrCount; a++) {
+          if (pos + 6 > buf.length) return bindings;
+          const attrName = utf8Map.get(buf.readUInt16BE(pos));
+          const attrLen = buf.readUInt32BE(pos + 2);
+          const attrStart = pos + 6;
+          pos = attrStart + attrLen;
+
+          if (methodName === '<clinit>' && attrName === 'Code' && attrStart + 8 <= buf.length) {
+            const codeLen = buf.readUInt32BE(attrStart + 4);
+            const codeStart = attrStart + 8;
+            if (codeStart + codeLen <= buf.length) {
+              const code = buf.subarray(codeStart, codeStart + codeLen);
+              let pending: { literal: string; pc: number } | undefined;
+              let pc = 0;
+              while (pc < code.length) {
+                const op = code[pc]!;
+                const step = getJvmOpcodeLength(code, pc);
+                if (step <= 0 || pc + step > code.length) break;
+
+                if (op === 0x12 || op === 0x13) {
+                  const cpIdx = op === 0x12 ? code[pc + 1]! : code.readUInt16BE(pc + 1);
+                  const lit = stringCpValues.get(cpIdx);
+                  if (lit !== undefined) {
+                    pending = matchFn(lit) ? { literal: lit, pc } : undefined;
+                  }
+                } else if (op === 0xb3 && pending && pc - pending.pc <= 96) {
+                  const fieldIdx = code.readUInt16BE(pc + 1);
+                  const fRef = fieldRefResolved.get(fieldIdx);
+                  if (fRef && fRef.owner === thisClassInternal) {
+                    bindings.push({
+                      literal: pending.literal,
+                      owner: fRef.owner,
+                      fieldName: fRef.name,
+                      descriptor: fRef.descriptor,
+                    });
+                    pending = undefined;
+                  }
+                }
+                pc += step;
+              }
+            }
+          }
+        }
+      }
+      return bindings;
+    },
+  };
+}
+
 interface IndexedJarEntry {
   name: string;
   nameLower: string;
@@ -446,6 +777,190 @@ export class JarInspector {
 
     await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(1, targetJars.length)) }, worker));
     return hits.slice(0, limit);
+  }
+
+  async traceIdUsage(
+    modsDir: string,
+    query: string,
+    options: TraceIdOptions = {},
+  ): Promise<IdTraceResult> {
+    const trimmed = query.trim();
+    const limit = Math.max(1, Math.min(options.limit ?? 50, 200));
+    const colonIdx = trimmed.indexOf(':');
+    const namespace = colonIdx > 0 ? trimmed.slice(0, colonIdx).toLowerCase() : undefined;
+    const pathPart = colonIdx > 0 ? trimmed.slice(colonIdx + 1) : trimmed;
+    const fullLower = trimmed.toLowerCase();
+    const pathLower = pathPart.toLowerCase();
+    const matchExactLiteral = (lit: string): boolean => {
+      const l = lit.toLowerCase();
+      return l === pathLower || l === fullLower;
+    };
+
+    const index = await this.getOrBuildDirIndex(modsDir);
+    const allJars: IndexedJarFile[] = [];
+    for (const p of index.sortedJarPaths) {
+      const jar = index.jarsByPath.get(p);
+      if (jar) allJars.push(jar);
+    }
+
+    let targetJars: IndexedJarFile[];
+    if (options.modIdOrJar) {
+      const resolvedPath = await this.resolveJarPath(modsDir, options.modIdOrJar, index);
+      const jar = index.jarsByPath.get(resolvedPath);
+      targetJars = jar ? [jar] : [];
+    } else if (!options.crossMod && namespace && namespace !== 'minecraft') {
+      const modMatch = await this.findJarByModOrClass(modsDir, { modId: namespace }, index);
+      const jar = modMatch ? index.jarsByPath.get(modMatch.jarPath) : undefined;
+      targetJars = jar ? [jar] : allJars;
+    } else {
+      targetJars = allJars;
+    }
+
+    const declaredFields: DeclaredFieldCandidate[] = [];
+    const declaredFieldKeys = new Set<string>();
+    const directStringMatches: Array<{ jarFile: string; className: string; matchedStrings: string[] }> = [];
+
+    const runAcrossJars = async (jars: IndexedJarFile[], fn: (jar: IndexedJarFile) => Promise<void>) => {
+      let nextIdx = 0;
+      const concurrency = 8;
+      const worker = async () => {
+        while (true) {
+          const idx = nextIdx++;
+          if (idx >= jars.length) break;
+          await fn(jars[idx]!);
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(1, jars.length)) }, worker));
+    };
+
+    // Pass 1: Scan for static field registrations (<clinit> ldc -> putstatic) & direct string literals
+    await runAcrossJars(targetJars, async (jar) => {
+      const classEntries = jar.entries.filter((e) => e.isClass);
+      if (classEntries.length === 0) return;
+      try {
+        const buf = await fs.readFile(jar.jarPath);
+        const zip = new AdmZip(buf);
+        for (const ce of classEntries) {
+          const entry = zip.getEntry(ce.name);
+          if (!entry) continue;
+          const data = entry.getData();
+          const parsed = inspectClassBytecode(data);
+          if (!parsed) continue;
+
+          const exactMatched = parsed.stringLiterals.filter(matchExactLiteral);
+          const fullMatched =
+            colonIdx > 0
+              ? parsed.stringLiterals.filter((lit) => lit.toLowerCase().includes(fullLower))
+              : [];
+
+          if (exactMatched.length > 0) {
+            const bindings = parsed.scanClinitBindings(matchExactLiteral);
+            if (bindings.length > 0) {
+              for (const b of bindings) {
+                const key = `${b.owner}#${b.fieldName}`;
+                if (declaredFieldKeys.add(key)) {
+                  declaredFields.push({
+                    jarFile: jar.fileName,
+                    declaringClass: b.owner.replace(/\//g, '.'),
+                    fieldName: b.fieldName,
+                    descriptor: b.descriptor,
+                    matchedLiteral: b.literal,
+                  });
+                }
+              }
+              continue;
+            }
+          }
+
+          const combined = Array.from(new Set([...exactMatched, ...fullMatched]));
+          if (combined.length > 0 && directStringMatches.length < limit) {
+            directStringMatches.push({
+              jarFile: jar.fileName,
+              className: parsed.thisClassDot,
+              matchedStrings: combined.slice(0, 6),
+            });
+          }
+        }
+      } catch {
+        // Ignore unreadable JAR
+      }
+    });
+
+    // Pass 2: Find classes referencing the discovered static fields
+    const fieldReferences: FieldReferenceHit[] = [];
+    if (declaredFields.length > 0) {
+      const targetFieldByOwner = new Map<string, Set<string>>();
+      for (const df of declaredFields) {
+        const ownerInternal = df.declaringClass.replace(/\./g, '/');
+        let set = targetFieldByOwner.get(ownerInternal);
+        if (!set) {
+          set = new Set();
+          targetFieldByOwner.set(ownerInternal, set);
+        }
+        set.add(df.fieldName);
+      }
+
+      const refJars = options.crossMod ? allJars : targetJars;
+      const seenClassField = new Set<string>();
+      await runAcrossJars(refJars, async (jar) => {
+        const classEntries = jar.entries.filter((e) => e.isClass);
+        if (classEntries.length === 0) return;
+        try {
+          const buf = await fs.readFile(jar.jarPath);
+          const zip = new AdmZip(buf);
+          for (const ce of classEntries) {
+            const entry = zip.getEntry(ce.name);
+            if (!entry) continue;
+            const parsed = inspectClassBytecode(entry.getData());
+            if (!parsed) continue;
+            for (const fRef of parsed.fieldRefs) {
+              if (fRef.owner === parsed.thisClassInternal) continue;
+              const wantedFields = targetFieldByOwner.get(fRef.owner);
+              if (!wantedFields || !wantedFields.has(fRef.name)) continue;
+              const fqField = `${fRef.owner.replace(/\//g, '.')}.${fRef.name}`;
+              const dedupeKey = `${parsed.thisClassDot}->${fqField}`;
+              if (seenClassField.add(dedupeKey)) {
+                fieldReferences.push({
+                  jarFile: jar.fileName,
+                  className: parsed.thisClassDot,
+                  referencedField: fqField,
+                  isDatagenOrMeta: DATAGEN_OR_META_CLASS_RE.test(parsed.thisClassDot),
+                });
+              }
+            }
+          }
+        } catch {
+          // Ignore unreadable JAR
+        }
+      });
+
+      fieldReferences.sort((a, b) => {
+        if (a.isDatagenOrMeta !== b.isDatagenOrMeta) {
+          return a.isDatagenOrMeta ? 1 : -1;
+        }
+        return a.className.localeCompare(b.className);
+      });
+    }
+
+    // Pass 3: Search text resources (and optional pack scripts)
+    const resourceQuery = colonIdx > 0 ? fullLower : pathLower;
+    const [resourceMatches, packMatches] = await Promise.all([
+      this.searchJarContents(modsDir, resourceQuery, {
+        modIdOrJar: options.modIdOrJar ?? (targetJars.length === 1 ? targetJars[0]!.fileName : undefined),
+        includeClassStrings: false,
+        limit: Math.min(limit, 30),
+      }),
+      options.gameDir ? this.searchPackFiles(options.gameDir, fullLower, Math.min(limit, 30)) : Promise.resolve(undefined),
+    ]);
+
+    return {
+      query: trimmed,
+      declaredFields,
+      fieldReferences: fieldReferences.slice(0, limit),
+      directStringMatches: directStringMatches.slice(0, limit),
+      resourceMatches,
+      packMatches,
+    };
   }
 
   async searchPackFiles(gameDir: string, query: string, limit = 40): Promise<PackFileHit[]> {

@@ -151,5 +151,18 @@ describe('nativeParsers', () => {
     });
     expect(wgBm?.featureType).toBe('neoforge:add_spawns');
     expect(wgBm?.spawners).toMatchObject({ type: 'ars_nouveau:whirlisprig' });
+
+    const biomeSummary = parseNativeWorldgen('biome', 'minecraft:snowy_plains', {
+      temperature: 0.0,
+      downfall: 0.5,
+      has_precipitation: true,
+      temperature_modifier: 'none',
+      spawners: { monster: [{ type: 'minecraft:stray' }], ambient: [] },
+    });
+    expect(biomeSummary?.temperature).toBe(0);
+    expect(biomeSummary?.downfall).toBe(0.5);
+    expect(biomeSummary?.hasPrecipitation).toBe(true);
+    expect(biomeSummary?.temperatureModifier).toBe('none');
+    expect(biomeSummary?.spawners).toEqual({ monster: [{ type: 'minecraft:stray' }] });
   });
 });

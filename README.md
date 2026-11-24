@@ -2,20 +2,20 @@
 
 **English** | [日本語](README.ja.md)
 
-A generic, read-only **Minecraft 1.21.1** (NeoForge + Fabric) runtime introspection mod paired with an **MCP `2026-07-28`** compliant TypeScript server (stateless Streamable HTTP & stdio) designed around an **AI-first, self-extending game knowledge architecture**.
+A generic, read-only, stateless **Minecraft 1.21.1** (NeoForge + Fabric) runtime introspection mod paired with an **MCP `2026-07-28`** compliant TypeScript server (stateless Streamable HTTP & stdio) organized around agent-semantic observation tools.
 
 ---
 
 ## Design Philosophy
 
-Modded Minecraft packs combine hundreds of mods, KubeJS overrides, datapacks, multiblock structures, and custom in-world mechanics that cannot be captured by a single rigid recipe schema. McInsightMCP splits responsibility into three tiers:
+Modded Minecraft packs combine hundreds of mods, KubeJS overrides, datapacks, multiblock structures, and custom in-world mechanics that cannot be captured by a single rigid recipe schema. McInsightMCP separates runtime observation into two mechanical parser tiers plus direct primary-evidence access:
 
 1. **Tier 1 — Native Minecraft Parsers (`src/parsers/nativeParsers.ts`)**:
-   Mechanically normalizes Minecraft's built-in data formats: vanilla crafting/smelting/stonecutting/smithing recipes, dynamic worldgen (`configured_feature` ore veins, `placed_feature` height/count rules, biomes, structures), loot tables (pools, rolls, silk-touch/fortune conditions), and registries/tags.
+   Mechanically normalizes Minecraft's built-in data formats: vanilla crafting/smelting/stonecutting/smithing recipes, dynamic worldgen (`configured_feature` ore veins, `placed_feature` height/count rules, biome climate/spawners, structures, biome modifiers), loot tables & Global Loot Modifiers, and registries/tags.
 2. **Tier 2 — Version-Scoped Major Mod Parsers (`src/parsers/modParsers/`)**:
    Built-in parsers for major 1.21.1 mods (`create` 6.x, `mekanism` 10.7.x, `ae2` 19.x, `oritech` 1.x, `farmersdelight` 1.x, `ars_nouveau` 5.x, `tofucraft` 12.x), strictly gated by semver `modVersionRange` against live loaded mod versions. When a mod version falls outside the tested range, the parser refuses to guess (`parserVersionMismatch`) and passes verbatim raw data to the AI.
-3. **Tier 3 — AI Reasoning + Schema-Free Knowledge Store**:
-   For any other mod, multiblock, or undocumented mechanic, the server exposes primary runtime evidence: `Recipe.CODEC` raw JSON (with KubeJS/datapack changes applied), optional JEI categories/catalysts/POJO snapshots, BlockEntity NBT, loaded guides/quests (Patchouli, GuideME, FTB Quests, Create Ponder, lang files), runtime class reflection, and on-demand JAR inspection / **Vineflower 1.12.0** & `javap` Java decompilation. Once the AI analyzes a system, it can persist freeform Markdown notes (`knowledge/notes/*.md`) and optional sandboxed JS extractors (`knowledge/extractors/*.json`) for future queries.
+3. **Primary Evidence & Bytecode Introspection**:
+   For any other mod, multiblock, or undocumented in-world mechanic, the server exposes `Recipe.CODEC` raw JSON (with KubeJS/datapack changes applied), optional JEI categories/catalysts/info descriptions, BlockEntity NBT, loaded guides/quests (Patchouli, GuideME, FTB Quests, Create Ponder, Oracle Index, lang files), runtime class reflection, and on-demand JAR inspection, deterministic ID-to-field bytecode tracing, and **Vineflower 1.12.0** / `javap` Java decompilation.
 
 ---
 
@@ -23,14 +23,12 @@ Modded Minecraft packs combine hundreds of mods, KubeJS overrides, datapacks, mu
 
 - **Zero Hard Mod Dependencies (Multiloader MC 1.21.1)**:
   Runs standalone on NeoForge or Fabric with any modpack. Optional integrations (JEI runtime, Patchouli, GuideME, FTB Quests, Create Ponder) attach automatically when present.
-- **Read-Only & Client-First**:
-  Works on multiplayer servers even when McInsight is only installed on the client (vanilla syncs recipes and registries to clients). Automatically exposes richer server-side data (authoritative BlockEntity NBT, dynamic loot tables) in singleplayer or when installed server-side.
+- **Pure Read-Only & Stateless**:
+  Never modifies the game world or maintains persistent server-side state. Works on multiplayer servers even when McInsight is only installed on the client, and exposes authoritative BlockEntity NBT and dynamic loot tables in singleplayer or when installed server-side.
 - **No Native Window / GLFW Dependencies**:
   Exposes structured data over a pure JDK loopback HTTP API (`127.0.0.1:25580..25599`) — never touches GLFW or screen capture hooks.
 - **MCP `2026-07-28` Compliant**:
   Built on `@modelcontextprotocol/server` v2.4 and `@modelcontextprotocol/node` v2.1 with stateless Streamable HTTP (`/mcp`, `server/discover`, Host/Origin localhost guards) and `stdio`.
-- **Sandboxed Self-Extension**:
-  Optional custom JS extractors run inside a strict `node:vm` context (`Object.create(null)`, no `process`/`require`/`fs`, 100ms timeout) and must pass a dry-run before persistence.
 
 ---
 
@@ -39,9 +37,9 @@ Modded Minecraft packs combine hundreds of mods, KubeJS overrides, datapacks, mu
 ```
 McInsightMCP/
 ├── docs/
-│   └── ARCHITECTURE.md     # HTTP API contract & 3-tier knowledge design
+│   └── ARCHITECTURE.md     # HTTP API contract & parser/tool design
 ├── mod/                    # MC 1.21.1 Multiloader Gradle project (common / neoforge / fabric)
-└── mcp-server/             # TypeScript MCP server (2026-07-28) + knowledge store
+└── mcp-server/             # TypeScript MCP server (2026-07-28)
 ```
 
 For full HTTP endpoint contracts and MCP tool details, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -89,17 +87,26 @@ Optional CLI flags / environment variables:
 - `--mc-url <url>` (`MCINSIGHT_URL`): Explicit mod API URL (auto-discovers `127.0.0.1` / `[::1]` ports `25580..25599` by default)
 - `--mods-dir <path>` (`MCINSIGHT_MODS_DIR`): Mods directory for offline JAR inspection/decompilation
 - `--game-dir <path>` (`MCINSIGHT_GAME_DIR`): Game directory for offline KubeJS/FTB Quests scanning
-- `--knowledge-dir <path>` (`MCINSIGHT_KNOWLEDGE_DIR`): Custom knowledge directory (defaults to `mcp-server/knowledge`)
 
 ---
 
-## MCP Tools Overview
+## MCP Tools Overview (11 Semantic Tools)
 
-- **Game State**: `mc_status`, `mc_player_state`, `mc_looking_at`, `mc_scan_area`, `mc_search_registry`, `mc_inspect_item`, `mc_inspect_tag`
-- **Recipes, Worldgen, Loot, Trades & Advancements**: `mc_list_recipe_types`, `mc_query_recipes`, `mc_query_worldgen`, `mc_query_loot`, `mc_query_datamaps`, `mc_query_trades`, `mc_query_advancements`
-- **Guides & Quests**: `mc_search_guides`, `mc_get_guide_page`
-- **Introspection & Decompilation**: `mc_inspect_class`, `mc_search_jars` (`paths` / `content` / `class_strings`), `mc_read_jar_resource`, `mc_decompile_class`
-- **Knowledge & Extractors**: `mc_save_knowledge_note`, `mc_search_knowledge`, `mc_get_knowledge_note`, `mc_register_extractor`, `mc_test_extractor`, `mc_list_knowledge`
+- **World & Player State**:
+  - `mc_status`: Runtime status, active world state, integrations, and loaded mod list
+  - `mc_player_state`: Position, biome, live environment (`biomeBaseTemperature`, `canSeeSky`, `skyLight`, `blockLight`, `precipitation`), vitals, inventory, and open screen slots
+  - `mc_observe_world`: Raycast crosshair target (`looking_at`) or scan surrounding area (`area`)
+- **Registry & Metadata**:
+  - `mc_search_registry`: Search items, blocks, fluids, entities, and tags
+  - `mc_inspect`: Inspect item/block metadata (`isRandomlyTicking`, `stateProperties`, `destroySpeed`, `jeiInformation`) or tag members
+- **Game Mechanics & Systems**:
+  - `mc_query_item_flow`: Cross-query how to obtain or use an item across recipes, loot tables + GLMs, trades, data maps, and JEI info
+  - `mc_query_recipes`: List recipe types / built-in mod parsers or query recipes by type, mod, or item (`includeRaw` supported)
+  - `mc_query_world_data`: Query worldgen (with biome temperature filters and `includeRaw`), loot tables, villager trades, and NeoForge data maps
+  - `mc_query_advancements`: Query advancement definitions, rewards, and live player progress
+- **Documentation & Code**:
+  - `mc_guides`: Search, list, and read Patchouli, GuideME, FTB Quests, Create Ponder, Oracle Index, and lang docs
+  - `mc_inspect_code`: Trace ID registrations & field references in JVM bytecode (`trace_id`), grep JARs/pack scripts (`search`), read JAR resources (`read_resource`), decompile Java classes via Vineflower/`javap` (`decompile`), or reflect live JVM classes (`reflect`)
 
 ---
 

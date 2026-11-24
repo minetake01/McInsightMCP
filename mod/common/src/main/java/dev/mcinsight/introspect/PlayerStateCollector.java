@@ -10,6 +10,7 @@ import dev.mcinsight.server.JsonUtil;
 import dev.mcinsight.server.MainThreadExecutor;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
@@ -22,6 +23,8 @@ import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.LightLayer;
+import net.minecraft.world.level.biome.Biome;
 
 public final class PlayerStateCollector {
 
@@ -40,6 +43,11 @@ public final class PlayerStateCollector {
         UUID uuid,
         String dimension,
         String biome,
+        float biomeBaseTemperature,
+        boolean canSeeSky,
+        int skyLight,
+        int blockLight,
+        String precipitation,
         double x,
         double y,
         double z,
@@ -84,6 +92,14 @@ public final class PlayerStateCollector {
         out.addProperty("uuid", snap.uuid().toString());
         out.addProperty("dimension", snap.dimension());
         out.addProperty("biome", snap.biome());
+
+        JsonObject env = new JsonObject();
+        env.addProperty("biomeBaseTemperature", Math.round(snap.biomeBaseTemperature() * 1000.0) / 1000.0);
+        env.addProperty("canSeeSky", snap.canSeeSky());
+        env.addProperty("skyLight", snap.skyLight());
+        env.addProperty("blockLight", snap.blockLight());
+        env.addProperty("precipitation", snap.precipitation());
+        out.add("environment", env);
 
         JsonObject pos = new JsonObject();
         pos.addProperty("x", round2(snap.x()));
@@ -169,7 +185,14 @@ public final class PlayerStateCollector {
         }
         Level level = player.level();
         BlockPos bp = player.blockPosition();
-        String biome = level.getBiome(bp).unwrapKey().map(k -> k.location().toString()).orElse("unknown");
+        var biomeHolder = level.getBiome(bp);
+        String biome = biomeHolder.unwrapKey().map(k -> k.location().toString()).orElse("unknown");
+        Biome biomeVal = biomeHolder.value();
+        float biomeTemp = biomeVal.getBaseTemperature();
+        boolean canSeeSky = level.canSeeSky(bp);
+        int skyLight = level.getBrightness(LightLayer.SKY, bp);
+        int blockLight = level.getBrightness(LightLayer.BLOCK, bp);
+        String precipitation = biomeVal.getPrecipitationAt(bp).name().toLowerCase(Locale.ROOT);
 
         List<EffectSample> effects = new ArrayList<>();
         for (MobEffectInstance eff : player.getActiveEffects()) {
@@ -200,6 +223,11 @@ public final class PlayerStateCollector {
             player.getUUID(),
             level.dimension().location().toString(),
             biome,
+            biomeTemp,
+            canSeeSky,
+            skyLight,
+            blockLight,
+            precipitation,
             player.getX(),
             player.getY(),
             player.getZ(),

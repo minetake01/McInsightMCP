@@ -1,6 +1,7 @@
 package dev.mcinsight.compat;
 
 import com.google.gson.JsonObject;
+import java.util.List;
 import net.minecraft.core.HolderLookup;
 
 public interface IRecipeViewerBridge {
@@ -10,6 +11,8 @@ public interface IRecipeViewerBridge {
     boolean isAvailable();
 
     JsonObject listCategories();
+
+    List<String> getIngredientInfo(String itemId);
 
     JsonObject queryRecipes(
         String itemQuery,

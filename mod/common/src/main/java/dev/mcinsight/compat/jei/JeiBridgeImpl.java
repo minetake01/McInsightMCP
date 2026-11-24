@@ -9,10 +9,13 @@ import dev.mcinsight.compat.IRecipeViewerBridge;
 import dev.mcinsight.server.JsonUtil;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import mezz.jei.api.constants.RecipeTypes;
 import mezz.jei.api.constants.VanillaTypes;
 import mezz.jei.api.helpers.IJeiHelpers;
 import mezz.jei.api.ingredients.IIngredientHelper;
@@ -26,10 +29,12 @@ import mezz.jei.api.recipe.IRecipeManager;
 import mezz.jei.api.recipe.RecipeIngredientRole;
 import mezz.jei.api.recipe.RecipeType;
 import mezz.jei.api.recipe.category.IRecipeCategory;
+import mezz.jei.api.recipe.vanilla.IJeiIngredientInfoRecipe;
 import mezz.jei.api.runtime.IIngredientManager;
 import mezz.jei.api.runtime.IJeiRuntime;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.FormattedText;
 import net.minecraft.resources.RegistryOps;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.Item;
@@ -94,6 +99,40 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
         out.add("categories", categories);
         cachedCategories = out;
         return out;
+    }
+
+    @Override
+    public List<String> getIngredientInfo(String itemId) {
+        if (itemId == null || itemId.isBlank() || runtime == null) {
+            return List.of();
+        }
+        try {
+            List<IFocus<?>> focusList = buildFocusList(itemId, "any", runtime.getJeiHelpers());
+            if (focusList.isEmpty()) {
+                return List.of();
+            }
+            IRecipeManager recipeManager = runtime.getRecipeManager();
+            List<IJeiIngredientInfoRecipe> infoRecipes = recipeManager
+                .createRecipeLookup(RecipeTypes.INFORMATION)
+                .limitFocus(focusList)
+                .get()
+                .toList();
+            if (infoRecipes.isEmpty()) {
+                return List.of();
+            }
+            Set<String> lines = new LinkedHashSet<>();
+            for (IJeiIngredientInfoRecipe info : infoRecipes) {
+                for (FormattedText ft : info.getDescription()) {
+                    String text = ft.getString();
+                    if (text != null && !text.isBlank()) {
+                        lines.add(text);
+                    }
+                }
+            }
+            return List.copyOf(lines);
+        } catch (Exception ignored) {
+            return List.of();
+        }
     }
 
     @Override
@@ -315,6 +354,15 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
                 DataResult<JsonElement> encoded = Recipe.CODEC.encodeStart(jsonOps, mcRecipe);
                 encoded.result().ifPresent(el -> obj.add("rawJson", el));
             } catch (Exception ignored) {}
+        } else if (recipe instanceof IJeiIngredientInfoRecipe info) {
+            JsonArray descArr = new JsonArray();
+            for (FormattedText ft : info.getDescription()) {
+                String text = ft.getString();
+                if (text != null && !text.isBlank()) {
+                    descArr.add(text);
+                }
+            }
+            obj.add("description", descArr);
         } else {
             obj.add("pojoSnapshot", JsonUtil.snapshotObject(recipe, 3));
         }

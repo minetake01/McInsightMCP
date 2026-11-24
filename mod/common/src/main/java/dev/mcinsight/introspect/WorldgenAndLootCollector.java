@@ -226,12 +226,18 @@ public final class WorldgenAndLootCollector {
         String query,
         String modId,
         boolean searchContent,
-        int limit
+        Double minTemp,
+        Double maxTemp,
+        boolean summaryOnly,
+        int limit,
+        int offset
     ) throws Exception {
         String normKind = kind == null ? "placed_feature" : kind.trim().toLowerCase(Locale.ROOT);
         String normQ = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
         String normMod = modId == null ? "" : modId.trim().toLowerCase(Locale.ROOT);
-        int clampedLimit = Math.max(1, Math.min(limit, 100));
+        int maxAllowed = summaryOnly ? 250 : 100;
+        int clampedLimit = Math.max(1, Math.min(limit, maxAllowed));
+        int clampedOffset = Math.max(0, offset);
 
         DataSnapshot snap = getOrCreateSnapshot(executor);
 
@@ -248,30 +254,34 @@ public final class WorldgenAndLootCollector {
                 normQ,
                 normMod,
                 true,
-                clampedLimit
+                minTemp,
+                maxTemp,
+                summaryOnly,
+                clampedLimit,
+                clampedOffset
             );
         }
 
         return switch (normKind) {
             case "configured_feature" -> queryWorldgenRegistryOrResource(
                 snap, Registries.CONFIGURED_FEATURE, ConfiguredFeature.DIRECT_CODEC,
-                "worldgen/configured_feature", normKind, normQ, normMod, searchContent, clampedLimit
+                "worldgen/configured_feature", normKind, normQ, normMod, searchContent, minTemp, maxTemp, summaryOnly, clampedLimit, clampedOffset
             );
             case "biome" -> queryWorldgenRegistryOrResource(
                 snap, Registries.BIOME, Biome.DIRECT_CODEC,
-                "worldgen/biome", normKind, normQ, normMod, searchContent, clampedLimit
+                "worldgen/biome", normKind, normQ, normMod, searchContent, minTemp, maxTemp, summaryOnly, clampedLimit, clampedOffset
             );
             case "structure" -> queryWorldgenRegistryOrResource(
                 snap, Registries.STRUCTURE, Structure.DIRECT_CODEC,
-                "worldgen/structure", normKind, normQ, normMod, searchContent, clampedLimit
+                "worldgen/structure", normKind, normQ, normMod, searchContent, minTemp, maxTemp, summaryOnly, clampedLimit, clampedOffset
             );
             case "dimension_type" -> queryWorldgenRegistryOrResource(
                 snap, Registries.DIMENSION_TYPE, DimensionType.DIRECT_CODEC,
-                "dimension_type", normKind, normQ, normMod, searchContent, clampedLimit
+                "dimension_type", normKind, normQ, normMod, searchContent, minTemp, maxTemp, summaryOnly, clampedLimit, clampedOffset
             );
             default -> queryWorldgenRegistryOrResource(
                 snap, Registries.PLACED_FEATURE, PlacedFeature.DIRECT_CODEC,
-                "worldgen/placed_feature", "placed_feature", normQ, normMod, searchContent, clampedLimit
+                "worldgen/placed_feature", "placed_feature", normQ, normMod, searchContent, minTemp, maxTemp, summaryOnly, clampedLimit, clampedOffset
             );
         };
     }
@@ -282,12 +292,14 @@ public final class WorldgenAndLootCollector {
         String itemFilter,
         String modId,
         boolean includeModifiers,
-        int limit
+        int limit,
+        int offset
     ) throws Exception {
         String normQ = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
         String normItem = itemFilter == null ? "" : itemFilter.trim().toLowerCase(Locale.ROOT);
         String normMod = modId == null ? "" : modId.trim().toLowerCase(Locale.ROOT);
         int clampedLimit = Math.max(1, Math.min(limit, 100));
+        int clampedOffset = Math.max(0, offset);
 
         DataSnapshot snap = getOrCreateSnapshot(executor);
         LootIndex lootIndex = getOrBuildLootIndex(snap);
@@ -298,12 +310,28 @@ public final class WorldgenAndLootCollector {
             );
         }
 
-        Set<String> candidateItemIds = resolveCandidateItemIds(normItem);
+        ResourceLocation exactRl = (!normItem.isEmpty() && normItem.indexOf(':') > 0)
+            ? ResourceLocation.tryParse(normItem)
+            : null;
+        boolean isExactItem = exactRl != null && BuiltInRegistries.ITEM.containsKey(exactRl);
+        String quotedNeedle = isExactItem ? ("\"" + normItem + "\"") : "";
+
+        Set<String> candidateItemIds;
+        if (isExactItem) {
+            candidateItemIds = new LinkedHashSet<>();
+            candidateItemIds.add(normItem);
+            BuiltInRegistries.ITEM.getHolder(exactRl).ifPresent(holder ->
+                holder.tags().forEach(t -> candidateItemIds.add("#" + t.location().toString().toLowerCase(Locale.ROOT)))
+            );
+        } else {
+            candidateItemIds = resolveCandidateItemIds(normItem);
+        }
+
         Set<String> matchedTableIdsLower = new HashSet<>();
 
         if (!normItem.isEmpty()) {
             for (IndexedLootTable table : lootIndex.tables) {
-                if (lootTableMatchesItem(table, candidateItemIds, normItem)) {
+                if (lootTableMatchesItem(table, candidateItemIds, normItem, isExactItem)) {
                     matchedTableIdsLower.add(table.idLower());
                 }
             }
@@ -324,25 +352,25 @@ public final class WorldgenAndLootCollector {
         }
 
         JsonArray results = new JsonArray();
-        boolean hasMore = false;
+        int totalMatched = 0;
         for (IndexedLootTable table : lootIndex.tables) {
             if (!normMod.isEmpty() && !table.modIdLower().equals(normMod)) continue;
             if (!normQ.isEmpty() && !table.idLower().contains(normQ)) continue;
             if (!normItem.isEmpty() && !matchedTableIdsLower.contains(table.idLower())) continue;
 
-            if (results.size() >= clampedLimit) {
-                hasMore = true;
-                break;
+            if (totalMatched >= clampedOffset && results.size() < clampedLimit) {
+                JsonObject obj = new JsonObject();
+                obj.addProperty("id", table.id());
+                obj.addProperty("modId", table.modId());
+                obj.addProperty("source", table.source());
+                if (table.rawJson() != null) {
+                    obj.add("rawJson", table.rawJson());
+                }
+                results.add(obj);
             }
-            JsonObject obj = new JsonObject();
-            obj.addProperty("id", table.id());
-            obj.addProperty("modId", table.modId());
-            obj.addProperty("source", table.source());
-            if (table.rawJson() != null) {
-                obj.add("rawJson", table.rawJson());
-            }
-            results.add(obj);
+            totalMatched++;
         }
+        boolean hasMore = totalMatched > clampedOffset + results.size();
 
         JsonArray modResults = new JsonArray();
         if (includeModifiers) {
@@ -350,7 +378,7 @@ public final class WorldgenAndLootCollector {
                 if (!normMod.isEmpty() && !mod.modIdLower().equals(normMod)) continue;
                 boolean matches = true;
                 if (!normItem.isEmpty()) {
-                    matches = lootModifierMatchesItem(mod, matchedTableIdsLower, candidateItemIds, normItem);
+                    matches = lootModifierMatchesItem(mod, matchedTableIdsLower, candidateItemIds, normItem, isExactItem, quotedNeedle);
                 } else if (!normQ.isEmpty()) {
                     matches = mod.idLower().contains(normQ) || mod.rawJsonLower().contains(normQ);
                 }
@@ -376,6 +404,8 @@ public final class WorldgenAndLootCollector {
         JsonObject out = new JsonObject();
         out.addProperty("ok", true);
         out.addProperty("source", lootIndex.source);
+        out.addProperty("offset", clampedOffset);
+        out.addProperty("total", totalMatched);
         out.addProperty("returned", results.size());
         out.addProperty("hasMore", hasMore);
         out.add("entries", results);
@@ -390,12 +420,14 @@ public final class WorldgenAndLootCollector {
         String query,
         String registryFilter,
         String modId,
-        int limit
+        int limit,
+        int offset
     ) throws Exception {
         String normQ = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
         String normReg = registryFilter == null ? "" : registryFilter.trim().toLowerCase(Locale.ROOT);
         String normMod = modId == null ? "" : modId.trim().toLowerCase(Locale.ROOT);
         int clampedLimit = Math.max(1, Math.min(limit, 100));
+        int clampedOffset = Math.max(0, offset);
 
         DataSnapshot snap = getOrCreateSnapshot(executor);
         ResourceManager rm = snap.effectiveDataRm();
@@ -407,7 +439,7 @@ public final class WorldgenAndLootCollector {
         Set<String> candidateEntryIds = normQ.isEmpty() ? Set.of() : resolveCandidateRegistryIds(normQ);
 
         JsonArray results = new JsonArray();
-        boolean hasMore = false;
+        int totalMatched = 0;
         for (DataMapEntry dm : allMaps) {
             if (!normMod.isEmpty() && !dm.modIdLower().equals(normMod)) continue;
             if (!normReg.isEmpty() && !dm.registryLower().equals(normReg) && !dm.registryLower().contains(normReg)) {
@@ -443,29 +475,29 @@ public final class WorldgenAndLootCollector {
             if (!normQ.isEmpty() && !idHit && !hasContentHit) {
                 continue;
             }
-            if (results.size() >= clampedLimit) {
-                hasMore = true;
-                break;
+            if (totalMatched >= clampedOffset && results.size() < clampedLimit) {
+                JsonObject obj = new JsonObject();
+                obj.addProperty("id", dm.id());
+                obj.addProperty("modId", dm.modId());
+                obj.addProperty("registry", dm.registry());
+                obj.addProperty("totalValueCount", totalValues);
+                if (hasContentHit) {
+                    obj.add("matchedValues", matchedValues);
+                }
+                if (dm.rawJson() != null && (totalValues <= 100 || normQ.isEmpty())) {
+                    obj.add("rawJson", dm.rawJson());
+                }
+                results.add(obj);
             }
-
-            JsonObject obj = new JsonObject();
-            obj.addProperty("id", dm.id());
-            obj.addProperty("modId", dm.modId());
-            obj.addProperty("registry", dm.registry());
-            obj.addProperty("totalValueCount", totalValues);
-            if (hasContentHit) {
-                obj.add("matchedValues", matchedValues);
-            }
-            if (dm.rawJson() != null && (totalValues <= 100 || normQ.isEmpty())) {
-                obj.add("rawJson", dm.rawJson());
-            }
-            results.add(obj);
+            totalMatched++;
         }
 
         JsonObject out = new JsonObject();
         out.addProperty("ok", true);
+        out.addProperty("offset", clampedOffset);
+        out.addProperty("total", totalMatched);
         out.addProperty("returned", results.size());
-        out.addProperty("hasMore", hasMore);
+        out.addProperty("hasMore", totalMatched > clampedOffset + results.size());
         out.add("entries", results);
         return out;
     }
@@ -743,10 +775,11 @@ public final class WorldgenAndLootCollector {
     private static boolean lootTableMatchesItem(
         IndexedLootTable table,
         Set<String> candidateItemIds,
-        String normItem
+        String normItem,
+        boolean isExactItem
     ) {
         for (String dropped : table.droppedItemsLower()) {
-            if (candidateItemIds.contains(dropped) || dropped.contains(normItem)) {
+            if (candidateItemIds.contains(dropped) || (!isExactItem && dropped.contains(normItem))) {
                 return true;
             }
         }
@@ -757,15 +790,20 @@ public final class WorldgenAndLootCollector {
         IndexedLootModifier mod,
         Set<String> matchedTableIdsLower,
         Set<String> candidateItemIds,
-        String normItem
+        String normItem,
+        boolean isExactItem,
+        String quotedNeedle
     ) {
         if (mod.injectedTableLower() != null && matchedTableIdsLower.contains(mod.injectedTableLower())) {
             return true;
         }
         for (String direct : mod.directItemsLower()) {
-            if (candidateItemIds.contains(direct) || direct.contains(normItem)) {
+            if (candidateItemIds.contains(direct) || (!isExactItem && direct.contains(normItem))) {
                 return true;
             }
+        }
+        if (isExactItem) {
+            return mod.rawJsonLower().contains(quotedNeedle);
         }
         for (String cand : candidateItemIds) {
             if (cand.indexOf(':') > 0 && mod.rawJsonLower().contains(cand)) {
@@ -828,13 +866,17 @@ public final class WorldgenAndLootCollector {
         String normQ,
         String normMod,
         boolean searchContent,
-        int limit
+        Double minTemp,
+        Double maxTemp,
+        boolean summaryOnly,
+        int limit,
+        int offset
     ) {
         if (snap.registries != null && snap.jsonOps != null) {
             Optional<? extends HolderLookup.RegistryLookup<T>> opt = snap.registries.lookup(regKey);
             if (opt.isPresent()) {
                 JsonArray results = new JsonArray();
-                boolean hasMore = false;
+                int totalMatched = 0;
                 boolean anyElement = false;
                 Iterator<? extends Holder.Reference<T>> it = opt.get().listElements().iterator();
                 while (it.hasNext()) {
@@ -844,42 +886,51 @@ public final class WorldgenAndLootCollector {
                     if (!normMod.isEmpty() && !id.getNamespace().toLowerCase(Locale.ROOT).equals(normMod)) {
                         continue;
                     }
+                    if ("biome".equals(kindLabel) && ref.value() instanceof Biome biome) {
+                        float temp = biome.getBaseTemperature();
+                        if (minTemp != null && temp < minTemp) continue;
+                        if (maxTemp != null && temp > maxTemp) continue;
+                    }
+
                     String idStr = id.toString();
                     boolean idHit = normQ.isEmpty() || idStr.toLowerCase(Locale.ROOT).contains(normQ);
+                    boolean needEntry = totalMatched >= offset && results.size() < limit;
 
                     JsonElement encoded = null;
-                    if (idHit) {
-                        encoded = encodeCached(snap, kindLabel + ":" + id, codec, ref.value());
-                    } else if (searchContent) {
+                    if (!idHit) {
+                        if (!searchContent) {
+                            continue;
+                        }
                         encoded = encodeCached(snap, kindLabel + ":" + id, codec, ref.value());
                         String lowerJson = getLowerJsonCached(snap, kindLabel + ":" + id, encoded);
                         if (!lowerJson.contains(normQ)) {
                             continue;
                         }
-                    } else {
-                        continue;
+                    } else if (needEntry) {
+                        encoded = encodeCached(snap, kindLabel + ":" + id, codec, ref.value());
                     }
 
-                    if (results.size() >= limit) {
-                        hasMore = true;
-                        break;
+                    if (needEntry) {
+                        JsonObject entry = new JsonObject();
+                        entry.addProperty("id", idStr);
+                        entry.addProperty("modId", id.getNamespace());
+                        entry.addProperty("kind", kindLabel);
+                        if (encoded != null) {
+                            entry.add("rawJson", summaryOnly && "biome".equals(kindLabel) ? summarizeBiomeJson(encoded) : encoded);
+                        }
+                        results.add(entry);
                     }
-                    JsonObject entry = new JsonObject();
-                    entry.addProperty("id", idStr);
-                    entry.addProperty("modId", id.getNamespace());
-                    entry.addProperty("kind", kindLabel);
-                    if (encoded != null) {
-                        entry.add("rawJson", encoded);
-                    }
-                    results.add(entry);
+                    totalMatched++;
                 }
                 if (anyElement) {
                     JsonObject out = new JsonObject();
                     out.addProperty("ok", true);
                     out.addProperty("kind", kindLabel);
                     out.addProperty("source", "dynamic_registry");
+                    out.addProperty("offset", offset);
+                    out.addProperty("total", totalMatched);
                     out.addProperty("returned", results.size());
-                    out.addProperty("hasMore", hasMore);
+                    out.addProperty("hasMore", totalMatched > offset + results.size());
                     out.add("entries", results);
                     return out;
                 }
@@ -896,10 +947,28 @@ public final class WorldgenAndLootCollector {
                 normQ,
                 normMod,
                 searchContent,
-                limit
+                minTemp,
+                maxTemp,
+                summaryOnly,
+                limit,
+                offset
             );
         }
         return JsonUtil.errorObject("NO_WORLDGEN_DATA", "Neither dynamic registries nor ResourceManager is available.");
+    }
+
+    private static JsonElement summarizeBiomeJson(JsonElement encoded) {
+        if (encoded == null || !encoded.isJsonObject()) {
+            return encoded;
+        }
+        JsonObject src = encoded.getAsJsonObject();
+        JsonObject compact = new JsonObject();
+        for (String key : new String[]{"temperature", "downfall", "has_precipitation", "temperature_modifier"}) {
+            if (src.has(key)) {
+                compact.add(key, src.get(key));
+            }
+        }
+        return compact;
     }
 
     private static <T> JsonElement encodeCached(DataSnapshot snap, String cacheKey, Codec<T> codec, T value) {
@@ -942,22 +1011,35 @@ public final class WorldgenAndLootCollector {
         String normQ,
         String normMod,
         boolean searchContent,
-        int limit
+        Double minTemp,
+        Double maxTemp,
+        boolean summaryOnly,
+        int limit,
+        int offset
     ) {
         JsonArray results = new JsonArray();
-        boolean hasMore = false;
+        int totalMatched = 0;
+        boolean filterTemp = "biome".equals(kindLabel) && (minTemp != null || maxTemp != null);
 
         for (String folder : folders) {
-            if (hasMore) break;
             List<ResourceJsonRef> refs = snap.folderIndexCache.computeIfAbsent(folder, f -> buildFolderIndex(rm, f));
             for (ResourceJsonRef ref : refs) {
                 if (!normMod.isEmpty() && !ref.modIdLower().equals(normMod)) continue;
                 boolean idHit = normQ.isEmpty() || ref.idLower().contains(normQ);
+                boolean needEntry = totalMatched >= offset && results.size() < limit;
 
                 String cacheKey = "res:" + kindLabel + ":" + ref.id();
                 JsonElement raw = null;
-                if (idHit || searchContent) {
+                if (needEntry || filterTemp || (!idHit && searchContent)) {
                     raw = snap.encodedCache.computeIfAbsent(cacheKey, k -> readJson(ref.resource()));
+                }
+                if (filterTemp) {
+                    if (raw == null || !raw.isJsonObject()) continue;
+                    JsonElement tEl = raw.getAsJsonObject().get("temperature");
+                    if (tEl == null || !tEl.isJsonPrimitive() || !tEl.getAsJsonPrimitive().isNumber()) continue;
+                    double temp = tEl.getAsDouble();
+                    if (minTemp != null && temp < minTemp) continue;
+                    if (maxTemp != null && temp > maxTemp) continue;
                 }
                 if (!idHit) {
                     if (!searchContent || raw == null) {
@@ -968,18 +1050,17 @@ public final class WorldgenAndLootCollector {
                         continue;
                     }
                 }
-                if (results.size() >= limit) {
-                    hasMore = true;
-                    break;
+                if (needEntry) {
+                    JsonObject obj = new JsonObject();
+                    obj.addProperty("id", ref.id());
+                    obj.addProperty("modId", ref.modId());
+                    obj.addProperty("kind", kindLabel);
+                    if (raw != null) {
+                        obj.add("rawJson", summaryOnly && "biome".equals(kindLabel) ? summarizeBiomeJson(raw) : raw);
+                    }
+                    results.add(obj);
                 }
-                JsonObject obj = new JsonObject();
-                obj.addProperty("id", ref.id());
-                obj.addProperty("modId", ref.modId());
-                obj.addProperty("kind", kindLabel);
-                if (raw != null) {
-                    obj.add("rawJson", raw);
-                }
-                results.add(obj);
+                totalMatched++;
             }
         }
 
@@ -987,8 +1068,10 @@ public final class WorldgenAndLootCollector {
         out.addProperty("ok", true);
         out.addProperty("kind", kindLabel);
         out.addProperty("source", "resource_manager");
+        out.addProperty("offset", offset);
+        out.addProperty("total", totalMatched);
         out.addProperty("returned", results.size());
-        out.addProperty("hasMore", hasMore);
+        out.addProperty("hasMore", totalMatched > offset + results.size());
         out.add("entries", results);
         return out;
     }

@@ -3,6 +3,8 @@ package dev.mcinsight.introspect;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import dev.mcinsight.client.ClientStateAccessor;
+import dev.mcinsight.compat.IRecipeViewerBridge;
+import dev.mcinsight.compat.IntegrationRegistry;
 import dev.mcinsight.platform.Services;
 import dev.mcinsight.server.JsonUtil;
 import dev.mcinsight.server.MainThreadExecutor;
@@ -30,6 +32,8 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.EntityBlock;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.Property;
 import net.minecraft.world.level.material.Fluid;
 
 public final class RegistryCollector {
@@ -372,19 +376,51 @@ public final class RegistryCollector {
         if (item instanceof BlockItem blockItem) {
             Block block = blockItem.getBlock();
             ResourceLocation blockId = BuiltInRegistries.BLOCK.getKey(block);
+            BlockState defState = block.defaultBlockState();
             JsonObject bObj = new JsonObject();
             bObj.addProperty("id", blockId.toString());
             bObj.addProperty("blockClass", block.getClass().getName());
             bObj.addProperty("isEntityBlock", block instanceof EntityBlock);
+            bObj.addProperty("isRandomlyTicking", defState.isRandomlyTicking());
+            bObj.addProperty("destroySpeed", block.defaultDestroyTime());
+            bObj.addProperty("requiresCorrectToolForDrops", defState.requiresCorrectToolForDrops());
+
+            if (!block.getStateDefinition().getProperties().isEmpty()) {
+                JsonObject propsObj = new JsonObject();
+                for (Property<?> prop : block.getStateDefinition().getProperties()) {
+                    propsObj.add(prop.getName(), encodePropertyValues(prop));
+                }
+                bObj.add("stateProperties", propsObj);
+            }
 
             JsonArray bTags = new JsonArray();
-            block.defaultBlockState().getTags().map(t -> t.location().toString()).sorted().forEach(bTags::add);
+            defState.getTags().map(t -> t.location().toString()).sorted().forEach(bTags::add);
             if (!bTags.isEmpty()) {
                 bObj.add("tags", bTags);
             }
             out.add("blockInfo", bObj);
         }
+
+        IRecipeViewerBridge bridge = IntegrationRegistry.getRecipeViewerBridge();
+        if (bridge != null && bridge.isAvailable() && Services.PLATFORM.isClientSide()) {
+            List<String> jeiInfo = executor.supplyOnClientThread(() -> bridge.getIngredientInfo(rl.toString()), 5000);
+            if (jeiInfo != null && !jeiInfo.isEmpty()) {
+                JsonArray infoArr = new JsonArray();
+                for (String line : jeiInfo) {
+                    infoArr.add(line);
+                }
+                out.add("jeiInformation", infoArr);
+            }
+        }
         return out;
+    }
+
+    private static <T extends Comparable<T>> JsonArray encodePropertyValues(Property<T> prop) {
+        JsonArray arr = new JsonArray();
+        for (T val : prop.getPossibleValues()) {
+            arr.add(prop.getName(val));
+        }
+        return arr;
     }
 
     private static HolderLookup.Provider getCachedRegistries(MainThreadExecutor executor) {

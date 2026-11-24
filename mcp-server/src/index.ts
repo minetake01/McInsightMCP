@@ -2,7 +2,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { McHttpClient } from './client/mcClient.js';
 import { JarInspector } from './decompiler/jarInspector.js';
-import { KnowledgeStore } from './knowledge/store.js';
 import { ServerDeps } from './server.js';
 import { startHttpServer } from './transports/http.js';
 import { startStdioServer } from './transports/stdio.js';
@@ -14,7 +13,6 @@ interface CliOptions {
   authToken?: string;
   modsDir?: string;
   gameDir?: string;
-  knowledgeDir: string;
   toolsDir: string;
 }
 
@@ -29,7 +27,6 @@ function parseArgs(argv: string[]): CliOptions {
     authToken: process.env.MCINSIGHT_TOKEN,
     modsDir: process.env.MCINSIGHT_MODS_DIR,
     gameDir: process.env.MCINSIGHT_GAME_DIR,
-    knowledgeDir: process.env.MCINSIGHT_KNOWLEDGE_DIR ?? path.join(pkgRoot, 'knowledge'),
     toolsDir: path.join(pkgRoot, '.tools'),
   };
 
@@ -42,7 +39,6 @@ function parseArgs(argv: string[]): CliOptions {
     else if (arg === '--token' && argv[i + 1]) opts.authToken = argv[++i];
     else if (arg === '--mods-dir' && argv[i + 1]) opts.modsDir = argv[++i];
     else if (arg === '--game-dir' && argv[i + 1]) opts.gameDir = argv[++i];
-    else if (arg === '--knowledge-dir' && argv[i + 1]) opts.knowledgeDir = argv[++i];
   }
 
   return opts;
@@ -50,15 +46,12 @@ function parseArgs(argv: string[]): CliOptions {
 
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
-  const knowledge = new KnowledgeStore(opts.knowledgeDir);
-  await knowledge.ensureLoaded();
 
   const deps: ServerDeps = {
     mcClient: new McHttpClient({
       baseUrl: opts.mcUrl,
       authToken: opts.authToken,
     }),
-    knowledge,
     jarInspector: new JarInspector(opts.toolsDir),
     defaultModsDir: opts.modsDir,
     defaultGameDir: opts.gameDir,

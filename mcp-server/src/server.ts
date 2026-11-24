@@ -2,16 +2,14 @@ import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { McHttpClient } from './client/mcClient.js';
 import { JarInspector } from './decompiler/jarInspector.js';
-import { KnowledgeStore } from './knowledge/store.js';
-import { registerGameStateTools } from './tools/gameStateTools.js';
+import { registerCodeTools } from './tools/codeTools.js';
 import { registerGuideTools } from './tools/guideTools.js';
-import { registerIntrospectTools } from './tools/introspectTools.js';
-import { registerKnowledgeTools } from './tools/knowledgeTools.js';
-import { registerNativeSystemTools } from './tools/nativeSystemTools.js';
+import { registerMechanicsTools } from './tools/mechanicsTools.js';
+import { registerRegistryTools } from './tools/registryTools.js';
+import { registerWorldStateTools } from './tools/worldStateTools.js';
 
 export interface ServerDeps {
   mcClient: McHttpClient;
-  knowledge: KnowledgeStore;
   jarInspector: JarInspector;
   defaultModsDir?: string;
   defaultGameDir?: string;
@@ -23,39 +21,16 @@ export function createMcInsightServer(deps: ServerDeps): McpServer {
     version: '1.0.0',
   });
 
-  registerGameStateTools(server, deps.mcClient, deps.knowledge);
-  registerNativeSystemTools(server, deps.mcClient, deps.knowledge);
+  registerWorldStateTools(server, deps.mcClient);
+  registerRegistryTools(server, deps.mcClient);
+  registerMechanicsTools(server, deps.mcClient);
   registerGuideTools(server, deps.mcClient);
-  registerIntrospectTools(server, {
+  registerCodeTools(server, {
     mcClient: deps.mcClient,
     jarInspector: deps.jarInspector,
     defaultModsDir: deps.defaultModsDir,
     defaultGameDir: deps.defaultGameDir,
   });
-  registerKnowledgeTools(server, deps.mcClient, deps.knowledge);
-
-  server.registerResource(
-    'knowledge_index',
-    'mcinsight://knowledge/index',
-    {
-      title: 'Saved AI Knowledge & Extractors Index',
-      description: 'Summary of learned Markdown mod notes and sandboxed JS extractors',
-      mimeType: 'application/json',
-    },
-    async (uri) => {
-      const versions = await deps.mcClient.tryGetLoadedModVersions();
-      const all = await deps.knowledge.listAll(versions);
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            mimeType: 'application/json',
-            text: JSON.stringify(all, null, 2),
-          },
-        ],
-      };
-    },
-  );
 
   server.registerResource(
     'live_status',
@@ -88,7 +63,8 @@ export function createMcInsightServer(deps: ServerDeps): McpServer {
     'investigate_mod_system',
     {
       title: 'Investigate Unknown Mod System',
-      description: 'Guide the AI to investigate any modded mechanic, recipe type, or multiblock using raw evidence + decompilation and save a reusable Markdown knowledge note.',
+      description:
+        'Guide the AI to investigate any modded item, recipe, worldgen rule, or in-world mechanic using primary runtime data, guides, and bytecode tracing/decompilation.',
       argsSchema: {
         target: z.string().describe('Item ID, block ID, recipe type, or mod name to investigate'),
       },
@@ -101,11 +77,10 @@ export function createMcInsightServer(deps: ServerDeps): McpServer {
             type: 'text' as const,
             text: [
               `Investigate the Minecraft mod system or item "${target}":`,
-              '1. Check mc_search_knowledge first to see if notes already exist.',
-              '2. Call mc_query_recipes / mc_inspect_item / mc_inspect_tag / mc_search_guides for primary runtime evidence (rawJson, JEI ingredients, guides/quests).',
-              '3. Check acquisition and world rules with mc_query_loot(item=...) (includes Global Loot Modifiers), mc_query_trades, mc_query_advancements, mc_query_worldgen(kind="biome_modifier"), and mc_query_datamaps.',
-              '4. If the mechanic involves undocumented behavior (e.g. multiblocks, in-world ticks, custom machine rules), use mc_search_jars(mode="content"|"class_strings") and mc_decompile_class (Vineflower) to read the exact Java implementation.',
-              '5. Persist a concise, accurate Markdown summary via mc_save_knowledge_note (and optionally mc_register_extractor if repetitive rawJson extraction helps) so future queries get the answer immediately.',
+              '1. Resolve exact IDs with mc_search_registry if needed.',
+              '2. Call mc_query_item_flow (acquisition/uses across recipes, loot, trades, datamaps, JEI info) and mc_inspect (tags, blockInfo.isRandomlyTicking, stateProperties, jeiInformation).',
+              '3. Check in-game docs with mc_guides and world/progression rules with mc_query_world_data / mc_query_advancements.',
+              '4. For undocumented or in-world mechanics, trace static field registrations and referencing classes via mc_inspect_code(action="trace_id") and read the exact implementation via mc_inspect_code(action="decompile").',
             ].join('\n'),
           },
         },

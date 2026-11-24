@@ -84,6 +84,7 @@ public final class ResourceGuideCollector {
         final ConcurrentHashMap<String, String> contentCache = new ConcurrentHashMap<>();
         final ConcurrentHashMap<String, String> contentLowerCache = new ConcurrentHashMap<>();
         final ConcurrentHashMap<String, List<LangEntry>> langCache = new ConcurrentHashMap<>();
+        final ConcurrentHashMap<String, List<LangEntry>> allLangCache = new ConcurrentHashMap<>();
 
         GuideIndex(
             long resourceGeneration,
@@ -128,8 +129,9 @@ public final class ResourceGuideCollector {
             return lower;
         }
 
-        List<LangEntry> getLangEntries(GuideEntry ge) {
-            List<LangEntry> cached = langCache.get(ge.id());
+        List<LangEntry> getLangEntries(GuideEntry ge, boolean includeAll) {
+            ConcurrentHashMap<String, List<LangEntry>> targetCache = includeAll ? allLangCache : langCache;
+            List<LangEntry> cached = targetCache.get(ge.id());
             if (cached != null) {
                 return cached;
             }
@@ -137,8 +139,8 @@ public final class ResourceGuideCollector {
             if (content == null) {
                 return List.of();
             }
-            List<LangEntry> parsed = parseLangEntries(content);
-            langCache.putIfAbsent(ge.id(), parsed);
+            List<LangEntry> parsed = parseLangEntries(content, includeAll);
+            targetCache.putIfAbsent(ge.id(), parsed);
             return parsed;
         }
     }
@@ -218,13 +220,18 @@ public final class ResourceGuideCollector {
     public static JsonObject searchGuides(
         MainThreadExecutor executor,
         String query,
+        String sourceFilter,
         String lang,
+        boolean includeAllLang,
         int limit
     ) throws Exception {
         String normQ = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
         if (normQ.isEmpty()) {
             return JsonUtil.errorObject("INVALID_QUERY", "Query parameter 'q' is required.");
         }
+        String normSource = (sourceFilter == null || sourceFilter.isBlank())
+            ? "all"
+            : sourceFilter.trim().toLowerCase(Locale.ROOT);
         String normLang = (lang == null || lang.isBlank()) ? "ja_jp" : lang.trim().toLowerCase(Locale.ROOT);
         int clampedLimit = Math.max(1, Math.min(limit, 50));
 
@@ -238,13 +245,16 @@ public final class ResourceGuideCollector {
             if (hits.size() >= clampedLimit) {
                 break;
             }
+            if (!"all".equals(normSource) && !ge.source().equals(normSource)) {
+                continue;
+            }
             if ("lang".equals(ge.source())) {
                 if (!"all".equals(normLang)
                     && !normLang.equals(ge.langCodeLower())
                     && !"en_us".equals(ge.langCodeLower())) {
                     continue;
                 }
-                List<LangEntry> langEntries = index.getLangEntries(ge);
+                List<LangEntry> langEntries = index.getLangEntries(ge, includeAllLang);
                 for (LangEntry le : langEntries) {
                     if (hits.size() >= clampedLimit) break;
                     if (le.valueLower().contains(normQ) || le.keyLower().contains(normQ)) {
@@ -430,13 +440,26 @@ public final class ResourceGuideCollector {
         return null;
     }
 
+    private static boolean containsCjk(String text) {
+        for (int i = 0; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            if ((ch >= '\u3040' && ch <= '\u30ff')
+                || (ch >= '\u4e00' && ch <= '\u9fff')
+                || (ch >= '\uac00' && ch <= '\ud7af')) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static boolean isUsefulGuideLangEntry(String keyLower, String value) {
         for (String marker : GUIDE_LANG_KEY_MARKERS) {
             if (keyLower.contains(marker)) {
                 return true;
             }
         }
-        if (value.length() >= 28) {
+        int minLen = containsCjk(value) ? 10 : 28;
+        if (value.length() >= minLen) {
             for (String prefix : UI_NOISE_PREFIXES) {
                 if (keyLower.startsWith(prefix)) {
                     return false;
@@ -447,7 +470,7 @@ public final class ResourceGuideCollector {
         return false;
     }
 
-    private static List<LangEntry> parseLangEntries(String content) {
+    private static List<LangEntry> parseLangEntries(String content, boolean includeAll) {
         try {
             JsonElement parsed = JsonParser.parseString(content);
             if (!parsed.isJsonObject()) return List.of();
@@ -458,7 +481,7 @@ public final class ResourceGuideCollector {
                 String k = e.getKey();
                 String v = e.getValue().getAsString();
                 String kLower = k.toLowerCase(Locale.ROOT);
-                if (!isUsefulGuideLangEntry(kLower, v)) {
+                if (!includeAll && !isUsefulGuideLangEntry(kLower, v)) {
                     continue;
                 }
                 list.add(new LangEntry(

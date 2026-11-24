@@ -91,6 +91,110 @@ describe('JarInspector (synthetic JAR tests)', () => {
     expect(clsHits[0]?.kind).toBe('class_string');
     expect(clsHits[0]?.snippet).toContain('TOFUSTICK_SECRET_PORTAL');
   });
+
+  it('traces static field registration in <clinit> to referencing classes via traceIdUsage', async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'mcinsight-jar-trace-'));
+    tmpDirs.push(dir);
+
+    const cpUtf8 = (s: string) => {
+      const b = Buffer.from(s, 'utf8');
+      return Buffer.concat([Buffer.from([0x01, (b.length >> 8) & 0xff, b.length & 0xff]), b]);
+    };
+    const cpU2 = (tag: number, idx: number) => Buffer.from([tag, (idx >> 8) & 0xff, idx & 0xff]);
+    const cpU2U2 = (tag: number, a: number, b: number) =>
+      Buffer.from([tag, (a >> 8) & 0xff, a & 0xff, (b >> 8) & 0xff, b & 0xff]);
+    const u2 = (v: number) => Buffer.from([(v >> 8) & 0xff, v & 0xff]);
+    const u4 = (v: number) => Buffer.from([(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff]);
+
+    const clinitCode = Buffer.from([0x12, 0x06, 0xb3, 0x00, 0x0a, 0xb1]); // ldc #6; putstatic #10; return
+    const codeAttrBody = Buffer.concat([
+      u2(2), // max_stack
+      u2(0), // max_locals
+      u4(clinitCode.length),
+      clinitCode,
+      u2(0), // exception_table_length
+      u2(0), // attributes_count
+    ]);
+    const regClassBuf = Buffer.concat([
+      Buffer.from([0xca, 0xfe, 0xba, 0xbe, 0x00, 0x00, 0x00, 0x41]),
+      u2(14), // cpCount = 14 (1..13)
+      cpUtf8('dev/example/DemoBlocks'), // #1
+      cpU2(7, 1), // #2
+      cpUtf8('java/lang/Object'), // #3
+      cpU2(7, 3), // #4
+      cpUtf8('dried_tofu'), // #5
+      cpU2(8, 5), // #6 String "dried_tofu"
+      cpUtf8('DRIED_TOFU'), // #7
+      cpUtf8('Ljava/lang/Object;'), // #8
+      cpU2U2(12, 7, 8), // #9 NameAndType
+      cpU2U2(9, 2, 9), // #10 Fieldref DemoBlocks.DRIED_TOFU
+      cpUtf8('<clinit>'), // #11
+      cpUtf8('()V'), // #12
+      cpUtf8('Code'), // #13
+      u2(0x0021), // access_flags
+      u2(2), // this_class
+      u2(4), // super_class
+      u2(0), // interfaces_count
+      u2(0), // fields_count
+      u2(1), // methods_count
+      u2(0x0008), // static
+      u2(11), // <clinit>
+      u2(12), // ()V
+      u2(1), // attributes_count
+      u2(13), // Code
+      u4(codeAttrBody.length),
+      codeAttrBody,
+      u2(0), // class attributes_count
+    ]);
+
+    const tickerClassBuf = Buffer.concat([
+      Buffer.from([0xca, 0xfe, 0xba, 0xbe, 0x00, 0x00, 0x00, 0x41]),
+      u2(11), // cpCount = 11 (1..10)
+      cpUtf8('dev/example/DemoTicker'), // #1
+      cpU2(7, 1), // #2
+      cpUtf8('dev/example/DemoBlocks'), // #3
+      cpU2(7, 3), // #4
+      cpUtf8('DRIED_TOFU'), // #5
+      cpUtf8('Ljava/lang/Object;'), // #6
+      cpU2U2(12, 5, 6), // #7
+      cpU2U2(9, 4, 7), // #8 Fieldref DemoBlocks.DRIED_TOFU
+      cpUtf8('java/lang/Object'), // #9
+      cpU2(7, 9), // #10
+      u2(0x0021), // access_flags
+      u2(2), // this_class
+      u2(10), // super_class
+      u2(0),
+      u2(0),
+      u2(0),
+      u2(0),
+    ]);
+
+    const zip = new AdmZip();
+    zip.addFile('META-INF/neoforge.mods.toml', Buffer.from('[[mods]]\nmodId="demomod"\n'));
+    zip.addFile('dev/example/DemoBlocks.class', regClassBuf);
+    zip.addFile('dev/example/DemoTicker.class', tickerClassBuf);
+    zip.writeZip(path.join(dir, 'demomod-1.0.0.jar'));
+
+    const inspector = new JarInspector(path.join(dir, '.tools'));
+    const traced = await inspector.traceIdUsage(dir, 'demomod:dried_tofu');
+    expect(traced.declaredFields).toEqual([
+      {
+        jarFile: 'demomod-1.0.0.jar',
+        declaringClass: 'dev.example.DemoBlocks',
+        fieldName: 'DRIED_TOFU',
+        descriptor: 'Ljava/lang/Object;',
+        matchedLiteral: 'dried_tofu',
+      },
+    ]);
+    expect(traced.fieldReferences).toEqual([
+      {
+        jarFile: 'demomod-1.0.0.jar',
+        className: 'dev.example.DemoTicker',
+        referencedField: 'dev.example.DemoBlocks.DRIED_TOFU',
+        isDatagenOrMeta: false,
+      },
+    ]);
+  });
 });
 
 describe.skipIf(!hasRealModpack)('JarInspector (Real Modpack JARs via MCINSIGHT_TEST_MODS_DIR)', () => {
@@ -155,5 +259,9 @@ describe.skipIf(!hasRealModpack)('JarInspector (Real Modpack JARs via MCINSIGHT_
       limit: 10,
     });
     expect(clsHits.length).toBeGreaterThan(0);
+
+    const traced = await inspector.traceIdUsage(REAL_MODS_DIR, 'tofucraft:blocktofudried');
+    expect(traced.declaredFields.some((f) => f.declaringClass === 'baguchan.tofucraft.registry.TofuBlocks' && f.fieldName === 'DRIEDTOFU')).toBe(true);
+    expect(traced.fieldReferences[0]?.className).toBe('baguchan.tofucraft.block.TofuBlock');
   });
 });

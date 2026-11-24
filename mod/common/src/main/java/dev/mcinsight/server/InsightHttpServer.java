@@ -167,7 +167,9 @@ public final class InsightHttpServer {
                 case "/api/v1/guides/search" -> ResourceGuideCollector.searchGuides(
                     executor,
                     query.get("q"),
+                    query.get("source"),
                     query.get("lang"),
+                    "true".equalsIgnoreCase(query.get("includeAllLang")),
                     parseInt(query.get("limit"), 20)
                 );
                 case "/api/v1/guides/page" -> ResourceGuideCollector.getGuidePage(executor, query.get("id"));
@@ -178,7 +180,11 @@ public final class InsightHttpServer {
                     query.get("q"),
                     query.get("mod"),
                     "true".equalsIgnoreCase(query.get("searchContent")),
-                    parseInt(query.get("limit"), 30)
+                    parseNullableDouble(query.get("minTemp")),
+                    parseNullableDouble(query.get("maxTemp")),
+                    "true".equalsIgnoreCase(query.get("summaryOnly")),
+                    parseInt(query.get("limit"), 30),
+                    parseInt(query.get("offset"), 0)
                 );
                 case "/api/v1/loot/query" -> WorldgenAndLootCollector.queryLoot(
                     executor,
@@ -186,14 +192,16 @@ public final class InsightHttpServer {
                     query.get("item"),
                     query.get("mod"),
                     !"false".equalsIgnoreCase(query.get("includeModifiers")),
-                    parseInt(query.get("limit"), 30)
+                    parseInt(query.get("limit"), 30),
+                    parseInt(query.get("offset"), 0)
                 );
                 case "/api/v1/datamaps/query" -> WorldgenAndLootCollector.queryDataMaps(
                     executor,
                     query.get("q"),
                     query.get("registry"),
                     query.get("mod"),
-                    parseInt(query.get("limit"), 30)
+                    parseInt(query.get("limit"), 30),
+                    parseInt(query.get("offset"), 0)
                 );
                 case "/api/v1/trades/query" -> TradeCollector.queryTrades(
                     executor,
@@ -315,6 +323,15 @@ public final class InsightHttpServer {
             return Double.parseDouble(raw.trim());
         } catch (NumberFormatException e) {
             return fallback;
+        }
+    }
+
+    private static Double parseNullableDouble(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        try {
+            return Double.parseDouble(raw.trim());
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 }

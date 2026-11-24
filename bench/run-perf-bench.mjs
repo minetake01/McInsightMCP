@@ -332,7 +332,6 @@ async function benchmarkMcpServer(mcUrl) {
   const distDir = path.join(repoRoot, 'mcp-server', 'dist');
   const { McHttpClient } = await import(pathToFileURL(path.join(distDir, 'client', 'mcClient.js')).href);
   const { JarInspector } = await import(pathToFileURL(path.join(distDir, 'decompiler', 'jarInspector.js')).href);
-  const { KnowledgeStore } = await import(pathToFileURL(path.join(distDir, 'knowledge', 'store.js')).href);
   const { startHttpServer } = await import(pathToFileURL(path.join(distDir, 'transports', 'http.js')).href);
 
   // 1. Port discovery benchmark: mock server on port 25595 in range 25590..25599
@@ -351,124 +350,74 @@ async function benchmarkMcpServer(mcUrl) {
     await new Promise((r) => mockStatusSrv.close(r));
   }
 
-  // 2. KnowledgeStore + sandboxed extractors benchmark (100 notes + 10 extractors)
-  const tmpKb = await fs.mkdtemp(path.join(os.tmpdir(), 'mcinsight-perf-kb-'));
-  try {
-    const kb = new KnowledgeStore(tmpKb);
-    for (let i = 0; i < 100; i++) {
-      await kb.saveNote({
-        id: `perf_note_${i}`,
-        title: `Perf Note ${i}`,
-        modId: i % 5 === 0 ? 'minecraft' : `simmod_${i % 10}`,
-        modVersionRange: '*',
-        relatedIds: [i % 2 === 0 ? 'minecraft:iron_ingot' : `simmod_${i % 10}:item_${i}`],
-        sourceClasses: [],
-        body: `Mechanical note body #${i}`,
-      });
-    }
-    for (let i = 0; i < 10; i++) {
-      await kb.registerExtractor(
-        {
-          id: `perf_ext_${i}`,
-          name: `Perf Ext ${i}`,
-          modId: 'perfsim',
-          modVersionRange: '*',
-          recipeTypes: [i === 9 ? 'custom:bench_target' : `custom:unused_${i}`],
-          description: 'Bench extractor',
-          code: 'function extract(raw, ctx) { return { out: raw.result, type: ctx.recipeType }; }',
-        },
-        { result: 'minecraft:iron_ingot' },
-        { recipeType: i === 9 ? 'custom:bench_target' : `custom:unused_${i}` },
-      );
-    }
+  // 2. JarInspector benchmark on 60 fixture JARs
+  const jarInspector = new JarInspector(path.join(repoRoot, 'mcp-server', '.tools'));
+  const jarSearchColdT0 = performance.now();
+  const hitsCold = await jarInspector.searchJarEntries(fixtureModsDir, 'TargetMachineBlock', undefined, 20);
+  const jarSearchColdMs = performance.now() - jarSearchColdT0;
 
-    const kbColdT0 = performance.now();
-    const kbReloaded = new KnowledgeStore(tmpKb);
-    for (let i = 0; i < 40; i++) {
-      await kbReloaded.findNotesByIds(['minecraft:iron_ingot', 'minecraft']);
-      await kbReloaded.applyExtractorForType('custom:bench_target', { result: 'minecraft:iron_ingot' }, { recipeType: 'custom:bench_target' });
-    }
-    const kb40EnrichColdMs = performance.now() - kbColdT0;
+  const jarSearchWarmT0 = performance.now();
+  for (let i = 0; i < 10; i++) {
+    await jarInspector.searchJarEntries(fixtureModsDir, 'TargetMachineBlock', undefined, 20);
+  }
+  const jarSearchWarmAvgMs = (performance.now() - jarSearchWarmT0) / 10;
 
-    const kbWarmT0 = performance.now();
-    for (let i = 0; i < 40; i++) {
-      await kbReloaded.findNotesByIds(['minecraft:iron_ingot', 'minecraft']);
-      await kbReloaded.applyExtractorForType('custom:bench_target', { result: 'minecraft:iron_ingot' }, { recipeType: 'custom:bench_target' });
-    }
-    const kb40EnrichWarmMs = performance.now() - kbWarmT0;
+  const jarReadColdT0 = performance.now();
+  await jarInspector.readJarResource(fixtureModsDir, 'simmod_42', 'data/simmod_42/recipe/machine_5.json');
+  const jarReadColdMs = performance.now() - jarReadColdT0;
 
-    // 3. JarInspector benchmark on 60 fixture JARs
-    const jarInspector = new JarInspector(path.join(repoRoot, 'mcp-server', '.tools'));
-    const jarSearchColdT0 = performance.now();
-    const hitsCold = await jarInspector.searchJarEntries(fixtureModsDir, 'TargetMachineBlock', undefined, 20);
-    const jarSearchColdMs = performance.now() - jarSearchColdT0;
-
-    const jarSearchWarmT0 = performance.now();
-    for (let i = 0; i < 10; i++) {
-      await jarInspector.searchJarEntries(fixtureModsDir, 'TargetMachineBlock', undefined, 20);
-    }
-    const jarSearchWarmAvgMs = (performance.now() - jarSearchWarmT0) / 10;
-
-    const jarReadColdT0 = performance.now();
+  const jarReadWarmT0 = performance.now();
+  for (let i = 0; i < 10; i++) {
     await jarInspector.readJarResource(fixtureModsDir, 'simmod_42', 'data/simmod_42/recipe/machine_5.json');
-    const jarReadColdMs = performance.now() - jarReadColdT0;
+  }
+  const jarReadWarmAvgMs = (performance.now() - jarReadWarmT0) / 10;
 
-    const jarReadWarmT0 = performance.now();
-    for (let i = 0; i < 10; i++) {
-      await jarInspector.readJarResource(fixtureModsDir, 'simmod_42', 'data/simmod_42/recipe/machine_5.json');
-    }
-    const jarReadWarmAvgMs = (performance.now() - jarReadWarmT0) / 10;
+  // 3. Full MCP Stateless HTTP E2E connected to live Minecraft server
+  const mcClient = new McHttpClient({ baseUrl: mcUrl });
+  const handle = await startHttpServer(
+    { mcClient, jarInspector },
+    0,
+  );
+  try {
+    const mcpOps = [
+      { name: 'tools_list', method: 'tools/list', params: {} },
+      { name: 'mc_query_item_flow', method: 'tools/call', params: { name: 'mc_query_item_flow', arguments: { item: 'minecraft:iron_ingot', direction: 'obtain', limit: 25 } } },
+      { name: 'mc_query_recipes', method: 'tools/call', params: { name: 'mc_query_recipes', arguments: { item: 'minecraft:iron_ingot', role: 'output', limit: 40 } } },
+      { name: 'mc_search_registry', method: 'tools/call', params: { name: 'mc_search_registry', arguments: { kind: 'item', query: 'iron', limit: 50 } } },
+      { name: 'mc_inspect', method: 'tools/call', params: { name: 'mc_inspect', arguments: { target: 'minecraft:iron_ingot' } } },
+      { name: 'mc_guides', method: 'tools/call', params: { name: 'mc_guides', arguments: { action: 'search', query: 'multiblock_reactor', limit: 20 } } },
+      { name: 'mc_query_world_data_worldgen', method: 'tools/call', params: { name: 'mc_query_world_data', arguments: { kind: 'placed_feature', query: 'ore', limit: 25 } } },
+      { name: 'mc_query_world_data_loot', method: 'tools/call', params: { name: 'mc_query_world_data', arguments: { kind: 'loot', query: 'perfsim', limit: 25 } } },
+    ];
 
-    // 4. Full MCP Stateless HTTP E2E connected to live Minecraft server
-    const mcClient = new McHttpClient({ baseUrl: mcUrl });
-    const handle = await startHttpServer(
-      { mcClient, knowledge: kbReloaded, jarInspector },
-      0,
-    );
-    try {
-      const mcpOps = [
-        { name: 'tools_list', method: 'tools/list', params: {} },
-        { name: 'mc_query_recipes', method: 'tools/call', params: { name: 'mc_query_recipes', arguments: { item: 'minecraft:iron_ingot', role: 'output', limit: 40 } } },
-        { name: 'mc_search_registry', method: 'tools/call', params: { name: 'mc_search_registry', arguments: { kind: 'item', query: 'iron', limit: 50 } } },
-        { name: 'mc_inspect_item', method: 'tools/call', params: { name: 'mc_inspect_item', arguments: { itemId: 'minecraft:iron_ingot' } } },
-        { name: 'mc_search_guides', method: 'tools/call', params: { name: 'mc_search_guides', arguments: { query: 'multiblock_reactor', limit: 20 } } },
-        { name: 'mc_query_worldgen', method: 'tools/call', params: { name: 'mc_query_worldgen', arguments: { kind: 'placed_feature', query: 'ore', limit: 25 } } },
-        { name: 'mc_query_loot', method: 'tools/call', params: { name: 'mc_query_loot', arguments: { query: 'perfsim', limit: 25 } } },
-      ];
-
-      const mcpE2E = {};
-      for (const op of mcpOps) {
-        const cold = await rpcCall(handle.url, op.method, op.params);
-        const warm = [];
-        for (let i = 0; i < 10; i++) {
-          const r = await rpcCall(handle.url, op.method, op.params);
-          warm.push(r.elapsedMs);
-        }
-        mcpE2E[op.name] = {
-          coldMs: Number(cold.elapsedMs.toFixed(3)),
-          bytes: cold.bytes,
-          warm: summarizeLatencies(warm),
-        };
+    const mcpE2E = {};
+    for (const op of mcpOps) {
+      const cold = await rpcCall(handle.url, op.method, op.params);
+      const warm = [];
+      for (let i = 0; i < 10; i++) {
+        const r = await rpcCall(handle.url, op.method, op.params);
+        warm.push(r.elapsedMs);
       }
-
-      return {
-        portDiscoveryMs: Number(portDiscoveryMs.toFixed(2)),
-        knowledge40EnrichColdMs: Number(kb40EnrichColdMs.toFixed(2)),
-        knowledge40EnrichWarmMs: Number(kb40EnrichWarmMs.toFixed(2)),
-        jarInspector: {
-          hitsCount: hitsCold.length,
-          searchColdMs: Number(jarSearchColdMs.toFixed(2)),
-          searchWarmAvgMs: Number(jarSearchWarmAvgMs.toFixed(2)),
-          readColdMs: Number(jarReadColdMs.toFixed(2)),
-          readWarmAvgMs: Number(jarReadWarmAvgMs.toFixed(2)),
-        },
-        mcpE2E,
+      mcpE2E[op.name] = {
+        coldMs: Number(cold.elapsedMs.toFixed(3)),
+        bytes: cold.bytes,
+        warm: summarizeLatencies(warm),
       };
-    } finally {
-      await handle.close();
     }
+
+    return {
+      portDiscoveryMs: Number(portDiscoveryMs.toFixed(2)),
+      jarInspector: {
+        hitsCount: hitsCold.length,
+        searchColdMs: Number(jarSearchColdMs.toFixed(2)),
+        searchWarmAvgMs: Number(jarSearchWarmAvgMs.toFixed(2)),
+        readColdMs: Number(jarReadColdMs.toFixed(2)),
+        readWarmAvgMs: Number(jarReadWarmAvgMs.toFixed(2)),
+      },
+      mcpE2E,
+    };
   } finally {
-    await fs.rm(tmpKb, { recursive: true, force: true });
+    await handle.close();
   }
 }
 
@@ -517,7 +466,7 @@ async function main() {
       `  [stress] rps=${parallelStress.throughputRps}  p50=${parallelStress.latency.p50Ms}ms  p95=${parallelStress.latency.p95Ms}ms  errors=${parallelStress.errors}  cantKeepUp=${parallelStress.cantKeepUpWarnings}`,
     );
     console.log(
-      `  [mcp] portDiscovery=${mcpServer.portDiscoveryMs}ms  kb40Warm=${mcpServer.knowledge40EnrichWarmMs}ms  jarSearchCold/Warm=${mcpServer.jarInspector.searchColdMs}/${mcpServer.jarInspector.searchWarmAvgMs}ms`,
+      `  [mcp] portDiscovery=${mcpServer.portDiscoveryMs}ms  jarSearchCold/Warm=${mcpServer.jarInspector.searchColdMs}/${mcpServer.jarInspector.searchWarmAvgMs}ms`,
     );
     console.log(`Saved full report to ${outPath}`);
   } finally {

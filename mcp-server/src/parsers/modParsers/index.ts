@@ -1,4 +1,4 @@
-import { LoadedModsVersionMap, matchesModVersion } from '../../knowledge/store.js';
+import { LoadedModsVersionMap, matchesModVersion } from '../modVersion.js';
 import { ae2Parser } from './ae2Parser.js';
 import { arsNouveauParser } from './arsNouveauParser.js';
 import { createParser } from './createParser.js';

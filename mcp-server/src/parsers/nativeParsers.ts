@@ -25,6 +25,10 @@ export interface NativeWorldgenSummary {
   heightDistribution?: Record<string, unknown>;
   configuredFeatureRef?: string;
   biomes?: unknown;
+  temperature?: number;
+  downfall?: number;
+  hasPrecipitation?: boolean;
+  temperatureModifier?: string;
   spawners?: Record<string, unknown>;
   features?: unknown;
   step?: string;
@@ -224,8 +228,20 @@ export function parseNativeWorldgen(kind: string, id: string, rawJson: unknown):
 
   if (kind === 'biome') {
     const summary: NativeWorldgenSummary = { kind, id };
+    if (typeof rawJson.temperature === 'number') summary.temperature = rawJson.temperature;
+    if (typeof rawJson.downfall === 'number') summary.downfall = rawJson.downfall;
+    if (typeof rawJson.has_precipitation === 'boolean') summary.hasPrecipitation = rawJson.has_precipitation;
+    if (typeof rawJson.temperature_modifier === 'string') summary.temperatureModifier = rawJson.temperature_modifier;
     if (isRecord(rawJson.spawners)) {
-      summary.spawners = rawJson.spawners;
+      const nonEmpty: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(rawJson.spawners)) {
+        if ((Array.isArray(v) && v.length > 0) || (!Array.isArray(v) && v !== undefined)) {
+          nonEmpty[k] = v;
+        }
+      }
+      if (Object.keys(nonEmpty).length > 0) {
+        summary.spawners = nonEmpty;
+      }
     }
     return summary;
   }

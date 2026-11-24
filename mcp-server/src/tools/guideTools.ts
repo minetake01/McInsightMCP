@@ -1,53 +1,61 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { McHttpClient } from '../client/mcClient.js';
-import { jsonText } from './gameStateTools.js';
+import { jsonText } from './helpers.js';
 
-const SEARCH_GUIDES_SCHEMA = z.object({
-  query: z.string().min(1).describe('Search keyword (case-insensitive)'),
-  lang: z.string().optional().default('ja_jp').describe('Preferred language code for lang entries, e.g. ja_jp or en_us'),
-  limit: z.number().int().min(1).max(50).optional().default(20),
-});
-
-const GET_GUIDE_PAGE_SCHEMA = z.object({
-  guideId: z.string().optional().describe('Guide ID from mc_search_guides (omit to list all available guide IDs)'),
-  sourceFilter: z
+const GUIDES_SCHEMA = z.object({
+  action: z
+    .enum(['search', 'list', 'read'])
+    .describe('search: keyword search across guides/quests/lang; list: list available guide IDs; read: fetch full content of a guideId'),
+  query: z.string().optional().describe('Search keyword (required when action=search)'),
+  guideId: z.string().optional().describe('Guide ID from search/list (required when action=read)'),
+  source: z
     .enum(['all', 'patchouli', 'guideme', 'ftbquests', 'ponder', 'oracle', 'lang'])
     .optional()
-    .default('all'),
-  modId: z.string().optional(),
+    .default('all')
+    .describe('Filter by guide/documentation source'),
+  modId: z.string().optional().describe('Filter by mod namespace when action=list'),
+  lang: z.string().optional().default('ja_jp').describe('Preferred language code for lang entries when action=search'),
+  includeAllLang: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe('Include all lang entries (including short names/labels) rather than guide-length text only'),
+  limit: z.number().int().min(1).max(50).optional().default(20),
 });
 
 export function registerGuideTools(server: McpServer, mcClient: McHttpClient): void {
   server.registerTool(
-    'mc_search_guides',
+    'mc_guides',
     {
-      title: 'Search Mod Guides, Quests & Lang Docs',
+      title: 'Search, List & Read Mod Guides, Quests & Lang Docs',
       description:
-        'Search across loaded Patchouli books, GuideME pages, FTB Quests chapters, Create Ponder lang entries, Oracle Index books, and mod tooltips/descriptions.',
+        'Access Patchouli books, GuideME pages, FTB Quests chapters, Create Ponder entries, Oracle Index books, and mod lang entries.',
       annotations: { readOnlyHint: true, idempotentHint: true },
-      inputSchema: SEARCH_GUIDES_SCHEMA,
+      inputSchema: GUIDES_SCHEMA,
     },
-    async ({ query, lang, limit }) => {
-      const data = await mcClient.get('/api/v1/guides/search', { q: query, lang, limit });
-      return jsonText(data);
-    },
-  );
-
-  server.registerTool(
-    'mc_get_guide_page',
-    {
-      title: 'Get Full Guide or Quest Page',
-      description:
-        'Retrieve full raw content (Patchouli multiblock JSON, GuideME Markdown, FTB Quests SNBT, or lang file) for a guideId returned by mc_search_guides or /api/v1/guides/list.',
-      annotations: { readOnlyHint: true, idempotentHint: true },
-      inputSchema: GET_GUIDE_PAGE_SCHEMA,
-    },
-    async ({ guideId, sourceFilter, modId }) => {
-      if (!guideId) {
-        return jsonText(await mcClient.get('/api/v1/guides/list', { source: sourceFilter, mod: modId }));
+    async ({ action, query, guideId, source, modId, lang, includeAllLang, limit }) => {
+      if (action === 'list') {
+        return jsonText(await mcClient.get('/api/v1/guides/list', { source, mod: modId }));
       }
-      return jsonText(await mcClient.get('/api/v1/guides/page', { id: guideId }));
+      if (action === 'read') {
+        if (!guideId || !guideId.trim()) {
+          throw new Error('guideId is required when action="read".');
+        }
+        return jsonText(await mcClient.get('/api/v1/guides/page', { id: guideId }));
+      }
+      if (!query || !query.trim()) {
+        throw new Error('query is required when action="search".');
+      }
+      return jsonText(
+        await mcClient.get('/api/v1/guides/search', {
+          q: query,
+          source,
+          lang,
+          includeAllLang,
+          limit,
+        }),
+      );
     },
   );
 }
