@@ -13,7 +13,7 @@
 McInsightMCP を使うと、Claude Desktop・Cursor・Claude Code・VS Code などの MCP 対応 AI アシスタントを、起動中の Minecraft に直接接続できます。古い Wiki に頼って AI が推測するのではなく、導入中の Modpack（KubeJS やデータパックによる変更込み）のレシピ、視線先のブロックや機械、所持インベントリ、ゲーム内ガイドブックやクエストを AI がリアルタイムに確認して回答します。
 
 > [!NOTE]
-> ベータ版（`0.1.0-beta.1`）: McInsightMCP は現在ベータ版として公開しています。`1.0.0` に向けて MCP ツールの仕様、出力形式、設定項目が変更される場合があります。フィードバックや不具合のご報告は [GitHub Issues](https://github.com/minetake01/McInsightMCP/issues) までお寄せください。
+> ベータ版（`0.1.0-beta.2`）: McInsightMCP は現在ベータ版として公開しています。`1.0.0` に向けて MCP ツールの仕様、出力形式、設定項目が変更される場合があります。フィードバックや不具合のご報告は [GitHub Issues](https://github.com/minetake01/McInsightMCP/issues) までお寄せください。
 
 ---
 
@@ -67,9 +67,9 @@ McInsightMCP を使うと、Claude Desktop・Cursor・Claude Code・VS Code な�
 
 ### 手順 2: AI クライアントに接続する
 
-#### 方法 A: `npx` / `pnpx` を使った `stdio` 接続（Claude Desktop・Cursor・Claude Code・VS Code 向け・推奨）
+#### 方法 A: `stdio` 接続（推奨）
 
-AI クライアントの MCP 設定に以下を追加してください。
+Claude Desktop・Cursor・Claude Code・VS Code 向けです。AI クライアントの MCP 設定に以下を追加してください。
 
 ```json
 {
@@ -152,8 +152,8 @@ MOD のビルドには JDK 21、MCP サーバーのビルドには Node.js 20 �
 cd mod
 ./gradlew :neoforge:build :fabric:build
 # 生成物:
-#   mod/neoforge/build/libs/mcinsight-neoforge-<mc_version>-0.1.0-beta.1.jar
-#   mod/fabric/build/libs/mcinsight-fabric-<mc_version>-0.1.0-beta.1.jar
+#   mod/neoforge/build/libs/mcinsight-neoforge-<mc_version>-0.1.0-beta.2.jar
+#   mod/fabric/build/libs/mcinsight-fabric-<mc_version>-0.1.0-beta.2.jar
 
 # 2. MCP サーバーのビルド・テスト
 cd ../mcp-server

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-beta.2] - 2026-11-24
+
+### Security
+- Bumped `adm-zip` from `0.5.18` to `0.6.1` in `mcp-server` (resolving `CVE-2026-39244`) and removed redundant `@types/adm-zip`
+
+### Changed
+- Updated Gradle build toolchain (`net.neoforged.moddev` `2.0.148`, `mixinextras-common` `0.5.5`, `foojay-resolver-convention` `1.0.0`)
+- Updated `mcp-server` dev dependencies (`typescript` `7.0.2`, `vitest` `5.1.1`)
+- Shortened README section headers to satisfy Modrinth description length guidelines and added a CI check for heading length
+- Configured Dependabot ignore rules for `gradle-wrapper >= 9.0.0` (pending Fabric Loom support) and `@types/node >= 25.0.0`
+
 ## [0.1.0-beta.1] - 2026-11-24
 
 Initial public beta release of McInsightMCP.

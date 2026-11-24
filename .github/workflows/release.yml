@@ -230,6 +230,24 @@ jobs:
             throw new Error(`Unrewritten relative Markdown links remain: ${remainingRelative.join(', ')}`);
           }
 
+          let headingFence = false;
+          const longHeadings = [];
+          for (const [idx, line] of rewrittenBody.split(/\r?\n/).entries()) {
+            if (/^\s*```/.test(line)) {
+              headingFence = !headingFence;
+              continue;
+            }
+            if (!headingFence && /^#{1,6}\s+/.test(line)) {
+              const title = line.replace(/^#{1,6}\s+/, '').trim();
+              if (title.length > 60) {
+                longHeadings.push(`L${idx + 1} (${title.length} chars): ${title}`);
+              }
+            }
+          }
+          if (longHeadings.length > 0) {
+            throw new Error(`Markdown headings exceed 60 chars for Modrinth:\n${longHeadings.join('\n')}`);
+          }
+
           const iconBuf = fs.readFileSync('mod/common/src/main/resources/mcinsight.png');
           if (iconBuf.length > 256 * 1024) {
             throw new Error(`Icon exceeds Modrinth 256 KiB limit (${iconBuf.length} bytes).`);

@@ -8,7 +8,13 @@ updates:
     directory: "/mcp-server"
     schedule:
       interval: "weekly"
+    ignore:
+      - dependency-name: "@types/node"
+        versions: [">= 25.0.0"]
   - package-ecosystem: "gradle"
     directory: "/mod"
     schedule:
       interval: "weekly"
+    ignore:
+      - dependency-name: "gradle-wrapper"
+        versions: [">= 9.0.0"]

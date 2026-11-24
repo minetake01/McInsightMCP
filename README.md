@@ -13,7 +13,7 @@
 McInsightMCP connects MCP-compatible AI assistants (Claude Desktop, Cursor, Claude Code, VS Code, and others) directly to your running **Minecraft** game. Instead of guessing from outdated wikis, your AI can look up real recipes in your modpack (including KubeJS and datapack tweaks), see what block or machine you are looking at, check your inventory, read in-game guidebooks and quests, and inspect how unfamiliar mods actually work.
 
 > [!NOTE]
-> **Beta Release (`0.1.0-beta.1`)**: McInsightMCP is currently in beta. MCP tool schemas, response formats, and configuration options may change before `1.0.0`. Bug reports and feedback are welcome via [GitHub Issues](https://github.com/minetake01/McInsightMCP/issues).
+> **Beta Release (`0.1.0-beta.2`)**: McInsightMCP is currently in beta. MCP tool schemas, response formats, and configuration options may change before `1.0.0`. Bug reports and feedback are welcome via [GitHub Issues](https://github.com/minetake01/McInsightMCP/issues).
 
 ---
 
@@ -67,9 +67,9 @@ Works with **any** modpack via raw recipe data, and includes dedicated structure
 
 ### Step 2: Connect Your AI Client
 
-#### Option A: `stdio` via `npx` / `pnpx` (Recommended for Claude Desktop, Cursor, Claude Code, VS Code)
+#### Option A: `stdio` (Recommended)
 
-Add this to your MCP client configuration:
+Recommended for Claude Desktop, Cursor, Claude Code, and VS Code. Add this to your MCP client configuration:
 
 ```json
 {
@@ -154,8 +154,8 @@ Requires **JDK 21** for the mod and **Node.js >= 20** + **pnpm** for the MCP ser
 cd mod
 ./gradlew :neoforge:build :fabric:build
 # Output JARs:
-#   mod/neoforge/build/libs/mcinsight-neoforge-<mc_version>-0.1.0-beta.1.jar
-#   mod/fabric/build/libs/mcinsight-fabric-<mc_version>-0.1.0-beta.1.jar
+#   mod/neoforge/build/libs/mcinsight-neoforge-<mc_version>-0.1.0-beta.2.jar
+#   mod/fabric/build/libs/mcinsight-fabric-<mc_version>-0.1.0-beta.2.jar
 
 # 2. Build and test the MCP server
 cd ../mcp-server

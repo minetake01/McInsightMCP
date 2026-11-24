@@ -18,7 +18,7 @@ export interface ServerDeps {
 export function createMcInsightServer(deps: ServerDeps): McpServer {
   const server = new McpServer({
     name: 'mcinsight',
-    version: '0.1.0-beta.1',
+    version: '0.1.0-beta.2',
   });
 
   registerWorldStateTools(server, deps.mcClient);
