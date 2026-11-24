@@ -20,11 +20,6 @@ neoForge {
         server {
             server()
         }
-        perfServer {
-            server()
-            gameDirectory = project.file('runs/perf-server')
-            programArgument('--nogui')
-        }
     }
     mods {
         "${mod_id}" {

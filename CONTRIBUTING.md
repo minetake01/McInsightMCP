@@ -13,7 +13,7 @@ Thank you for your interest in contributing to McInsightMCP!
 
 ```bash
 cd mod
-./gradlew :neoforge:build :fabric:build
+./gradlew :common:test :neoforge:build :fabric:build
 ```
 
 Generated mod JARs:
@@ -55,6 +55,6 @@ When bumping the release version, keep all four version declarations synchronize
 ## Pull Request Checklist
 
 - [ ] `pnpm typecheck`, `pnpm build`, and `pnpm test` pass in `mcp-server/`
-- [ ] `./gradlew :neoforge:build :fabric:build` passes in `mod/`
+- [ ] `./gradlew :common:test :neoforge:build :fabric:build` passes in `mod/`
 - [ ] Documentation (`README.md`, `README.ja.md`, `docs/ARCHITECTURE.md`, `CHANGELOG.md`) updated if user-facing behavior or tools changed
-- [ ] Changes keep the mod 100% read-only and loopback-only
+- [ ] Changes keep the mod 100% read-only, client-only HTTP (`127.0.0.1`), and privacy-scoped on multiplayer sync

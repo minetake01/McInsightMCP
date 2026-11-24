@@ -487,13 +487,14 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
     for (const [id, name, args] of [
       [6, 'mc_status', {}],
       [7, 'mc_player_state', {}],
-      [8, 'mc_observe_world', { mode: 'looking_at' }],
+      [8, 'mc_observe_world', { mode: 'looking_at', includeFluids: true }],
       [9, 'mc_search_registry', { kind: 'item', query: 'dried' }],
       [10, 'mc_inspect', { target: '#ars_nouveau:whirlisprig/greatly_likes', kind: 'block_tag' }],
       [11, 'mc_query_recipes', { listTypes: true }],
       [12, 'mc_query_advancements', { query: 'tofustick' }],
       [13, 'mc_guides', { action: 'search', query: 'tofu', source: 'lang', includeAllLang: true }],
       [14, 'mc_inspect_code', { action: 'reflect', className: 'baguchan.tofucraft.block.TofuBlock' }],
+      [15, 'mc_inspect', { target: 'tofucraft:blocktofumomen', kind: 'auto' }],
     ] as const) {
       const r = await rpcCall(handle.url, {
         jsonrpc: '2.0',
@@ -504,5 +505,138 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
       expect(r.status).toBe(200);
       expect(unwrapToolPayload<{ ok: boolean }>(r.body).ok).toBe(true);
     }
+  });
+
+  it('surfaces partial failures via Promise.allSettled in mc_query_item_flow, supports multi-viewer recipes, and guards HTTP errors', async () => {
+    const mcSrv = createServer((req, res) => {
+      const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+      if (url.pathname === '/api/v1/status') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            ok: true,
+            modId: 'mcinsight',
+            modVersion: '0.1.0-beta.1',
+            minecraftVersion: '1.21.1',
+            loader: 'neoforge',
+            loaderVersion: '21.1.267',
+            port: 0,
+            side: 'client',
+            gameDir: process.cwd(),
+            modsDir: process.cwd(),
+            configDir: process.cwd(),
+            integratedOrDedicatedServerActive: false,
+            isSingleplayer: false,
+            worldLoaded: true,
+            integrations: { jeiLoaded: true, emiLoaded: true, reiLoaded: true, activeRecipeViewers: ['jei', 'emi', 'rei'] },
+            modCount: 1,
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/api/v1/mods') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, mods: [] }));
+        return;
+      }
+      if (url.pathname === '/api/v1/recipes/query') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            ok: true,
+            activeViewers: ['emi', 'rei'],
+            emi: {
+              returned: 1,
+              hasMore: false,
+              recipes: [
+                {
+                  categoryUid: 'create:pressing',
+                  categoryTitle: 'Pressing',
+                  modId: 'create',
+                  recipeId: 'create:pressing/iron',
+                  inputs: [{ id: 'minecraft:iron_ingot' }],
+                  outputs: [{ id: 'create:iron_sheet' }],
+                },
+              ],
+            },
+            rei: { returned: 0, hasMore: false, recipes: [] },
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/api/v1/loot/query') {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, code: 'SERVER_DATA_UNAVAILABLE', error: 'Remote server lacks McInsight sync.' }));
+        return;
+      }
+      if (url.pathname === '/api/v1/trades/query') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            ok: true,
+            trades: [
+              { result: { id: 'minecraft:iron_ingot' }, costA: { id: 'minecraft:emerald' } },
+              { costA: { id: 'minecraft:iron_ingot' }, result: { id: 'minecraft:emerald' } },
+            ],
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/api/v1/datamaps/query') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, returned: 0, hasMore: false, entries: [] }));
+        return;
+      }
+      if (url.pathname === '/api/v1/registry/inspect') {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, code: 'NOT_FOUND', error: 'Not found' }));
+        return;
+      }
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, code: 'NOT_FOUND', error: 'Not found' }));
+    });
+    await new Promise<void>((r) => mcSrv.listen(0, '127.0.0.1', r));
+    cleanups.push(() => new Promise<void>((r) => mcSrv.close(() => r())));
+    const mcPort = (mcSrv.address() as { port: number }).port;
+    const client = new McHttpClient({ baseUrl: `http://127.0.0.1:${mcPort}` });
+    const handle = await startHttpServer(
+      {
+        mcClient: client,
+        jarInspector: new JarInspector(path.join(os.tmpdir(), 'mcinsight-tools-test')),
+      },
+      0,
+    );
+    cleanups.push(() => handle.close());
+
+    // Partial failure in loot must not fail recipes/trades, and obtain trade filter keeps only trades producing iron_ingot
+    const flowRes = await rpcCall(handle.url, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'mc_query_item_flow', arguments: { item: 'minecraft:iron_ingot', direction: 'obtain' } },
+    });
+    const flowPayload = unwrapToolPayload<{
+      ok: boolean;
+      recipes?: { emi?: { recipes: Array<{ origin: string; viewerIngredients?: unknown }> } };
+      trades?: { trades: Array<{ result?: { id: string } }> };
+      errors?: Record<string, { code?: string; message: string }>;
+    }>(flowRes.body);
+    expect(flowPayload.ok).toBe(true);
+    expect(flowPayload.recipes?.emi?.recipes[0]?.origin).toBe('emi');
+    expect(flowPayload.recipes?.emi?.recipes[0]?.viewerIngredients).toBeDefined();
+    expect(flowPayload.trades?.trades).toHaveLength(1);
+    expect(flowPayload.trades?.trades[0]?.result?.id).toBe('minecraft:iron_ingot');
+    expect(flowPayload.errors?.loot?.code).toBe('SERVER_DATA_UNAVAILABLE');
+    expect(flowPayload.errors?.viewer_info).toBeUndefined();
+
+    // Verify removed resources/prompts are no longer advertised or listed
+    const discover = await rpcCall(handle.url, { jsonrpc: '2.0', id: 2, method: 'server/discover', params: {} });
+    const capabilities = (discover.body.result as { capabilities?: Record<string, unknown> } | undefined)?.capabilities ?? {};
+    expect(capabilities.resources).toBeUndefined();
+    expect(capabilities.prompts).toBeUndefined();
+
+    // HTTP transport returns clean HTTP 400/405/406 error instead of dropping socket on unsupported methods
+    const badRes = await fetch(handle.url, { method: 'DELETE' });
+    expect(badRes.status).toBeGreaterThanOrEqual(400);
   });
 });

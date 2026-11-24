@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { createServer } from 'node:http';
 import os from 'node:os';
@@ -59,113 +58,24 @@ async function timedFetchJson(url) {
   };
 }
 
-function startPerfServer() {
-  return new Promise((resolve, reject) => {
-    const isWin = process.platform === 'win32';
-    const cmd = isWin ? 'cmd.exe' : './gradlew';
-    const args = isWin
-      ? ['/c', 'gradlew.bat', ':neoforge:runPerfServer', '--no-daemon']
-      : [':neoforge:runPerfServer', '--no-daemon'];
-
-    const child = spawn(cmd, args, {
-      cwd: modDir,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
-
-    let mcUrl = null;
-    let worldReady = false;
-    let settled = false;
-    let cantKeepUpCount = 0;
-    const recentLogs = [];
-
-    const onLine = (line) => {
-      recentLogs.push(line);
-      if (recentLogs.length > 200) recentLogs.shift();
-
-      if (line.includes("Can't keep up!")) {
-        cantKeepUpCount++;
-      }
-      const m = line.match(/McInsight HTTP server listening on (http:\/\/127\.0\.0\.1:\d+)/);
-      if (m) {
-        mcUrl = m[1];
-      }
-      if (line.includes('Done (') && line.includes('! For help, type "help"')) {
-        worldReady = true;
-      }
-      if (!settled && mcUrl && worldReady) {
-        settled = true;
-        clearTimeout(startupTimer);
-        resolve({
-          mcUrl,
-          getCantKeepUpCount: () => cantKeepUpCount,
-          resetCantKeepUpCount: () => {
-            cantKeepUpCount = 0;
-          },
-          stop: async () => {
-            try {
-              child.stdin.write('stop\n');
-            } catch {
-              // ignore
-            }
-            await new Promise((resExit) => {
-              const killTimer = setTimeout(() => {
-                if (isWin && child.pid) {
-                  spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { windowsHide: true });
-                } else {
-                  child.kill('SIGKILL');
-                }
-                resExit();
-              }, 15000);
-              child.once('exit', () => {
-                clearTimeout(killTimer);
-                resExit();
-              });
-            });
-          },
-        });
-      }
-    };
-
-    const makeSplitter = () => {
-      let buf = '';
-      return (chunk) => {
-        buf += chunk.toString('utf-8');
-        const lines = buf.split(/\r?\n/);
-        buf = lines.pop() ?? '';
-        for (const l of lines) onLine(l);
-      };
-    };
-
-    child.stdout.on('data', makeSplitter());
-    child.stderr.on('data', makeSplitter());
-    child.on('error', (err) => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(startupTimer);
-        reject(err);
-      }
-    });
-    child.on('exit', (code) => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(startupTimer);
-        reject(new Error(`NeoForge perfServer exited early (code=${code}). Last logs:\n${recentLogs.slice(-30).join('\n')}`));
-      }
-    });
-
-    const startupTimer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        if (isWin && child.pid) {
-          spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { windowsHide: true });
-        } else {
-          child.kill('SIGKILL');
+async function discoverClientUrl() {
+  for (let port = 25580; port <= 25599; port++) {
+    const candidate = `http://127.0.0.1:${port}`;
+    try {
+      const res = await fetch(`${candidate}/api/v1/status`, { signal: AbortSignal.timeout(500) });
+      if (res.ok) {
+        const json = await res.json();
+        if (json?.modId === 'mcinsight') {
+          return candidate;
         }
-        reject(new Error(`Timeout waiting for NeoForge perfServer startup. Last logs:\n${recentLogs.slice(-30).join('\n')}`));
       }
-    }, 180000);
-  });
+    } catch {
+      // probe next port
+    }
+  }
+  throw new Error(
+    'Could not find a running McInsight client on 127.0.0.1:25580..25599. Start the Minecraft client (e.g. :neoforge:runClient) or pass --mc-url http://127.0.0.1:<port>.',
+  );
 }
 
 async function tryFetchMetrics(mcUrl) {
@@ -190,7 +100,7 @@ async function benchmarkModHttp(mcUrl) {
     { name: 'registry_search_item', path: '/api/v1/registry/search?kind=item&q=iron&limit=50' },
     { name: 'registry_search_block', path: '/api/v1/registry/search?kind=block&q=stone&limit=50' },
     { name: 'registry_search_tag', path: '/api/v1/registry/search?kind=tag&q=ingot&limit=50' },
-    { name: 'registry_item', path: '/api/v1/registry/item?id=minecraft:iron_ingot' },
+    { name: 'registry_inspect', path: '/api/v1/registry/inspect?kind=item&id=minecraft:iron_ingot' },
     { name: 'recipes_types', path: '/api/v1/recipes/types' },
     { name: 'recipes_query_exact', path: '/api/v1/recipes/query?item=minecraft:iron_ingot&role=output&limit=40' },
     { name: 'recipes_query_substr', path: '/api/v1/recipes/query?item=iron&role=any&limit=40' },
@@ -240,7 +150,7 @@ async function benchmarkParallelStress(mcUrl, serverHandle) {
   const mix = [
     '/api/v1/status',
     '/api/v1/registry/search?kind=item&q=iron&limit=50',
-    '/api/v1/registry/item?id=minecraft:iron_ingot',
+    '/api/v1/registry/inspect?kind=item&id=minecraft:iron_ingot',
     '/api/v1/recipes/types',
     '/api/v1/recipes/query?item=minecraft:iron_ingot&role=output&limit=40',
     '/api/v1/recipes/query?item=gold&role=any&limit=40',
@@ -425,56 +335,47 @@ async function main() {
   const opts = parseArgs(process.argv.slice(2));
   await fs.mkdir(resultsDir, { recursive: true });
 
-  let serverHandle = null;
   let mcUrl = opts.mcUrl;
   if (!mcUrl) {
-    console.log('[bench] Starting NeoForge perfServer...');
-    serverHandle = await startPerfServer();
-    mcUrl = serverHandle.mcUrl;
-    console.log(`[bench] NeoForge perfServer ready at ${mcUrl}`);
+    console.log('[bench] Discovering running McInsight client HTTP server...');
+    mcUrl = await discoverClientUrl();
+    console.log(`[bench] Connected to McInsight client at ${mcUrl}`);
   }
 
-  try {
-    console.log('[bench] Running Mod HTTP single-endpoint benchmarks...');
-    const modHttp = await benchmarkModHttp(mcUrl);
+  console.log('[bench] Running Mod HTTP single-endpoint benchmarks...');
+  const modHttp = await benchmarkModHttp(mcUrl);
 
-    console.log('[bench] Running Mod HTTP parallel stress test (concurrency=8, 160 requests)...');
-    const parallelStress = await benchmarkParallelStress(mcUrl, serverHandle);
+  console.log('[bench] Running Mod HTTP parallel stress test (concurrency=8, 160 requests)...');
+  const parallelStress = await benchmarkParallelStress(mcUrl, null);
 
-    console.log('[bench] Running MCP Server E2E & component benchmarks...');
-    const mcpServer = await benchmarkMcpServer(mcUrl);
+  console.log('[bench] Running MCP Server E2E & component benchmarks...');
+  const mcpServer = await benchmarkMcpServer(mcUrl);
 
-    const report = {
-      label: opts.label,
-      timestamp: new Date().toISOString(),
-      mcUrl,
-      modHttp,
-      parallelStress,
-      mcpServer,
-    };
+  const report = {
+    label: opts.label,
+    timestamp: new Date().toISOString(),
+    mcUrl,
+    modHttp,
+    parallelStress,
+    mcpServer,
+  };
 
-    const outPath = path.join(resultsDir, `${opts.label}.json`);
-    await fs.writeFile(outPath, JSON.stringify(report, null, 2), 'utf-8');
+  const outPath = path.join(resultsDir, `${opts.label}.json`);
+  await fs.writeFile(outPath, JSON.stringify(report, null, 2), 'utf-8');
 
-    console.log(`\n=== Benchmark Summary (${opts.label}) ===`);
-    for (const [k, v] of Object.entries(modHttp)) {
-      console.log(
-        `  ${k.padEnd(24)} cold=${String(v.coldMs).padStart(8)}ms  p50=${String(v.warm.p50Ms).padStart(7)}ms  p95=${String(v.warm.p95Ms).padStart(7)}ms  mainUs=${v.warmMainThreadUs ? `${v.warmMainThreadUs.avg}/${v.warmMainThreadUs.max}` : 'n/a'}`,
-      );
-    }
+  console.log(`\n=== Benchmark Summary (${opts.label}) ===`);
+  for (const [k, v] of Object.entries(modHttp)) {
     console.log(
-      `  [stress] rps=${parallelStress.throughputRps}  p50=${parallelStress.latency.p50Ms}ms  p95=${parallelStress.latency.p95Ms}ms  errors=${parallelStress.errors}  cantKeepUp=${parallelStress.cantKeepUpWarnings}`,
+      `  ${k.padEnd(24)} cold=${String(v.coldMs).padStart(8)}ms  p50=${String(v.warm.p50Ms).padStart(7)}ms  p95=${String(v.warm.p95Ms).padStart(7)}ms  mainUs=${v.warmMainThreadUs ? `${v.warmMainThreadUs.avg}/${v.warmMainThreadUs.max}` : 'n/a'}`,
     );
-    console.log(
-      `  [mcp] portDiscovery=${mcpServer.portDiscoveryMs}ms  jarSearchCold/Warm=${mcpServer.jarInspector.searchColdMs}/${mcpServer.jarInspector.searchWarmAvgMs}ms`,
-    );
-    console.log(`Saved full report to ${outPath}`);
-  } finally {
-    if (serverHandle) {
-      console.log('[bench] Stopping NeoForge perfServer...');
-      await serverHandle.stop();
-    }
   }
+  console.log(
+    `  [stress] rps=${parallelStress.throughputRps}  p50=${parallelStress.latency.p50Ms}ms  p95=${parallelStress.latency.p95Ms}ms  errors=${parallelStress.errors}  cantKeepUp=${parallelStress.cantKeepUpWarnings}`,
+  );
+  console.log(
+    `  [mcp] portDiscovery=${mcpServer.portDiscoveryMs}ms  jarSearchCold/Warm=${mcpServer.jarInspector.searchColdMs}/${mcpServer.jarInspector.searchWarmAvgMs}ms`,
+  );
+  console.log(`Saved full report to ${outPath}`);
 }
 
 main().catch((err) => {

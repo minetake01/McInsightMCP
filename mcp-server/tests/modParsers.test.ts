@@ -168,6 +168,51 @@ describe('modParsers (version-scoped built-in major mod parsers)', () => {
     expect(listed?.versionCompatible).toBe(false);
   });
 
+  it('parses Mekanism 10.7 item_output, AE2 transform, Ars imbuement, and flags hasUnparsedFields for unknown keys', () => {
+    const enrich = parseWithBuiltinModParser(
+      'mekanism:enriching',
+      {
+        type: 'mekanism:enriching',
+        input: { count: 1, tag: 'c:ores/iron' },
+        output: { count: 2, id: 'mekanism:dust_iron' },
+        energy_required: 200,
+      },
+      compatibleVersions,
+    );
+    expect(enrich.parsed?.energyUnit).toBe('J');
+    expect(enrich.parsed?.energy).toBe(200);
+    expect(enrich.parsed?.outputs[0]?.id).toBe('mekanism:dust_iron');
+
+    const imbuement = parseWithBuiltinModParser(
+      'ars_nouveau:imbuement',
+      {
+        type: 'ars_nouveau:imbuement',
+        input: { item: 'minecraft:lapis_lazuli' },
+        output: { count: 1, id: 'ars_nouveau:source_gem' },
+        source: 500,
+        pedestalItems: [{ item: 'minecraft:amethyst_shard' }],
+      },
+      compatibleVersions,
+    );
+    expect(imbuement.parsed?.energyUnit).toBe('Source');
+    expect(imbuement.parsed?.catalysts?.[0]?.id).toBe('minecraft:amethyst_shard');
+
+    const oritechNonGenerator = parseWithBuiltinModParser(
+      'oritech:centrifuge',
+      {
+        type: 'oritech:centrifuge',
+        ingredients: [{ item: 'minecraft:clay_ball' }],
+        fluidInput: { fluid: 'minecraft:water', amount: 500 },
+        results: [{ id: 'minecraft:brick', count: 1 }],
+        time: 80,
+        experimentalExtraField: { preserve: true },
+      },
+      compatibleVersions,
+    );
+    expect(oritechNonGenerator.parsed?.inputs.some((i) => i.kind === 'fluid' && i.id === 'minecraft:water')).toBe(true);
+    expect(oritechNonGenerator.parsed?.hasUnparsedFields).toBe(true);
+  });
+
   it.skipIf(!hasRealModpack)('parses real recipe JSON files directly from mod JARs via MCINSIGHT_TEST_MODS_DIR', async () => {
     const inspector = new JarInspector(path.resolve('.tools'));
     const samples: Array<[string, string]> = [

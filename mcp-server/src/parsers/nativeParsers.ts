@@ -244,6 +244,8 @@ export function parseNativeRecipe(recipeType: string, rawJson: unknown): NativeR
   if (!isRecord(rawJson)) return null;
   const group = typeof rawJson.group === 'string' && rawJson.group.length > 0 ? rawJson.group : undefined;
   const category = typeof rawJson.category === 'string' ? rawJson.category : undefined;
+  const hasExtraTopLevelKeys = (allowed: Set<string>): boolean =>
+    Object.keys(rawJson).some((k) => !allowed.has(k));
 
   switch (recipeType) {
     case 'minecraft:crafting_shaped': {
@@ -265,6 +267,9 @@ export function parseNativeRecipe(recipeType: string, rawJson: unknown): NativeR
         inputs.push(...res.items);
       }
       const outRes = extractVanillaIngredient(rawJson.result, 'result');
+      const extra = hasExtraTopLevelKeys(
+        new Set(['type', 'pattern', 'key', 'result', 'group', 'category', 'show_notification']),
+      );
       return {
         nativeType: recipeType,
         mechanism: 'Vanilla Crafting Table (Shaped)',
@@ -272,7 +277,7 @@ export function parseNativeRecipe(recipeType: string, rawJson: unknown): NativeR
         outputs: outRes.items,
         group,
         category,
-        hasUnparsedFields: hasUnparsed || outRes.hasUnparsed || undefined,
+        hasUnparsedFields: hasUnparsed || outRes.hasUnparsed || extra || undefined,
       };
     }
 
@@ -286,6 +291,7 @@ export function parseNativeRecipe(recipeType: string, rawJson: unknown): NativeR
         inputs.push(...res.items);
       }
       const outRes = extractVanillaIngredient(rawJson.result, 'result');
+      const extra = hasExtraTopLevelKeys(new Set(['type', 'ingredients', 'result', 'group', 'category']));
       return {
         nativeType: recipeType,
         mechanism: 'Vanilla Crafting Table (Shapeless)',
@@ -293,7 +299,7 @@ export function parseNativeRecipe(recipeType: string, rawJson: unknown): NativeR
         outputs: outRes.items,
         group,
         category,
-        hasUnparsedFields: hasUnparsed || outRes.hasUnparsed || undefined,
+        hasUnparsedFields: hasUnparsed || outRes.hasUnparsed || extra || undefined,
       };
     }
 
@@ -309,6 +315,9 @@ export function parseNativeRecipe(recipeType: string, rawJson: unknown): NativeR
       };
       const inRes = extractVanillaIngredient(rawJson.ingredient, 'ingredient');
       const outRes = extractVanillaIngredient(rawJson.result, 'result');
+      const extra = hasExtraTopLevelKeys(
+        new Set(['type', 'ingredient', 'result', 'cookingtime', 'experience', 'group', 'category']),
+      );
       return {
         nativeType: recipeType,
         mechanism: mechMap[recipeType]!,
@@ -318,20 +327,21 @@ export function parseNativeRecipe(recipeType: string, rawJson: unknown): NativeR
         experience: typeof rawJson.experience === 'number' ? rawJson.experience : undefined,
         group,
         category,
-        hasUnparsedFields: inRes.hasUnparsed || outRes.hasUnparsed || undefined,
+        hasUnparsedFields: inRes.hasUnparsed || outRes.hasUnparsed || extra || undefined,
       };
     }
 
     case 'minecraft:stonecutting': {
       const inRes = extractVanillaIngredient(rawJson.ingredient, 'ingredient');
       const outRes = extractVanillaIngredient(rawJson.result, 'result');
+      const extra = hasExtraTopLevelKeys(new Set(['type', 'ingredient', 'result', 'group']));
       return {
         nativeType: recipeType,
         mechanism: 'Vanilla Stonecutter',
         inputs: inRes.items,
         outputs: outRes.items,
         group,
-        hasUnparsedFields: inRes.hasUnparsed || outRes.hasUnparsed || undefined,
+        hasUnparsedFields: inRes.hasUnparsed || outRes.hasUnparsed || extra || undefined,
       };
     }
 
@@ -341,6 +351,9 @@ export function parseNativeRecipe(recipeType: string, rawJson: unknown): NativeR
       const bRes = extractVanillaIngredient(rawJson.base, 'base');
       const aRes = extractVanillaIngredient(rawJson.addition, 'addition');
       const outRes = extractVanillaIngredient(rawJson.result, 'result');
+      const extra = hasExtraTopLevelKeys(
+        new Set(['type', 'template', 'base', 'addition', 'result']),
+      );
       return {
         nativeType: recipeType,
         mechanism:
@@ -350,7 +363,7 @@ export function parseNativeRecipe(recipeType: string, rawJson: unknown): NativeR
         inputs: [...tRes.items, ...bRes.items, ...aRes.items],
         outputs: outRes.items,
         hasUnparsedFields:
-          tRes.hasUnparsed || bRes.hasUnparsed || aRes.hasUnparsed || outRes.hasUnparsed || undefined,
+          tRes.hasUnparsed || bRes.hasUnparsed || aRes.hasUnparsed || outRes.hasUnparsed || extra || undefined,
       };
     }
 

@@ -47,7 +47,7 @@ McInsightMCP を使うと、Claude Desktop・Cursor・Claude Code・VS Code な�
 | MCP サーバー | [Node.js](https://nodejs.org/) `20` 以上 |
 
 ### 自動連携するオプション MOD
-- JEI（レシピカテゴリ、触媒ブロック、JEI 説明ページ）
+- JEI / EMI / REI（レシピカテゴリ、触媒ブロック、アイテム・流体等の説明ページ）
 - ゲーム内ガイド・クエスト: Patchouli / GuideME / FTB Quests / Create Ponder / Oracle Index / 言語ファイル
 
 ### 主要 MOD 向けレシピ整形
@@ -136,10 +136,10 @@ AI クライアント側で接続先 URL に `http://127.0.0.1:3876/mcp` を指�
 
 ## 提供される AI ツール（11 種類）
 
-- ワールド・プレイヤー状態: `mc_status`, `mc_player_state`, `mc_observe_world`（視線先や周囲ブロック/エンティティの確認）
-- アイテム・ブロック: `mc_search_registry`, `mc_inspect`（ブロック性質・タグ・JEI 情報）
+- ワールド・プレイヤー状態: `mc_status`, `mc_player_state`, `mc_observe_world`（視線先のブロック/流体/エンティティや周囲スキャン）
+- アイテム・ブロック: `mc_search_registry`, `mc_inspect`（アイテム・ブロック・流体・エンティティ性質・タグ・JEI/EMI/REI 情報）
 - 入手・レシピ・進行: `mc_query_item_flow`, `mc_query_recipes`, `mc_query_world_data`（鉱脈/バイオーム・ルートテーブル・取引・NeoForge Data Maps）, `mc_query_advancements`
-- ガイド・MOD 解析: `mc_guides`（Patchouli / GuideME / FTB Quests / Ponder / Oracle Index / 言語ファイル）, `mc_inspect_code`（リソース・スクリプト検索と Java クラス解析）
+- ガイド・MOD 解析: `mc_guides`（Patchouli / GuideME / FTB Quests / Ponder / Oracle Index / 言語ファイル）, `mc_inspect_code`（リソース・Jar-in-Jar・スクリプト検索と Java クラス解析）
 
 ---
 
@@ -148,9 +148,9 @@ AI クライアント側で接続先 URL に `http://127.0.0.1:3876/mcp` を指�
 MOD のビルドには JDK 21、MCP サーバーのビルドには Node.js 20 以上と pnpm が必要です。
 
 ```bash
-# 1. NeoForge / Fabric MOD のビルド
+# 1. 共通ロジックのテストと NeoForge / Fabric MOD のビルド
 cd mod
-./gradlew :neoforge:build :fabric:build
+./gradlew :common:test :neoforge:build :fabric:build
 # 生成物:
 #   mod/neoforge/build/libs/mcinsight-neoforge-<mc_version>-0.1.0-beta.2.jar
 #   mod/fabric/build/libs/mcinsight-fabric-<mc_version>-0.1.0-beta.2.jar

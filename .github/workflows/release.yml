@@ -153,11 +153,11 @@ jobs:
         with:
           gradle-home-cache-cleanup: true
 
-      - name: Build NeoForge & Fabric mods
+      - name: Test common & Build NeoForge & Fabric mods
         working-directory: mod
         run: |
           chmod +x gradlew
-          ./gradlew :neoforge:build :fabric:build --no-daemon --stacktrace
+          ./gradlew :common:test :neoforge:build :fabric:build --no-daemon --stacktrace
 
       - name: Collect mod JARs
         shell: bash

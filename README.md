@@ -47,7 +47,7 @@ McInsightMCP connects MCP-compatible AI assistants (Claude Desktop, Cursor, Clau
 | **MCP Server** | [Node.js](https://nodejs.org/) `>= 20` |
 
 ### Optional In-Game Integrations (Auto-Detected)
-- **JEI** (categories, catalysts, and JEI item info pages)
+- **JEI, EMI, and REI** (recipe categories, catalysts, and item/fluid/chemical info pages)
 - **In-Game Guides & Quests**: Patchouli, GuideME, FTB Quests, Create Ponder, Oracle Index, and mod language files
 
 ### Built-In Mod Recipe Formatting
@@ -138,10 +138,10 @@ Generated automatically on first launch:
 
 McInsightMCP exposes 11 tools to your AI assistant:
 
-- **World & Player**: `mc_status`, `mc_player_state`, `mc_observe_world` (what you are looking at or nearby blocks/entities)
-- **Items & Blocks**: `mc_search_registry`, `mc_inspect` (block properties, tags, JEI info)
+- **World & Player**: `mc_status`, `mc_player_state`, `mc_observe_world` (what you are looking at — blocks, fluids, entities — or nearby blocks/entities)
+- **Items & Blocks**: `mc_search_registry`, `mc_inspect` (item/block/fluid/entity properties, tags, JEI/EMI/REI viewer info)
 - **Progression & Crafting**: `mc_query_item_flow`, `mc_query_recipes`, `mc_query_world_data` (worldgen, loot tables, trades, NeoForge data maps), `mc_query_advancements`
-- **Guides & Mod Internals**: `mc_guides` (Patchouli, GuideME, FTB Quests, Ponder, Oracle Index, lang), `mc_inspect_code` (resource/script search & Java class inspection)
+- **Guides & Mod Internals**: `mc_guides` (Patchouli, GuideME, FTB Quests, Ponder, Oracle Index, lang), `mc_inspect_code` (resource/script search, Jar-in-Jar, & Java class inspection)
 
 ---
 
@@ -150,9 +150,9 @@ McInsightMCP exposes 11 tools to your AI assistant:
 Requires **JDK 21** for the mod and **Node.js >= 20** + **pnpm** for the MCP server.
 
 ```bash
-# 1. Build the NeoForge and Fabric mod JARs
+# 1. Test common logic & build the NeoForge and Fabric mod JARs
 cd mod
-./gradlew :neoforge:build :fabric:build
+./gradlew :common:test :neoforge:build :fabric:build
 # Output JARs:
 #   mod/neoforge/build/libs/mcinsight-neoforge-<mc_version>-0.1.0-beta.2.jar
 #   mod/fabric/build/libs/mcinsight-fabric-<mc_version>-0.1.0-beta.2.jar

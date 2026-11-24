@@ -8,8 +8,8 @@ const repoRoot = path.resolve(__dirname, '..');
 const require = createRequire(path.join(repoRoot, 'mcp-server', 'package.json'));
 const AdmZip = require('adm-zip');
 
-const PERF_RUN_DIR = path.join(repoRoot, 'mod', 'neoforge', 'runs', 'perf-server');
-const DATAPACK_DIR = path.join(PERF_RUN_DIR, 'world', 'datapacks', 'perf_modpack_sim');
+const PERF_RUN_DIR = path.join(repoRoot, 'mod', 'neoforge', 'runs', 'client');
+const DATAPACK_DIR = path.join(PERF_RUN_DIR, 'saves', 'perf_world', 'datapacks', 'perf_modpack_sim');
 const FTB_QUESTS_DIR = path.join(PERF_RUN_DIR, 'config', 'ftbquests', 'quests', 'chapters');
 const FIXTURE_MODS_DIR = path.join(repoRoot, 'bench', 'fixtures', 'mods');
 
@@ -22,21 +22,8 @@ async function ensureDir(dir) {
   await fs.mkdir(dir, { recursive: true });
 }
 
-async function setupServerConfigs() {
-  await ensureDir(PERF_RUN_DIR);
-  await fs.writeFile(path.join(PERF_RUN_DIR, 'eula.txt'), 'eula=true\n', 'utf-8');
-  const props = [
-    'online-mode=false',
-    'level-type=minecraft\\:flat',
-    'spawn-protection=0',
-    'max-tick-time=-1',
-    'enable-rcon=false',
-    'view-distance=6',
-    'simulation-distance=6',
-    'server-port=25565',
-    'level-name=world',
-  ].join('\n') + '\n';
-  await fs.writeFile(path.join(PERF_RUN_DIR, 'server.properties'), props, 'utf-8');
+async function setupClientConfigs() {
+  await ensureDir(path.join(PERF_RUN_DIR, 'saves', 'perf_world'));
 }
 
 async function setupDatapack() {
@@ -229,7 +216,7 @@ async function setupFixtureJars() {
 async function main() {
   const t0 = performance.now();
   await Promise.all([
-    setupServerConfigs(),
+    setupClientConfigs(),
     setupDatapack(),
     setupFtbQuests(),
     setupFixtureJars(),

@@ -195,6 +195,42 @@ describe('JarInspector (synthetic JAR tests)', () => {
       },
     ]);
   });
+
+  it('indexes Jar-in-Jar nested mods, searches scripts/defaultconfigs, and rejects path traversal', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'mcinsight-jij-'));
+    tmpDirs.push(root);
+    const modsDir = path.join(root, 'mods');
+    await fsp.mkdir(modsDir, { recursive: true });
+    await fsp.mkdir(path.join(root, 'scripts'), { recursive: true });
+    await fsp.mkdir(path.join(root, 'defaultconfigs'), { recursive: true });
+    await fsp.writeFile(path.join(root, 'scripts', 'recipes.zs'), 'craftingTable.addShaped("secret_tofu", <item:minecraft:diamond>, []);\n');
+    await fsp.writeFile(path.join(root, 'defaultconfigs', 'democonfig.toml'), 'secret_tofu_rate = 42\n');
+
+    const innerZip = new AdmZip();
+    innerZip.addFile('META-INF/neoforge.mods.toml', Buffer.from('[[mods]]\nmodId="innerlib"\n'));
+    innerZip.addFile('data/innerlib/recipe/nested.json', Buffer.from('{"type":"minecraft:smelting","ok":true}'));
+
+    const outerZip = new AdmZip();
+    outerZip.addFile('META-INF/neoforge.mods.toml', Buffer.from('[[mods]]\nmodId="outermod"\n'));
+    outerZip.addFile('META-INF/jarjar/innerlib-1.0.0.jar', innerZip.toBuffer());
+    outerZip.writeZip(path.join(modsDir, 'outermod-1.0.0.jar'));
+
+    const inspector = new JarInspector(path.join(root, '.tools'));
+    const entries = await inspector.searchJarEntries(modsDir, 'nested.json', 'innerlib');
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.jarFile).toContain('!');
+
+    const content = await inspector.readJarResource(modsDir, 'innerlib', 'data/innerlib/recipe/nested.json');
+    expect(JSON.parse(content.content)).toMatchObject({ ok: true });
+
+    await expect(
+      inspector.readJarResource(modsDir, '../outside.jar', 'secret.txt'),
+    ).rejects.toThrow();
+
+    const packHits = await inspector.searchPackFiles(root, 'secret_tofu', 10);
+    expect(packHits.some((h) => h.relativePath.replace(/\\/g, '/').includes('scripts/recipes.zs'))).toBe(true);
+    expect(packHits.some((h) => h.relativePath.replace(/\\/g, '/').includes('defaultconfigs/democonfig.toml'))).toBe(true);
+  });
 });
 
 describe.skipIf(!hasRealModpack)('JarInspector (Real Modpack JARs via MCINSIGHT_TEST_MODS_DIR)', () => {
@@ -236,7 +272,6 @@ describe.skipIf(!hasRealModpack)('JarInspector (Real Modpack JARs via MCINSIGHT_
     const gameDir = path.dirname(REAL_MODS_DIR);
     const packHits = await inspector.searchPackFiles(gameDir, 'tofu', 10);
     expect(packHits.length).toBeGreaterThan(0);
-    expect(os.platform()).toBeTruthy();
   });
 
   it('greps tofustick loot modifiers, lang entries, and class strings in real modpack JARs', async () => {

@@ -9,6 +9,7 @@ neoForge {
         minecraftVersion = parchment_minecraft
         mappingsVersion = parchment_version
     }
+    addModdingDependenciesTo sourceSets.test
 }
 
 dependencies {
@@ -19,6 +20,14 @@ dependencies {
     compileOnly "dev.emi:emi-xplat-mojmap:${emi_version}:api"
     compileOnly "me.shedaniel:RoughlyEnoughItems-api-neoforge:${rei_version}"
     compileOnly "me.shedaniel:RoughlyEnoughItems-default-plugin-neoforge:${rei_version}"
+
+    testImplementation platform('org.junit:junit-bom:5.11.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
 }
 
 configurations {

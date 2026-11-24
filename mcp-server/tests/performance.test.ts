@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
@@ -49,10 +50,11 @@ describe('Performance Optimizations & Guardrails', () => {
       res.end(JSON.stringify({ ok: true }));
     });
 
-    await new Promise<void>((r) => srv.listen(25596, '127.0.0.1', r));
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
     cleanups.push(() => new Promise<void>((r) => srv.close(() => r())));
+    const port = (srv.address() as AddressInfo).port;
 
-    const client = new McHttpClient({ portStart: 25590, portEnd: 25599, metadataTtlMs: 30_000 });
+    const client = new McHttpClient({ portStart: port, portEnd: port, metadataTtlMs: 30_000 });
 
     const t0 = performance.now();
     const [v1, v2, m1, g1] = await Promise.all([

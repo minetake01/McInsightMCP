@@ -171,4 +171,30 @@ describe('nativeParsers', () => {
     expect(biomeSummary?.temperatureModifier).toBe('none');
     expect(biomeSummary?.spawners).toEqual({ monster: [{ type: 'minecraft:stray' }] });
   });
+
+  it('retains components on 1.21 ingredients/results and sets hasUnparsedFields on NeoForge conditions', () => {
+    const potionCraft = parseNativeRecipe('minecraft:crafting_shapeless', {
+      type: 'minecraft:crafting_shapeless',
+      ingredients: [
+        { item: 'minecraft:arrow' },
+        { type: 'neoforge:components', items: 'minecraft:potion', components: { 'minecraft:potion_contents': { potion: 'minecraft:healing' } } },
+      ],
+      result: {
+        id: 'minecraft:tipped_arrow',
+        count: 8,
+        components: { 'minecraft:potion_contents': { potion: 'minecraft:healing' } },
+      },
+    });
+    expect(potionCraft?.inputs[1]?.components).toEqual({ 'minecraft:potion_contents': { potion: 'minecraft:healing' } });
+    expect(potionCraft?.outputs[0]?.id).toBe('minecraft:tipped_arrow');
+    expect(potionCraft?.outputs[0]?.components).toEqual({ 'minecraft:potion_contents': { potion: 'minecraft:healing' } });
+
+    const conditional = parseNativeRecipe('minecraft:smelting', {
+      type: 'minecraft:smelting',
+      ingredient: { item: 'minecraft:raw_gold' },
+      result: { id: 'minecraft:gold_ingot', count: 1 },
+      'neoforge:conditions': [{ type: 'neoforge:mod_loaded', modid: 'create' }],
+    });
+    expect(conditional?.hasUnparsedFields).toBe(true);
+  });
 });
