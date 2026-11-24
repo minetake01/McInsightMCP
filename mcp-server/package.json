@@ -1,0 +1,29 @@
+{
+  "name": "mcinsight-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP 2026-07-28 compliant self-extending Minecraft game system insight server",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "start:http": "node dist/index.js --http",
+    "start:stdio": "node dist/index.js --stdio"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/node": "^2.1.2",
+    "@modelcontextprotocol/server": "^2.4.0",
+    "adm-zip": "^0.5.16",
+    "semver": "^7.7.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.7",
+    "@types/node": "^24.0.0",
+    "@types/semver": "^7.5.8",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  }
+}

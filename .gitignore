@@ -1,0 +1,20 @@
+# Gradle / Java
+.gradle/
+**/build/
+**/runs/
+**/out/
+*.hprof
+hs_err_pid*.log
+
+# Node / TypeScript
+node_modules/
+**/dist/
+.pnpm-store/
+
+# Downloaded decompiler tools
+mcp-server/.tools/
+
+# Local runtime secrets / logs
+*.log
+.env
+.env.*

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "${mod_id}",
+  "version": "${version}",
+  "name": "${mod_name}",
+  "description": "${description}",
+  "authors": [
+    "${mod_author}"
+  ],
+  "license": "${license}",
+  "environment": "*",
+  "entrypoints": {
+    "client": [
+      "dev.mcinsight.fabric.McInsightFabricClient"
+    ],
+    "server": [
+      "dev.mcinsight.fabric.McInsightFabricServer"
+    ],
+    "jei_mod_plugin": [
+      "dev.mcinsight.compat.jei.JeiPluginEntrypoint"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=${fabric_loader_version}",
+    "fabric-api": "*",
+    "minecraft": "${minecraft_version}",
+    "java": ">=${java_version}"
+  },
+  "suggests": {
+    "jei": "*"
+  }
+}
