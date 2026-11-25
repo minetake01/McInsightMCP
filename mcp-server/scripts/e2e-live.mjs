@@ -226,7 +226,7 @@ try {
 
   const worldgen = await assertTool('mc_query_world_data', (d) => d.ok === true && requirePage(d, 'entries'), 'queries placed features')({ kind: 'placed_feature', query: 'ore', limit: 5 });
   if (worldgen) {
-    record('worldgen entries carry kind and rawJson', worldgen.entries.every((e) => e.kind === 'placed_feature' && e.rawJson !== undefined), `returned=${worldgen.returned}`);
+    record('worldgen entries are explained or keep rawJson', worldgen.entries.every((e) => e.kind === 'placed_feature' && (e.nativeParsed !== undefined || e.rawJson !== undefined)), `returned=${worldgen.returned} parsed=${worldgen.entries.filter((e) => e.nativeParsed).length} raw=${worldgen.entries.filter((e) => e.rawJson).length}`);
   }
 
   // ---- datamaps / trades / advancements ------------------------------------
