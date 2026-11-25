@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "mcinsight_e2e",
+  "version": "0.0.0",
+  "name": "McInsight E2E Harness",
+  "description": "Test-only companion loaded by the e2e runs; never packaged with McInsight.",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["net.minetake.mcinsight.e2e.E2eHarness"],
+    "client": ["net.minetake.mcinsight.e2e.E2eClient"]
+  },
+  "depends": {
+    "fabricloader": "*",
+    "fabric-api": "*"
+  }
+}

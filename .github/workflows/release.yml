@@ -264,9 +264,16 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  e2e:
+    name: E2E (release preset)
+    # Every loader and scenario in real Minecraft must pass before anything is published.
+    uses: ./.github/workflows/e2e.yml
+    with:
+      preset: release
+
   publish-github:
     name: Publish GitHub Release
-    needs: build-and-verify
+    needs: [build-and-verify, e2e]
     if: ${{ inputs.dry_run != true }}
     runs-on: ubuntu-latest
     steps:

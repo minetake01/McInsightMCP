@@ -40,6 +40,7 @@
     "prepack": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && npm run build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "e2e": "node e2e/run.mjs",
     "start:http": "node dist/index.js --http",
     "start:stdio": "node dist/index.js --stdio"
   },

@@ -3,11 +3,43 @@ plugins {
     id 'net.neoforged.moddev'
 }
 
+// The e2e runs load the recipe viewers the real game would have; the normal dev runs do not, so
+// a developer's own run stays the minimal mod.
+sourceSets {
+    e2e {
+        compileClasspath += sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.runtimeClasspath + sourceSets.main.output
+    }
+}
+
+configurations {
+    e2eLocalRuntime
+    e2eRuntimeOnly.extendsFrom(e2eLocalRuntime)
+}
+
+// Local-only: '-Pe2e.extraMods=<dir>' adds every jar in that directory to the e2e runs, so a
+// developer can try an arbitrary mod set without it becoming part of the deterministic default.
+def extraModsDir = providers.gradleProperty('e2e.extraMods').map { file(it) }.getOrNull()
+if (extraModsDir != null) {
+    dependencies {
+        e2eLocalRuntime fileTree(dir: extraModsDir, include: '*.jar')
+    }
+}
+
 neoForge {
     version = neoforge_version
+    addModdingDependenciesTo sourceSets.e2e
     parchment {
         minecraftVersion = parchment_minecraft
         mappingsVersion = parchment_version
+    }
+    mods {
+        "${mod_id}" {
+            sourceSet sourceSets.main
+        }
+        mcinsight_e2e {
+            sourceSet sourceSets.e2e
+        }
     }
     runs {
         configureEach {
@@ -20,17 +52,72 @@ neoForge {
         server {
             server()
         }
-    }
-    mods {
-        "${mod_id}" {
-            sourceSet sourceSets.main
+        // Prepared here, launched by mcp-server/e2e: the runner reads the generated argument files
+        // and adds the game directory and quick-play flags per scenario, so one definition serves all.
+        e2eClient {
+            client()
+            gameDirectory = project.file('runs/e2e-client')
+            sourceSet = sourceSets.e2e
+            loadedMods = [mods.mcinsight_e2e]
+            disableIdeRun()
+        }
+        e2eServer {
+            server()
+            gameDirectory = project.file('runs/e2e-server')
+            sourceSet = sourceSets.e2e
+            loadedMods = [mods.mcinsight_e2e]
+            programArgument('--nogui')
+            disableIdeRun()
         }
     }
 }
 
+// The runner launches the game itself, without Gradle in between, so it owns the process and can
+// stop it. MDG already writes everything a launch needs to argument files; this task records them
+// with the one property that differs per scenario, the mod folder of the mod under test.
+['e2eClient': 'client', 'e2eServer': 'server'].each { run, side ->
+    def Run = run.capitalize()
+    def spec = layout.buildDirectory.file("e2e/${side}.json")
+    tasks.register("export${Run}Launch") {
+        group = 'e2e'
+        // prepare*Run writes the VM and program argument files; the classpath file belongs to the
+        // launch-script task, so the classpath is written here from the source set instead.
+        dependsOn(tasks.named("prepare${Run}Run"), tasks.named('classes'), tasks.named('e2eClasses'), tasks.named('processE2eResources'))
+        outputs.file(spec)
+        outputs.upToDateWhen { false }
+        doLast {
+            def moddev = layout.buildDirectory.dir('moddev').get().asFile
+            def folders = { String id, SourceSet set ->
+                [set.output.classesDirs.files, set.output.resourcesDir].flatten().collect { "${id}%%${it.absolutePath}" }
+            }
+            def harness = folders('mcinsight_e2e', sourceSets.e2e)
+            def withMod = folders(mod_id, sourceSets.main) + harness
+            def out = spec.get().asFile
+            out.parentFile.mkdirs()
+            def classpathFile = new File(out.parentFile, "${side}-classpath.txt")
+            classpathFile.text = '-classpath' + '\n' + sourceSets.e2e.runtimeClasspath.files*.absolutePath
+                .collect { it.replace('\\', '\\\\') }.join(File.pathSeparator) + '\n'
+            out.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson([
+                loader    : 'neoforge',
+                side      : side,
+                java      : javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(java_version) }
+                                .get().executablePath.asFile.absolutePath,
+                jvmArgs   : ["@${classpathFile}", "@${new File(moddev, "${run}RunVmArgs.txt")}"],
+                // The harness always loads; McInsight loads only with `withMod`, which is how the
+                // "server without the mod" scenario starts the same game without it.
+                withMod   : ["-Dfml.modFolders=${withMod.join(File.pathSeparator)}"],
+                withoutMod: ["-Dfml.modFolders=${harness.join(File.pathSeparator)}"],
+                mainClass : 'net.neoforged.devlaunch.Main',
+                args      : ["@${new File(moddev, "${run}RunProgramArgs.txt")}"],
+            ]))
+        }
+    }
+}
 dependencies {
     compileOnly "mezz.jei:jei-${minecraft_version}-neoforge-api:${jei_version}"
     compileOnly "dev.emi:emi-neoforge:${emi_version}:api"
     compileOnly "me.shedaniel:RoughlyEnoughItems-api-neoforge:${rei_version}"
     compileOnly "me.shedaniel:RoughlyEnoughItems-default-plugin-neoforge:${rei_version}"
+
+    e2eLocalRuntime "mezz.jei:jei-${minecraft_version}-neoforge:${jei_version}"
 }

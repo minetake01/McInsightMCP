@@ -30,6 +30,23 @@ pnpm build
 pnpm test
 ```
 
+### 3. End-to-End in Real Minecraft (`mcp-server/e2e/`)
+
+The e2e runner builds the mod, starts real Minecraft clients and dedicated servers, and checks every
+tool through MCP. A client opens a window; close nothing by hand, the runner stops what it started.
+
+```bash
+cd mcp-server
+pnpm e2e                                  # quick: NeoForge singleplayer
+pnpm e2e --preset release                 # every loader × singleplayer / multiplayer with and without the server mod
+pnpm e2e --scenario singleplayer --suite recipes --skip-build   # one area while working
+pnpm e2e --extra-mods /path/to/mods       # local only: try an arbitrary mod set
+pnpm e2e --list                           # presets, scenarios, suites
+```
+
+Logs of every process are kept under `mod/<loader>/runs/e2e/<loader>-<scenario>/logs/`. See
+[docs/ARCHITECTURE.md §12](docs/ARCHITECTURE.md) for how the runs are launched.
+
 ## Architecture & Conventions
 
 Please read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before making structural changes.
@@ -63,6 +80,7 @@ When bumping the release version, keep these three declarations synchronized:
 
 - [ ] `pnpm typecheck`, `pnpm build`, and `pnpm test` pass in `mcp-server/`
 - [ ] `./gradlew :common:test :neoforge:build :fabric:build` passes in `mod/`
+- [ ] `pnpm e2e` passes for the area you changed (CI runs the `quick` preset; releases run `release`)
 - [ ] A changed endpoint or response shape is reflected in `mcp-server/src/api/` (the contract test enforces this)
 - [ ] Documentation (`README.md`, `README.ja.md`, `docs/ARCHITECTURE.md`, `CHANGELOG.md`) updated if user-facing behavior or tools changed
 - [ ] Changes keep the mod 100% read-only, client-only HTTP (`127.0.0.1`), and privacy-scoped on multiplayer sync

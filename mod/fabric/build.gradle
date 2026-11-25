@@ -3,6 +3,27 @@ plugins {
     id 'fabric-loom'
 }
 
+// The e2e runs load the recipe viewer the real game would have and a test-only harness mod; the
+// normal dev runs do not, so a developer's own run stays the minimal mod.
+sourceSets {
+    e2e {
+        compileClasspath += sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.runtimeClasspath + sourceSets.main.output
+    }
+}
+
+loom {
+    createRemapConfigurations(sourceSets.e2e)
+    mods {
+        "${mod_id}" {
+            sourceSet sourceSets.main
+        }
+        mcinsight_e2e {
+            sourceSet sourceSets.e2e
+        }
+    }
+}
+
 dependencies {
     minecraft "com.mojang:minecraft:${minecraft_version}"
     mappings loom.layered {
@@ -15,6 +36,18 @@ dependencies {
     modCompileOnly "dev.emi:emi-fabric:${emi_version}:api"
     modCompileOnly "me.shedaniel:RoughlyEnoughItems-api-fabric:${rei_version}"
     modCompileOnly "me.shedaniel:RoughlyEnoughItems-default-plugin-fabric:${rei_version}"
+
+    // The newest Fabric JEI for 1.21.1 that this Loom can remap; later builds need Loom 1.18 (Gradle 9).
+    modE2eRuntimeOnly "mezz.jei:jei-${minecraft_version}-fabric:${jei_fabric_e2e_version}"
+}
+
+// Local-only: '-Pe2e.extraMods=<dir>' adds every jar in that directory to the e2e runs, so a
+// developer can try an arbitrary mod set without it becoming part of the deterministic default.
+def extraModsDir = providers.gradleProperty('e2e.extraMods').map { file(it) }.getOrNull()
+if (extraModsDir != null) {
+    dependencies {
+        modE2eRuntimeOnly fileTree(dir: extraModsDir, include: '*.jar')
+    }
 }
 
 loom {
@@ -30,6 +63,53 @@ loom {
             setConfigName('Fabric Server')
             ideConfigGenerated(true)
             runDir('runs/server')
+        }
+        // Prepared here, launched by mcp-server/e2e (see exportE2e*Launch below).
+        e2eClient {
+            client()
+            source(sourceSets.e2e)
+            ideConfigGenerated(false)
+            runDir('runs/e2e-client')
+        }
+        e2eServer {
+            server()
+            source(sourceSets.e2e)
+            ideConfigGenerated(false)
+            runDir('runs/e2e-server')
+        }
+    }
+}
+
+// The runner launches the game itself, without Gradle in between, so it owns the process and can
+// stop it. The command line is taken from Loom's own run task after it is configured.
+['e2eClient': 'client', 'e2eServer': 'server'].each { run, side ->
+    def Run = run.capitalize()
+    def spec = layout.buildDirectory.file("e2e/${side}.json")
+    tasks.register("export${Run}Launch") {
+        group = 'e2e'
+        dependsOn(tasks.named('configureLaunch'), tasks.named('classes'), tasks.named('e2eClasses'))
+        if (side == 'client') {
+            dependsOn(tasks.named('configureClientLaunch'))
+        }
+        outputs.file(spec)
+        outputs.upToDateWhen { false }
+        doLast {
+            def exec = tasks.named("run${Run}", JavaExec).get()
+            def out = spec.get().asFile
+            out.parentFile.mkdirs()
+            out.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson([
+                loader    : 'fabric',
+                side      : side,
+                java      : exec.javaLauncher.get().executablePath.asFile.absolutePath,
+                // Loom applies the run config's JVM arguments (DevLaunchInjector config, side) only when it
+                // executes, from an internal property; read it so the spec matches what runE2e* would do.
+                jvmArgs   : exec.internalJvmArgs.get() + ['-cp', exec.internalClasspath.files*.absolutePath.join(File.pathSeparator)],
+                // Fabric discovers mods on the classpath; McInsight is left out by id instead.
+                withMod   : [],
+                withoutMod: ["-Dfabric.debug.disableModIds=${mod_id}"],
+                mainClass : exec.mainClass.get(),
+                args      : exec.args,
+            ]))
         }
     }
 }

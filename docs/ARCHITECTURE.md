@@ -753,7 +753,58 @@ MCP server flags and environment variables: `--stdio`/`--http`, `--port`/`MCP_PO
 
 ---
 
-## 12. Explicitly Not Verified Here
+## 12. End-to-End Tests in Real Minecraft (`mcp-server/e2e/`)
+
+The e2e runner starts real Minecraft from the loaders' dev runtimes and drives it through the MCP
+server over Streamable HTTP, the way an agent would.
+
+- **Launch.** Each loader has `e2eClient`/`e2eServer` runs (NeoForge: MDG runs; Fabric: Loom runs)
+  on an `e2e` source set. `exportE2eClientLaunch`/`exportE2eServerLaunch` write
+  `mod/<loader>/build/e2e/{client,server}.json`: the Java executable, JVM and program arguments, and
+  two alternative argument sets, `withMod` and `withoutMod`. The runner launches the JVM from that spec
+  itself, so it owns the process, captures its log, and stops it. "Without McInsight" is the same game
+  without the mod: NeoForge leaves it out of `fml.modFolders`, Fabric disables it with
+  `fabric.debug.disableModIds`.
+- **Harness mod.** The `e2e` source set is a separate test-only mod, `mcinsight_e2e`, never packaged.
+  It logs the markers the runner waits for (`[E2E] server ready`, `[E2E] player ready`), creates a
+  creative flat world with a fixed seed when the client is started with
+  `-Dmcinsight.e2e.createWorld=<name>` (quick play can only open an existing world), and, when a player
+  joins, runs `e2e-setup.mcfunction` from the game directory as that player. The setup places the
+  blocks, block entities, entity and items the checks read, so every loader sees the same world.
+- **Scenarios.** `singleplayer` (the client hosts the integrated server), `multiplayer-mod` (a
+  dedicated server running McInsight; server data travels over the packet bridge) and
+  `multiplayer-nomod` (a dedicated server without McInsight; server data must fail as
+  `SERVER_MOD_REQUIRED` and composite answers must say what is missing). Each scenario runs in a fresh
+  directory under `mod/<loader>/runs/e2e/<loader>-<scenario>/`, and its process logs stay there.
+- **Suites and presets.** Checks are grouped into suites (`status`, `registry`, `recipes`, `world`,
+  `worlddata`, `progress`, `guides`, `contract`, `bridge`, `nomod`). Each scenario lists the suites
+  that apply to it, and `--suite` narrows that. Presets name common selections: `quick` (NeoForge
+  singleplayer, the default), `multiplayer` (both NeoForge multiplayer scenarios), and `release`
+  (every loader and scenario). `--list` prints all of them.
+- **Mod set.** By default the runs load only McInsight, the harness, and JEI (the viewer the real game
+  would have), so a run is deterministic. `--extra-mods <dir>` adds every jar in that directory to the
+  e2e runs for a local experiment; it is refused under `CI`.
+- **Fabric JEI.** The Fabric e2e runs pin `jei_fabric_e2e_version` (19.21.1.304), the newest Fabric
+  JEI for 1.21.1 that Loom 1.8 can remap; later builds need Loom 1.18, which needs Gradle 9. The
+  NeoForge runs use the compile-time `jei_version`, so the bridge is exercised against both an old and
+  a current JEI.
+- **CI.** `.github/workflows/e2e.yml` runs the `quick` preset on pull requests and pushes. A
+  `workflow_dispatch` can choose any preset, and `release.yml` calls it with `release` before
+  publishing. On Linux, `MCINSIGHT_E2E_XVFB=1` makes the runner start the client under `xvfb-run` with
+  Mesa software rendering. Game and MCP logs are uploaded as an artifact.
+
+```bash
+cd mcp-server
+node e2e/run.mjs                        # quick
+node e2e/run.mjs --preset release       # everything
+node e2e/run.mjs --loader fabric --scenario multiplayer-nomod
+node e2e/run.mjs --scenario singleplayer --suite recipes,worlddata --skip-build
+node e2e/run.mjs --extra-mods ~/my-mods # local only
+```
+
+---
+
+## 13. Explicitly Not Verified Here
 
 - Which dynamic registries a bare multiplayer client receives is a Minecraft property, not a McInsight
   contract. This document therefore does not claim that every `SERVER_DATA` kind is unreadable on a

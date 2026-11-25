@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A restructured MCP server: `api/` (contract mirror), `data/` (one module per data kind), `jar/`, `bytecode/`, `decompiler/`, `metadata/`, and `parsers/retention.ts` for the one `rawJson` retention rule
 - `trades_query` accepts `q` as free text in addition to the exact-id/tag `item` filter
 - `maxSyncBlockRadius` config key (default `16`, maximum `16`) bounding block-entity contents sent over the multiplayer bridge
+- End-to-end tests in real Minecraft (`mcp-server/e2e`, `pnpm e2e`): NeoForge and Fabric × singleplayer, multiplayer with the server mod, and multiplayer without it, driven through MCP; presets `quick`/`multiplayer`/`release`, `--suite` selection, and a local-only `--extra-mods`. CI runs `quick` on pull requests and `release` before publishing
 
 ### Changed
 - `item=` (and every id argument) now accepts only a full `namespace:path` id or a `#namespace:tag` tag; substring and display-name matching is gone, and names are resolved through `registry_search` first. Recipes without structural I/O are matched by exact resolved ids in their encoded JSON
@@ -55,6 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The stale bench parameters that the new contract rejects (`item=` as a substring, per-run `cantKeepUp` accounting from a server handle the harness never had). Every benchmarked URL now resolves in `InsightEndpoint` with only that endpoint's declared parameters and in-bounds `limit` values
 
 ### Fixed
+- An HTTP request that hit a linkage error (an optional integration's API differing from the one compiled against) never got an answer and left the caller waiting; it now fails `INTERNAL_ERROR`. The JEI bridge no longer calls `getSourceRecipeIds` on JEI older than 19.64, where it does not exist
+- `trades_query` is server data: modded trades are registered from the server's datapack reload, so a multiplayer client's own copy is not the world's
+- A malformed `item=` is `INVALID_ID` even when the endpoint's data lives on a server that cannot answer
 - Loot tables were unreadable on an integrated server: `MinecraftServer.registryAccess()` holds only a placeholder for the reloadable layer, so registries are now read from `reloadableRegistries()`, which holds every layer
 - `trades_query` timed out on the server thread: vanilla wraps cartographer treasure maps in a biome-specific wrapper, which hid the world search from the check, so each map listing searched for a structure per villager type. Wrappers are unwrapped first and listings are recognised by the values they hold (a structure tag, a villager-type map) instead of by class name
 - `registry_inspect` no longer answers without default components when the game thread does not hand over the registries; it fails with `DATA_UNAVAILABLE`
