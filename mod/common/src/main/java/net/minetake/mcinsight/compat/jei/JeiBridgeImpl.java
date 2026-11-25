@@ -243,7 +243,27 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
         return recipe instanceof RecipeHolder<?> holder ? holder.id() : null;
     }
 
+    /**
+     * Whether the installed JEI has {@code IRecipeCategory.getSourceRecipeIds}, added in 19.64.
+     *
+     * <p>The mod accepts JEI 19.x; on an older JEI the recipe has no such ids to report, which is
+     * what an empty list says. Calling the method there would be a linkage error, not an answer.
+     */
+    private static final boolean HAS_SOURCE_RECIPE_IDS = hasMethod(IRecipeCategory.class, "getSourceRecipeIds");
+
+    private static boolean hasMethod(Class<?> type, String name) {
+        for (java.lang.reflect.Method method : type.getMethods()) {
+            if (method.getName().equals(name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static <T> List<String> sourceRecipeIds(IRecipeCategory<T> category, T recipe) {
+        if (!HAS_SOURCE_RECIPE_IDS) {
+            return List.of();
+        }
         try {
             List<ResourceLocation> sources = category.getSourceRecipeIds(recipe);
             if (sources == null || sources.isEmpty()) {

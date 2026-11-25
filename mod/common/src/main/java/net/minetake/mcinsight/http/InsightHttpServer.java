@@ -128,11 +128,14 @@ public final class InsightHttpServer {
             sendJson(exchange, response, trace);
         } catch (InsightException e) {
             sendJson(exchange, JsonCodec.errorObject(e.error(), e.getMessage()), trace);
-        } catch (Exception e) {
+        } catch (Exception | LinkageError e) {
+            // A linkage error (an optional integration whose API differs from the one compiled
+            // against) must still produce an answer; escaping here would leave the caller waiting
+            // on a connection nobody will ever respond to.
             String msg = e.getMessage() != null && !e.getMessage().isBlank()
-                ? e.getMessage()
+                ? e.getClass().getSimpleName() + ": " + e.getMessage()
                 : e.getClass().getSimpleName();
-            McInsightConstants.LOG.warn("Error handling HTTP request {}: {}", exchange.getRequestURI(), msg);
+            McInsightConstants.LOG.warn("Error handling HTTP request {}", exchange.getRequestURI(), e);
             sendJson(exchange, JsonCodec.errorObject(InsightError.INTERNAL_ERROR, msg), trace);
         } finally {
             PerfMetrics.finishRequest(trace);

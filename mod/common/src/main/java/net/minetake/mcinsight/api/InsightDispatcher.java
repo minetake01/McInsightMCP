@@ -56,6 +56,11 @@ public final class InsightDispatcher {
             throw new InsightException(InsightError.INTERNAL_ERROR, "No handler registered for endpoint " + endpoint.id());
         }
         params.rejectUnknownKeys(endpoint.allowedParams());
+        // A malformed request is malformed wherever its data lives; checking the shared id form
+        // here keeps "your request is wrong" ahead of "this server cannot answer".
+        if (endpoint.allowedParams().contains("item")) {
+            ItemQuery.optional(params.string("item"));
+        }
         if (needsServer(endpoint, context)) {
             return delegateToServer(endpoint, params);
         }

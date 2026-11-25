@@ -47,7 +47,7 @@ public enum InsightEndpoint {
         Set.of("q", "item", "mod", "includeModifiers", "limit", "offset"), 30, 100),
     DATAMAPS_QUERY("datamaps_query", "/api/v1/datamaps/query", DataScope.SERVER_DATA, PlayerScope.NONE, 10_000,
         Set.of("q", "item", "registry", "mod", "includeRaw", "limit", "offset"), 30, 100),
-    TRADES_QUERY("trades_query", "/api/v1/trades/query", DataScope.LOCAL, PlayerScope.NONE, 10_000,
+    TRADES_QUERY("trades_query", "/api/v1/trades/query", DataScope.SERVER_DATA, PlayerScope.NONE, 10_000,
         Set.of("item", "side", "q", "profession", "mod", "limit", "offset"), 40, 200),
     ADVANCEMENTS_QUERY("advancements_query", "/api/v1/advancements/query", DataScope.SERVER_DATA, PlayerScope.REQUESTER,
         8_000, Set.of("q", "mod", "status", "includeRecipes", "limit", "offset"), 40, 200),

@@ -66,7 +66,7 @@ public final class ServerPacketHandler {
                 response = dispatch(sender, payload.endpoint(), payload.paramsJson(), executor);
             } catch (InsightException e) {
                 response = JsonCodec.errorObject(e.error(), e.getMessage());
-            } catch (Exception e) {
+            } catch (Exception | LinkageError e) {
                 response = JsonCodec.errorObject(
                     InsightError.INTERNAL_ERROR,
                     e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()
