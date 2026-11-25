@@ -1,14 +1,154 @@
 import fs from 'node:fs/promises';
 import { createServer } from 'node:http';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
-const modDir = path.join(repoRoot, 'mod');
 const resultsDir = path.join(repoRoot, 'bench', 'results');
 const fixtureModsDir = path.join(repoRoot, 'bench', 'fixtures', 'mods');
+const endpointJavaPath = path.join(
+  repoRoot,
+  'mod',
+  'common',
+  'src',
+  'main',
+  'java',
+  'net',
+  'minetake',
+  'mcinsight',
+  'api',
+  'InsightEndpoint.java',
+);
+
+/**
+ * The URLs this harness measures, declared once.
+ *
+ * <p>A parameter the endpoint table does not declare is rejected with 400, so a URL written against
+ * an older contract would fail a run long after it was authored. Keeping the list here lets
+ * {@link assertBenchContract} check every path and parameter against the mod's declaration before the
+ * first request.
+ */
+const BENCH_ENDPOINTS = [
+  { name: 'status', path: '/api/v1/status' },
+  { name: 'status_mods', path: '/api/v1/status?includeMods=true' },
+  { name: 'mods', path: '/api/v1/mods' },
+  { name: 'registry_search_item', path: '/api/v1/registry/search?kind=item&q=iron&limit=50' },
+  { name: 'registry_search_block', path: '/api/v1/registry/search?kind=block&q=stone&limit=50' },
+  { name: 'registry_search_tag', path: '/api/v1/registry/search?kind=tag&q=ingot&limit=50' },
+  { name: 'registry_inspect', path: '/api/v1/registry/inspect?kind=item&id=minecraft:iron_ingot' },
+  { name: 'recipes_types', path: '/api/v1/recipes/types' },
+  { name: 'recipes_query_exact', path: '/api/v1/recipes/query?item=minecraft:iron_ingot&role=output&limit=40' },
+  { name: 'recipes_query_tag', path: '/api/v1/recipes/query?item=%23minecraft:planks&role=any&limit=40' },
+  { name: 'recipes_query_mod', path: '/api/v1/recipes/query?mod=perfsim&limit=50' },
+  { name: 'worldgen_summary', path: '/api/v1/worldgen/summary' },
+  { name: 'worldgen_placed', path: '/api/v1/worldgen/query?kind=placed_feature&q=ore&limit=25' },
+  { name: 'worldgen_biome', path: '/api/v1/worldgen/query?kind=biome&limit=25' },
+  { name: 'loot_query', path: '/api/v1/loot/query?q=perfsim&limit=25' },
+  { name: 'guides_list', path: '/api/v1/guides/list' },
+  { name: 'guides_search', path: '/api/v1/guides/search?q=multiblock_reactor&limit=20' },
+  // The real id is discovered at runtime; the placeholder keeps the path and parameter set checked.
+  { name: 'guides_page', path: '/api/v1/guides/page?id=guide:placeholder' },
+  { name: 'introspect_class', path: '/api/v1/introspect/class?name=net.minecraft.world.item.Items' },
+];
+
+/** The parallel-stress request mix; every entry must satisfy the same contract check. */
+const STRESS_MIX = [
+  '/api/v1/status',
+  '/api/v1/registry/search?kind=item&q=iron&limit=50',
+  '/api/v1/registry/inspect?kind=item&id=minecraft:iron_ingot',
+  '/api/v1/recipes/types',
+  '/api/v1/recipes/query?item=minecraft:iron_ingot&role=output&limit=40',
+  '/api/v1/recipes/query?item=%23minecraft:planks&role=any&limit=40',
+  '/api/v1/worldgen/query?kind=placed_feature&q=ore&limit=25',
+  '/api/v1/loot/query?q=perfsim&limit=25',
+  '/api/v1/guides/search?q=perf_keyword_alpha&limit=20',
+  '/api/v1/introspect/class?name=net.minecraft.world.item.Items',
+];
+
+/**
+ * Reads the mod's endpoint table so the harness validates against the declaration, not a copy of it.
+ *
+ * <p>The regex mirrors the one in `mcp-server/tests/contract.test.ts`: one table row per endpoint,
+ * with `null` for endpoints that have no HTTP path.
+ */
+async function readEndpointContract() {
+  const source = await fs.readFile(endpointJavaPath, 'utf-8');
+  const pattern =
+    /\(\s*"([^"]+)"\s*,\s*(null|"[^"]*")\s*,[^,]+,[^,]+,[^,]+,\s*Set\.of\(([^)]*)\)\s*(?:,\s*(\d+)\s*,\s*(\d+))?\s*\)/g;
+  const endpoints = new Map();
+  for (const match of source.matchAll(pattern)) {
+    const [, id, rawPath, rawParams, rawDefault, rawMax] = match;
+    endpoints.set(id, {
+      id,
+      path: rawPath === 'null' ? null : rawPath.slice(1, -1),
+      params: rawParams
+        .split(',')
+        .map((value) => value.trim().replace(/^"|"$/g, ''))
+        .filter(Boolean),
+      defaultLimit: rawDefault ? Number(rawDefault) : 0,
+      maxLimit: rawMax ? Number(rawMax) : 0,
+    });
+  }
+  if (endpoints.size === 0) {
+    throw new Error(`Could not read any endpoint from ${endpointJavaPath}.`);
+  }
+  return endpoints;
+}
+
+/**
+ * Fails before measuring anything when a benchmark URL is not a valid request.
+ *
+ * <p>Three ways a URL can rot: the path is gone, a parameter is not declared by that endpoint
+ * (`400 INVALID_PARAMETER`), or `limit`/`offset` is outside the declared bounds. Reporting all of them
+ * at once beats discovering the first one as an HTTP 400 mid-run.
+ */
+async function assertBenchContract() {
+  const endpoints = await readEndpointContract();
+  const byPath = new Map(
+    [...endpoints.values()].filter((endpoint) => endpoint.path !== null).map((endpoint) => [endpoint.path, endpoint]),
+  );
+  const problems = [];
+  const checkedUrls = [...new Set([...BENCH_ENDPOINTS.map((entry) => entry.path), ...STRESS_MIX])];
+
+  for (const url of checkedUrls) {
+    const [rawPath, rawQuery] = url.split('?');
+    const endpoint = byPath.get(rawPath);
+    if (!endpoint) {
+      problems.push(`${url}: no endpoint declares the path ${rawPath}`);
+      continue;
+    }
+    const pairs = rawQuery ? rawQuery.split('&').filter(Boolean) : [];
+    const params = pairs.map((pair) => decodeURIComponent(pair.split('=')[0]));
+    const unknown = params.filter((name) => !endpoint.params.includes(name));
+    if (unknown.length > 0) {
+      problems.push(`${url}: ${endpoint.id} does not accept ${unknown.join(', ')} (allowed: ${endpoint.params.join(', ') || 'none'})`);
+    }
+    const valueOf = (name) => {
+      const pair = pairs.find((candidate) => decodeURIComponent(candidate.split('=')[0]) === name);
+      return pair === undefined ? undefined : decodeURIComponent(pair.split('=')[1] ?? '');
+    };
+    const limitRaw = valueOf('limit');
+    if (limitRaw !== undefined) {
+      const limit = Number(limitRaw);
+      if (!Number.isInteger(limit) || limit < 1 || limit > endpoint.maxLimit) {
+        problems.push(`${url}: limit=${limitRaw} is outside 1..${endpoint.maxLimit} for ${endpoint.id}`);
+      }
+    }
+    const offsetRaw = valueOf('offset');
+    if (offsetRaw !== undefined) {
+      const offset = Number(offsetRaw);
+      if (!Number.isInteger(offset) || offset < 0) {
+        problems.push(`${url}: offset=${offsetRaw} must be an integer >= 0 for ${endpoint.id}`);
+      }
+    }
+  }
+
+  if (problems.length > 0) {
+    throw new Error(`Benchmark URLs do not match InsightEndpoint:\n  - ${problems.join('\n  - ')}`);
+  }
+  console.log(`[bench] ${checkedUrls.length} benchmark URLs match the InsightEndpoint contract.`);
+}
 
 function parseArgs(argv) {
   const opts = { label: 'run', mcUrl: undefined };
@@ -93,27 +233,11 @@ async function benchmarkModHttp(mcUrl) {
   const guidesList = await timedFetchJson(`${mcUrl}/api/v1/guides/list`);
   const firstGuideId = guidesList.json?.guides?.[0]?.id ?? 'ftbquests:chapters/chapter_000.snbt';
 
-  const endpoints = [
-    { name: 'status', path: '/api/v1/status' },
-    { name: 'status_mods', path: '/api/v1/status?includeMods=true' },
-    { name: 'mods', path: '/api/v1/mods' },
-    { name: 'registry_search_item', path: '/api/v1/registry/search?kind=item&q=iron&limit=50' },
-    { name: 'registry_search_block', path: '/api/v1/registry/search?kind=block&q=stone&limit=50' },
-    { name: 'registry_search_tag', path: '/api/v1/registry/search?kind=tag&q=ingot&limit=50' },
-    { name: 'registry_inspect', path: '/api/v1/registry/inspect?kind=item&id=minecraft:iron_ingot' },
-    { name: 'recipes_types', path: '/api/v1/recipes/types' },
-    { name: 'recipes_query_exact', path: '/api/v1/recipes/query?item=minecraft:iron_ingot&role=output&limit=40' },
-    { name: 'recipes_query_substr', path: '/api/v1/recipes/query?item=iron&role=any&limit=40' },
-    { name: 'recipes_query_mod', path: '/api/v1/recipes/query?mod=perfsim&limit=50' },
-    { name: 'worldgen_summary', path: '/api/v1/worldgen/summary' },
-    { name: 'worldgen_placed', path: '/api/v1/worldgen/query?kind=placed_feature&q=ore&limit=25' },
-    { name: 'worldgen_biome', path: '/api/v1/worldgen/query?kind=biome&limit=25' },
-    { name: 'loot_query', path: '/api/v1/loot/query?q=perfsim&limit=25' },
-    { name: 'guides_list', path: '/api/v1/guides/list' },
-    { name: 'guides_search', path: '/api/v1/guides/search?q=multiblock_reactor&limit=20' },
-    { name: 'guides_page', path: `/api/v1/guides/page?id=${encodeURIComponent(firstGuideId)}` },
-    { name: 'introspect_class', path: '/api/v1/introspect/class?name=net.minecraft.world.item.Items' },
-  ];
+  const endpoints = BENCH_ENDPOINTS.map((endpoint) =>
+    endpoint.name === 'guides_page'
+      ? { name: endpoint.name, path: `/api/v1/guides/page?id=${encodeURIComponent(firstGuideId)}` }
+      : endpoint,
+  );
 
   const results = {};
   for (const ep of endpoints) {
@@ -146,21 +270,9 @@ async function benchmarkModHttp(mcUrl) {
   return results;
 }
 
-async function benchmarkParallelStress(mcUrl, serverHandle) {
-  const mix = [
-    '/api/v1/status',
-    '/api/v1/registry/search?kind=item&q=iron&limit=50',
-    '/api/v1/registry/inspect?kind=item&id=minecraft:iron_ingot',
-    '/api/v1/recipes/types',
-    '/api/v1/recipes/query?item=minecraft:iron_ingot&role=output&limit=40',
-    '/api/v1/recipes/query?item=gold&role=any&limit=40',
-    '/api/v1/worldgen/query?kind=placed_feature&q=ore&limit=25',
-    '/api/v1/loot/query?q=perfsim&limit=25',
-    '/api/v1/guides/search?q=perf_keyword_alpha&limit=20',
-    '/api/v1/introspect/class?name=net.minecraft.world.item.Items',
-  ];
+async function benchmarkParallelStress(mcUrl) {
+  const mix = STRESS_MIX;
 
-  serverHandle?.resetCantKeepUpCount();
   const metricsBefore = await tryFetchMetrics(mcUrl);
   const totalRequests = 160;
   const concurrency = 8;
@@ -195,7 +307,6 @@ async function benchmarkParallelStress(mcUrl, serverHandle) {
     wallMs: Number(wallMs.toFixed(2)),
     throughputRps: Number(((totalRequests / wallMs) * 1000).toFixed(2)),
     errors,
-    cantKeepUpWarnings: serverHandle ? serverHandle.getCantKeepUpCount() : null,
     latency: summarizeLatencies(latencies),
     mainThreadUsAvg:
       mainUsList.length > 0
@@ -335,6 +446,8 @@ async function main() {
   const opts = parseArgs(process.argv.slice(2));
   await fs.mkdir(resultsDir, { recursive: true });
 
+  await assertBenchContract();
+
   let mcUrl = opts.mcUrl;
   if (!mcUrl) {
     console.log('[bench] Discovering running McInsight client HTTP server...');
@@ -346,7 +459,7 @@ async function main() {
   const modHttp = await benchmarkModHttp(mcUrl);
 
   console.log('[bench] Running Mod HTTP parallel stress test (concurrency=8, 160 requests)...');
-  const parallelStress = await benchmarkParallelStress(mcUrl, null);
+  const parallelStress = await benchmarkParallelStress(mcUrl);
 
   console.log('[bench] Running MCP Server E2E & component benchmarks...');
   const mcpServer = await benchmarkMcpServer(mcUrl);
@@ -370,7 +483,7 @@ async function main() {
     );
   }
   console.log(
-    `  [stress] rps=${parallelStress.throughputRps}  p50=${parallelStress.latency.p50Ms}ms  p95=${parallelStress.latency.p95Ms}ms  errors=${parallelStress.errors}  cantKeepUp=${parallelStress.cantKeepUpWarnings}`,
+    `  [stress] rps=${parallelStress.throughputRps}  p50=${parallelStress.latency.p50Ms}ms  p95=${parallelStress.latency.p95Ms}ms  errors=${parallelStress.errors}`,
   );
   console.log(
     `  [mcp] portDiscovery=${mcpServer.portDiscoveryMs}ms  jarSearchCold/Warm=${mcpServer.jarInspector.searchColdMs}/${mcpServer.jarInspector.searchWarmAvgMs}ms`,

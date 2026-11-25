@@ -7,17 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+> **Breaking internal response-shape change (beta, no compatibility shim).** Endpoints, accepted
+> parameters, page fields, error codes, and viewer metadata changed together. This project is still in
+> beta and there is deliberately no shim for the previous shapes: update clients and tools instead.
+> The 11 MCP tool names are unchanged.
+
 ### Added
-- EMI (`1.1.24+1.21.1`) and REI (`16.0.799`) recipe viewer bridges alongside JEI, with multi-viewer `source` filtering (`all`, `vanilla`, `viewer`, `jei`, `rei`, `emi`) and unified `viewerIngredients`/`viewerInformation`
-- Client-only loopback HTTP server (disabled on dedicated servers) with optional read-only multiplayer `CustomPacketPayload` sync (`mcinsight:hello`, `mcinsight:request`, `mcinsight:response`) strictly scoped to server registries, the requesting player's advancements, and nearby block entities (`<= 16` blocks)
-- Unified `/api/v1/registry/inspect` endpoint (`auto`, `item`, `block`, `fluid`, `entity`), fluid raycasting (`includeFluids`), `#tag` recipe queries, Jar-in-Jar indexing, expanded pack script search (`scripts/`, `defaultconfigs/`, `saves/*/datapacks/`), client-language guide fallback (`en_us`), and experimental villager trade inspection (`listingDetails`, `isSample`)
-- Java JUnit 5 unit tests (`:common:test`), expanded TypeScript test suite (`modVersion.test.ts` and multi-viewer / error-boundary coverage), and Windows + Node 20 CI matrix
+- A single endpoint table (`mod/.../api/InsightEndpoint.java`) declaring, for every endpoint, its id, HTTP path, data scope, player scope, time budget, accepted parameters, and page bounds; unknown parameters and out-of-bounds `limit` values are rejected instead of ignored or clamped
+- A single error catalogue (`mod/.../api/InsightError.java`) whose entries carry the HTTP status, so `400/401/404/405/409/429/500/502/503/504` now mean what they say; `RATE_LIMITED`, `SERVER_MOD_REQUIRED`, `VIEWER_UNAVAILABLE`, `REMOTE_ERROR`, and `REMOTE_TIMEOUT` are part of it
+- One paginated response shape (`Page`) reporting `offset`, `totalKnown`, `total` (only when counted), `returned`, and `hasMore`, with domain array keys `results`, `members`, `guides`, `hits`, `entries`, `recipes`, `trades`, `advancements`; viewer pages report `totalKnown: false`
+- `PartialData` (`{partial: true, missing: [{part, code, error}]}`) so a composite answer states which part could not be read instead of returning a thinner one
+- A shared `ViewerModel` with JEI, EMI, and REI adapters over it, and one `ViewerQuery`/`ViewerJson` implementation for filtering, paging, and JSON shaping, so all three viewers answer identically (`slotGranularity: slots|flat`, slot alternatives, catalysts, workstations; ingredient types `item`, `fluid`, `custom:<kind>`)
+- A packet-bridge design where `InsightDispatcher` decides who can answer an endpoint (`DataScope`, `PlayerScope`) and transparently delegates server-owned data; the same dispatcher and `Params` validation serve HTTP and bridged requests
+- `mcp-server/src/api/` mirroring the mod's endpoint table, error catalogue, result envelope, and wire types, plus `tests/contract.test.ts`, which reads the Java declarations and fails when the client copy drifts
+- A restructured MCP server: `api/` (contract mirror), `data/` (one module per data kind), `jar/`, `bytecode/`, `decompiler/`, `metadata/`, and `parsers/retention.ts` for the one `rawJson` retention rule
+- `trades_query` accepts `q` as free text in addition to the exact-id/tag `item` filter
+- `maxSyncBlockRadius` config key (default `16`, maximum `16`) bounding block-entity contents sent over the multiplayer bridge
 
 ### Changed
-- `mc_query_item_flow` now aggregates sources via `Promise.allSettled` with explicit error reporting, directional trade filtering, and catalyst usage lookups
-- `nativeParsers` and `modParsers` automatically preserve verbatim `rawJson` whenever unparsed fields remain (`hasUnparsedFields`) and enforce fail-closed version checks
-- Pagination (`offset`) extended across `/api/v1/registry/tag`, `/api/v1/trades/query`, `/api/v1/advancements/query`, and `/api/v1/guides/*`
-- Strict HTTP query parsing and full JSON error boundary in `InsightHttpServer` and `mcp-server` HTTP transport
+- `item=` (and every id argument) now accepts only a full `namespace:path` id or a `#namespace:tag` tag; substring and display-name matching is gone, and names are resolved through `registry_search` first. Recipes without structural I/O are matched by exact resolved ids in their encoded JSON
+- Data origin is no longer part of any response: the authoritative-server-data flag, the flattened JEI info field, and the registry-versus-resource-manager source marker are replaced by plain values plus `viewerInformation: {<viewerName>: string[]}`
+- Pagination is uniform across endpoints (previously each collector reported its own field set), and `recipes_query`'s effective page ceiling can be lowered by `maxRecipeResults`
+- Advancement progress is reported as one `progressUnavailable` boolean plus a `missing` entry (part `progress`, code `SERVER_MOD_REQUIRED`) when the world owner cannot supply it, instead of a separate availability flag and reason string
+- Trade listings report `sampled` for a randomized offer and a reflected `listing` object for one that cannot be materialized, so both facts are named after what the mod actually emits
+- `loot_query` pages only its loot tables: `entries` carries the `offset`/`totalKnown`/`total`/`returned`/`hasMore` envelope, while `lootModifiers` is returned whole with `totalModifiers` (the active modifier set is the small list the pack layers name, so slicing it with the table page's offset would make paging tables shift the modifier window)
+- `mc_query_item_flow` runs each source through a handler whose failure becomes a `missing` entry (`partial: true` with the mod's code), so a failed part is reported rather than omitted and a successful part is never dropped
+- Multiplayer server data is fetched transparently when the server also runs McInsight; when it does not, the endpoint fails with `SERVER_MOD_REQUIRED` instead of degrading quietly, and a client hosting an integrated server always answers locally
+- The MCP server reads its version from `package.json` through `version.ts` instead of a hand-maintained copy in `server.ts`
+- Operator caps are now applied inside the collectors (`config/Limits` read by `AreaScanner`, `TargetCollector`, `BlockEntityPart`, `InsightEndpoint`) instead of only in the loopback HTTP handler, so a bridged request is bounded by the same numbers as a local one
+- Native parser tier no longer claims registries/tags: registry data arrives structured from the mod. The native tier covers vanilla recipes, worldgen, biome modifiers, loot tables, and Global Loot Modifiers; the built-in mod tier keeps its fail-closed `modVersionRange` gating; both share one `hasUnparsedFields` envelope
+- Documentation restructured around the contract (endpoint table, error catalogue, response shapes, package map, transports) in `docs/ARCHITECTURE.md`; READMEs and CONTRIBUTING updated to match
+
+### Removed
+- The per-collector "no data" codes for loot, worldgen, data maps, recipes, and resources, plus the old advancement-progress and server-data codes: one `DATA_UNAVAILABLE` and one `SERVER_MOD_REQUIRED` now describe every one of those conditions
+- The authoritative-server-data flag, the flattened JEI info field, and the registry-versus-resource-manager provenance marker
+- Per-endpoint differing pagination fields, and `limit` clamping in place of an error
+- The loot-modifier "more available" flag: loot modifiers are no longer paged alongside the table page, so nothing reports a second `hasMore` for them
+- The `net.minetake.mcinsight.server` and `introspect` packages: replaced by `api/`, `game/`, `cache/`, `data/`, `serial/`, `metrics/`, `http/`, `network/`, and per-concept packages (`recipe/`, `registry/`, `guides/`, `loot/`, `datamaps/`, `worldgen/`, `world/`, `advancement/`, `trade/`, `status/`, `player/`, `reflect/`)
+- The stale bench parameters that the new contract rejects (`item=` as a substring, per-run `cantKeepUp` accounting from a server handle the harness never had). Every benchmarked URL now resolves in `InsightEndpoint` with only that endpoint's declared parameters and in-bounds `limit` values
+
+### Fixed
+- Benchmark URLs that would now be rejected with `400 INVALID_PARAMETER`: `recipes/query` substring item queries were replaced with exact-id and percent-encoded `#tag` queries, and all paths/parameters were checked against `InsightEndpoint.allowedParams()`
+- `describeBuiltinParsers`/`mc_query_recipes` viewer handling no longer assumes a fixed viewer name set; buckets and availability come from whatever registered
+- Version synchronization instructions: the MCP server version is read from `package.json`, so `server.ts` is no longer a version declaration to keep in sync
 
 ## [0.1.0-beta.2] - 2026-11-24
 

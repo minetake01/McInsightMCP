@@ -13,7 +13,7 @@
 McInsightMCP を使うと、Claude Desktop・Cursor・Claude Code・VS Code などの MCP 対応 AI アシスタントを、起動中の Minecraft に直接接続できます。古い Wiki に頼って AI が推測するのではなく、導入中の Modpack（KubeJS やデータパックによる変更込み）のレシピ、視線先のブロックや機械、所持インベントリ、ゲーム内ガイドブックやクエストを AI がリアルタイムに確認して回答します。
 
 > [!NOTE]
-> ベータ版（`0.1.0-beta.2`）: McInsightMCP は現在ベータ版として公開しています。`1.0.0` に向けて MCP ツールの仕様、出力形式、設定項目が変更される場合があります。フィードバックや不具合のご報告は [GitHub Issues](https://github.com/minetake01/McInsightMCP/issues) までお寄せください。
+> ベータ版（`0.1.0-beta.2`）: McInsightMCP は現在ベータ版として公開しています。`1.0.0` に向けて MCP ツールの仕様、出力形式、設定項目が変更される場合があります。フィードバックや不具合のご報告は [GitHub Issues](https://github.com/minetake01/McInsightMCP/issues) までお寄せください。現在の開発版には、応答形式の破壊的な内部変更（未リリース）も含まれます。ページのフィールド、エラーコード、レシピビューアのメタデータが同時に変わっており、11 個のツール名は変更ありません。
 
 ---
 
@@ -22,8 +22,11 @@ McInsightMCP を使うと、Claude Desktop・Cursor・Claude Code・VS Code な�
 - ゲーム内で有効なレシピ、鉱石の生成高度やバイオーム、ルートテーブル、村人取引、進捗、KubeJS やデータパックによる改変を直接参照して回答します。
 - ワールドの改変、ブロックの設置や破壊、プレイヤーの操作、コマンドの実行は一切行いません。
 - 通信は PC 内部（`127.0.0.1`）に限定しており、外部への送信や画面キャプチャは行いません。
-- マルチプレイで自分のクライアントだけに導入した状態でも、レシピ、インベントリ、視線先の対象、ガイド類を確認できます。シングルプレイやサーバー側にも導入した場合は、チェストや機械の完全な NBT やルートテーブルも参照できます。
+- マルチプレイで自分のクライアントだけに導入した状態でも、レシピ、インベントリ、視線先の対象、ガイド類を確認できます。シングルプレイの場合、またはサーバー側にも McInsight が導入されている場合は、サーバー側のデータ（ワールド生成、ルートテーブル、Data Maps、進捗、ブロックエンティティの中身）も自動で取得します。
 - 各種ガイド MOD が導入されていれば自動で連携し、ドキュメントが見当たらない未知の MOD 仕様でも MOD リソースやクラス実装から仕組みを調べられます。
+
+> [!TIP]
+> **データの取得元は応答に含まれません。** シングルプレイ、McInsight を導入したサーバー、導入していないサーバーのいずれでも応答の形は同じで、取得元によって分岐する必要はありません。サーバー側のデータを実際に読めない場合（例: McInsight を導入していないマルチプレイサーバー）は、該当するエンドポイントが明示的なエラー（`SERVER_MOD_REQUIRED` または `DATA_UNAVAILABLE`）を返し、複合的な応答ではその部分だけが `partial: true` と `missing: [{part, code, error}]` で不足として示されます。黙って情報を減らすことはありません。
 
 ---
 
@@ -100,7 +103,7 @@ AI クライアント側で接続先 URL に `http://127.0.0.1:3876/mcp` を指�
 
 [GitHub Releases](https://github.com/minetake01/McInsightMCP/releases) から `mcinsight-mcp-server-<version>` アーカイブをダウンロードして展開し、フォルダ内で `pnpm install --prod`（または `npm install --omit=dev`）を実行したうえで `node /path/to/mcinsight-mcp-server/dist/index.js --stdio` を指定することもできます。ソースからビルドする場合は、下の「ソースからのビルド」を参照してください。
 
-> ヒント: MCP サーバーは起動中の McInsight MOD（`127.0.0.1` のポート `25580..25599`）を自動で検出するため、通常はポート指定不要です。
+> ヒント: MCP サーバーは起動中の McInsight MOD（`127.0.0.1` のポート `25580..25599`）を自動で検出するため、通常はポート指定不要です。MOD 側の `port` や `portRangeSize` を変更した場合は、自動検出は既定の範囲しか調べないため、`--mc-url`（または `MCINSIGHT_URL`）で接続先を明示してください。
 
 ---
 
@@ -117,6 +120,7 @@ AI クライアント側で接続先 URL に `http://127.0.0.1:3876/mcp` を指�
 | `portRangeSize` | `20` | ポート使用中に試行する連続ポート数（`1..50`） |
 | `authToken` | `""` | API リクエストに必須とする任意の Bearer トークン |
 | `maxScanRadius` | `16` | 周囲スキャンの最大半径（`1..32`） |
+| `maxSyncBlockRadius` | `16` | マルチプレイ同期で送信するブロックエンティティ中身の最大半径（`1..16`） |
 | `maxRecipeResults` | `100` | 1 回の検索で返すレシピ上限数（`1..500`） |
 
 ### MCP サーバーの CLI フラグ / 環境変数
@@ -140,6 +144,8 @@ AI クライアント側で接続先 URL に `http://127.0.0.1:3876/mcp` を指�
 - アイテム・ブロック: `mc_search_registry`, `mc_inspect`（アイテム・ブロック・流体・エンティティ性質・タグ・JEI/EMI/REI 情報）
 - 入手・レシピ・進行: `mc_query_item_flow`, `mc_query_recipes`, `mc_query_world_data`（鉱脈/バイオーム・ルートテーブル・取引・NeoForge Data Maps）, `mc_query_advancements`
 - ガイド・MOD 解析: `mc_guides`（Patchouli / GuideME / FTB Quests / Ponder / Oracle Index / 言語ファイル）, `mc_inspect_code`（リソース・Jar-in-Jar・スクリプト検索と Java クラス解析）
+
+アイテムを指定するツールは、**完全な ID**（`namespace:path`）または**タグ**（`#namespace:tag`）だけを受け付けます。表示名や部分一致では検索されないため、表示名から ID を特定する場合は先に `mc_search_registry` を使ってください。
 
 ---
 
@@ -167,7 +173,7 @@ pnpm test
 
 ## ドキュメント・関連リンク
 
-- [アーキテクチャ・プロトコル仕様](docs/ARCHITECTURE.md): 設計思想、パーサー階層、HTTP API、スレッド設計の詳細
+- [アーキテクチャ・プロトコル仕様](docs/ARCHITECTURE.md): エンドポイントとエラーの契約、応答の形、通信方式、パッケージ構成、スレッド設計の詳細
 - [コントリビュートガイド](CONTRIBUTING.md): 開発環境の構築、テスト方法、MOD パーサーの追加手順
 - [セキュリティポリシー](SECURITY.md): 読み取り専用設計、ローカル通信の仕組み、脆弱性報告窓口
 - [変更履歴](CHANGELOG.md): バージョンごとの変更点

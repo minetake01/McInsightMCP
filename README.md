@@ -13,7 +13,7 @@
 McInsightMCP connects MCP-compatible AI assistants (Claude Desktop, Cursor, Claude Code, VS Code, and others) directly to your running **Minecraft** game. Instead of guessing from outdated wikis, your AI can look up real recipes in your modpack (including KubeJS and datapack tweaks), see what block or machine you are looking at, check your inventory, read in-game guidebooks and quests, and inspect how unfamiliar mods actually work.
 
 > [!NOTE]
-> **Beta Release (`0.1.0-beta.2`)**: McInsightMCP is currently in beta. MCP tool schemas, response formats, and configuration options may change before `1.0.0`. Bug reports and feedback are welcome via [GitHub Issues](https://github.com/minetake01/McInsightMCP/issues).
+> **Beta Release (`0.1.0-beta.2`)**: McInsightMCP is currently in beta. MCP tool schemas, response formats, and configuration options may change before `1.0.0`. Bug reports and feedback are welcome via [GitHub Issues](https://github.com/minetake01/McInsightMCP/issues). The current development line also contains a breaking internal response-shape change (unreleased): page fields, error codes, and viewer metadata changed together, and the 11 tool names are unchanged.
 
 ---
 
@@ -22,8 +22,11 @@ McInsightMCP connects MCP-compatible AI assistants (Claude Desktop, Cursor, Clau
 - **Accurate to Your Modpack**: Reads live recipes, ore generation, loot tables, villager trades, advancements, and KubeJS/datapack overrides straight from the running game.
 - **100% Read-Only & Safe**: Never breaks blocks, edits your world, moves your player, or sends commands. It only observes.
 - **Local-Only by Default**: Runs on `127.0.0.1` on your machine — no external servers, no telemetry, and no screen capture.
-- **Client-Friendly Multiplayer**: Works on multiplayer servers even when installed only on your client (recipes, inventory, raycast target, and guides). In singleplayer — or when also installed on the server — it additionally reads full machine/chest NBT and dynamic loot tables.
+- **Client-Friendly Multiplayer**: Works on multiplayer servers even when installed only on your client (recipes, inventory, raycast target, and guides). In singleplayer — or when the server also runs McInsight — server-side data (worldgen, loot tables, data maps, advancement progress, block-entity contents) is fetched for you automatically.
 - **Works With Any Modpack**: Automatically integrates with optional mods when installed, and can even inspect mod resources or decompile mod classes when documentation is missing.
+
+> [!TIP]
+> **Where the data came from is not part of an answer.** Singleplayer, a server that also runs McInsight, and a server without it all produce the same response shapes; you never have to branch on the source. When server-side data genuinely cannot be read — for example a multiplayer server that does not run McInsight — the affected endpoint fails with an explicit error (`SERVER_MOD_REQUIRED` or `DATA_UNAVAILABLE`) instead of returning a quietly smaller answer, and a composite answer marks just that part as missing (`partial: true`, `missing: [{part, code, error}]`).
 
 ---
 
@@ -100,7 +103,7 @@ Then point your MCP client to `http://127.0.0.1:3876/mcp`.
 
 You can also download and extract `mcinsight-mcp-server-<version>` from [GitHub Releases](https://github.com/minetake01/McInsightMCP/releases), install runtime dependencies inside the extracted folder (`pnpm install --prod` or `npm install --omit=dev`), and run `node /path/to/mcinsight-mcp-server/dist/index.js --stdio` (or build from source — see below).
 
-> **Tip**: By default, the MCP server automatically discovers a running McInsight mod on `127.0.0.1` ports `25580..25599` — no manual port configuration needed.
+> **Tip**: By default, the MCP server automatically discovers a running McInsight mod on `127.0.0.1` ports `25580..25599` — no manual port configuration needed. If you changed the mod's `port` or `portRangeSize`, pass the address explicitly with `--mc-url` (or `MCINSIGHT_URL`), because discovery only probes the default range.
 
 ---
 
@@ -117,6 +120,7 @@ Generated automatically on first launch:
 | `portRangeSize` | `20` | Number of consecutive ports to try if the port is busy (`1..50`) |
 | `authToken` | `""` | Optional Bearer token required for API requests |
 | `maxScanRadius` | `16` | Maximum radius for nearby area scans (`1..32`) |
+| `maxSyncBlockRadius` | `16` | Maximum radius for block-entity contents sent over the multiplayer bridge (`1..16`) |
 | `maxRecipeResults` | `100` | Maximum recipes returned per query (`1..500`) |
 
 ### MCP Server CLI Flags & Environment Variables
@@ -142,6 +146,8 @@ McInsightMCP exposes 11 tools to your AI assistant:
 - **Items & Blocks**: `mc_search_registry`, `mc_inspect` (item/block/fluid/entity properties, tags, JEI/EMI/REI viewer info)
 - **Progression & Crafting**: `mc_query_item_flow`, `mc_query_recipes`, `mc_query_world_data` (worldgen, loot tables, trades, NeoForge data maps), `mc_query_advancements`
 - **Guides & Mod Internals**: `mc_guides` (Patchouli, GuideME, FTB Quests, Ponder, Oracle Index, lang), `mc_inspect_code` (resource/script search, Jar-in-Jar, & Java class inspection)
+
+Whenever a tool takes an item, it takes an **exact** id (`namespace:path`) or a tag (`#namespace:tag`). Names and partial ids are not matched as substrings: ask `mc_search_registry` first to resolve a display name to the exact id.
 
 ---
 
@@ -169,7 +175,7 @@ pnpm test
 
 ## Documentation & Links
 
-- [Architecture & Protocol Specification](docs/ARCHITECTURE.md) — Technical details, parser tiers, HTTP endpoints, and threading model
+- [Architecture & Protocol Specification](docs/ARCHITECTURE.md) — Technical details: the endpoint and error contract, response shapes, transports, package map, and threading model
 - [Contributing Guide](CONTRIBUTING.md) — Development setup, testing, and how to add mod parsers
 - [Security Policy](SECURITY.md) — Read-only & loopback guarantees and vulnerability reporting
 - [Changelog](CHANGELOG.md) — Release history

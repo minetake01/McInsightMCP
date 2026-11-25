@@ -29,15 +29,19 @@ jobs:
           GRADLE_VER="$(grep -E '^version=' mod/gradle.properties | cut -d'=' -f2- | tr -d '\r')"
           CONST_VER="$(sed -nE 's/.*MOD_VERSION = "([^"]+)".*/\1/p' mod/common/src/main/java/net/minetake/mcinsight/McInsightConstants.java)"
           PKG_VER="$(node -p "require('./mcp-server/package.json').version")"
-          SERVER_VER="$(sed -nE "s/.*version: '([^']+)'.*/\1/p" mcp-server/src/server.ts | head -n1)"
           echo "gradle.properties : ${GRADLE_VER}"
           echo "McInsightConstants: ${CONST_VER}"
           echo "package.json      : ${PKG_VER}"
-          echo "server.ts         : ${SERVER_VER}"
-          if [[ "${GRADLE_VER}" != "${CONST_VER}" || "${GRADLE_VER}" != "${PKG_VER}" || "${GRADLE_VER}" != "${SERVER_VER}" ]]; then
+          if [[ -z "${GRADLE_VER}" || -z "${CONST_VER}" || -z "${PKG_VER}" ]]; then
+            echo "::error::A version declaration could not be read."
+            exit 1
+          fi
+          if [[ "${GRADLE_VER}" != "${CONST_VER}" || "${GRADLE_VER}" != "${PKG_VER}" ]]; then
             echo "::error::Version mismatch across mod and MCP server!"
             exit 1
           fi
+          # The MCP server reports its version by reading package.json, so no third declaration exists to drift.
+          grep -q "readPackageVersion" mcp-server/src/server.ts
           test -s README.md
           test -s README.ja.md
 
