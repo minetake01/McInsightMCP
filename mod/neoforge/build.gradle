@@ -114,10 +114,10 @@ neoForge {
     }
 }
 dependencies {
-    compileOnly "mezz.jei:jei-${minecraft_version}-neoforge-api:${jei_version}"
-    compileOnly "dev.emi:emi-neoforge:${emi_version}:api"
-    compileOnly "me.shedaniel:RoughlyEnoughItems-api-neoforge:${rei_version}"
-    compileOnly "me.shedaniel:RoughlyEnoughItems-default-plugin-neoforge:${rei_version}"
+    compileOnly libs.jei.neoforge.api
+    compileOnly(variantOf(libs.emi.neoforge.api) { classifier('api') })
+    compileOnly libs.rei.api.neoforge
+    compileOnly libs.rei.plugin.neoforge
 
-    e2eLocalRuntime "mezz.jei:jei-${minecraft_version}-neoforge:${jei_version}"
+    e2eLocalRuntime libs.jei.neoforge
 }

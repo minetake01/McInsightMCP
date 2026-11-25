@@ -1,8 +1,10 @@
 package net.minetake.mcinsight.api;
 
 import com.google.gson.JsonObject;
+import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.Map;
+import java.util.stream.Collectors;
 import net.minetake.mcinsight.data.ServerParts;
 import net.minetake.mcinsight.data.ServerSync;
 
@@ -37,17 +39,10 @@ public final class InsightDispatcher {
      * client is told it can ask for and what the server will answer cannot drift apart.
      */
     public static String bridgeCapabilities() {
-        StringBuilder sb = new StringBuilder();
-        for (InsightEndpoint endpoint : InsightEndpoint.values()) {
-            if (!exposedToRemoteClients(endpoint)) {
-                continue;
-            }
-            if (sb.length() > 0) {
-                sb.append(',');
-            }
-            sb.append(endpoint.id());
-        }
-        return sb.toString();
+        return Arrays.stream(InsightEndpoint.values())
+            .filter(InsightDispatcher::exposedToRemoteClients)
+            .map(InsightEndpoint::id)
+            .collect(Collectors.joining(","));
     }
 
     public static JsonObject dispatch(InsightEndpoint endpoint, RequestContext context, Params params) throws Exception {

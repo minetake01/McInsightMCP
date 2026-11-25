@@ -1,7 +1,7 @@
 import {
-  BuiltinModParser,
+  type BuiltinModParser,
   IngredientCollector,
-  ModIngredient,
+  type ModIngredient,
   extractModIngredient,
   isRecord,
   unparsedRecipeFlag,

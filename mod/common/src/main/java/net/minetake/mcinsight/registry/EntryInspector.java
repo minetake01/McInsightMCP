@@ -74,7 +74,7 @@ public final class EntryInspector {
                     "No item, block, fluid, or entity is named " + id + "."
                 );
             }
-            return inspectAs(ctx, present.get(0), id, present.size() > 1 ? kindsOf(present) : null);
+            return inspectAs(ctx, present.getFirst(), id, present.size() > 1 ? kindsOf(present) : null);
         }
 
         return inspectAs(ctx, RegistryIndex.Kind.parse(kindRaw), id, null);

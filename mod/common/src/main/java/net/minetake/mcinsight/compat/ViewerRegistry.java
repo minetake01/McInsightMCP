@@ -1,6 +1,5 @@
 package net.minetake.mcinsight.compat;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -34,13 +33,7 @@ public final class ViewerRegistry {
 
     /** Every registered adapter that currently reports itself usable. */
     public static List<IRecipeViewerBridge> active() {
-        List<IRecipeViewerBridge> out = new ArrayList<>();
-        for (IRecipeViewerBridge bridge : snapshot().values()) {
-            if (bridge.isAvailable()) {
-                out.add(bridge);
-            }
-        }
-        return List.copyOf(out);
+        return snapshot().values().stream().filter(IRecipeViewerBridge::isAvailable).toList();
     }
 
     public static IRecipeViewerBridge byName(String viewerName) {
@@ -52,12 +45,6 @@ public final class ViewerRegistry {
 
     public static synchronized List<IRecipeViewerBridge> all() {
         return List.copyOf(VIEWERS.values());
-    }
-
-    public static void invalidateCaches() {
-        for (IRecipeViewerBridge bridge : all()) {
-            bridge.invalidateCache();
-        }
     }
 
     private static synchronized Map<String, IRecipeViewerBridge> snapshot() {

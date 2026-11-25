@@ -81,7 +81,7 @@ public final class McInsightConfig {
     }
 
     private static int capped(String name, int value, int min, int max) {
-        int clamped = Math.min(Math.max(value, min), max);
+        int clamped = Math.clamp(value, min, max);
         if (clamped != value) {
             McInsightConstants.LOG.warn("Config '{}' ({}) out of range {}..{}; clamping to {}.", name, value, min, max, clamped);
         }

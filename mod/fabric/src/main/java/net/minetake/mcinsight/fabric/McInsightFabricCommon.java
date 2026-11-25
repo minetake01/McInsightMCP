@@ -33,7 +33,6 @@ public final class McInsightFabricCommon implements ModInitializer {
 
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> InsightNetworking.onPlayerJoined(handler.getPlayer()));
 
-
         ServerLifecycleEvents.SERVER_STARTED.register(McInsightCommon::attachServer);
         ServerLifecycleEvents.SERVER_STOPPING.register(McInsightCommon::detachServer);
         ServerLifecycleEvents.END_DATA_PACK_RELOAD.register((server, resourceManager, success) -> {

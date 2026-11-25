@@ -26,7 +26,6 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.PlayerAdvancements;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.entity.player.Player;
 
 /**
  * Answers {@code advancements_query}: advancement definitions and, when the world owner is
@@ -87,7 +86,6 @@ public final class AdvancementCollector {
         }
 
         return Page.of("advancements", entries, offset, total);
-
     }
 
     /** The status filter, parsed once so both the query and the error message agree on its name. */
@@ -158,7 +156,6 @@ public final class AdvancementCollector {
             );
         }
     }
-
 
     private static List<Sample> build(Collection<AdvancementHolder> all, ServerPlayer player) {
         PlayerAdvancements progress = player.getAdvancements();

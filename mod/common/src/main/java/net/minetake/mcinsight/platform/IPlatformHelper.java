@@ -23,6 +23,9 @@ public interface IPlatformHelper {
 
     String getLoaderVersion();
 
+    /** McInsight's own version, as the loader read it from the mod metadata the build expanded. */
+    String getModVersion();
+
     boolean isModLoaded(String modId);
 
     List<ModMetadata> getLoadedMods();
@@ -36,5 +39,4 @@ public interface IPlatformHelper {
     Path getModsDir();
 
     Path getConfigDir();
-
 }

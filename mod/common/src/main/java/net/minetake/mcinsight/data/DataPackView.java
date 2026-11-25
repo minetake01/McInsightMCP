@@ -10,7 +10,6 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -32,7 +31,7 @@ import net.minecraft.server.packs.resources.Resource;
  * The datapack and registry view shared by every collector that reads definitions.
  *
  * <p>Worldgen, loot, data maps, and trades all read the same snapshot of reloadable data; owning it
- * once means one generation stamp, one JSON cache, and one folder index for all of them.
+ * once means one JSON cache and one folder index for all of them, rebuilt per data generation.
  */
 public final class DataPackView {
 
@@ -46,7 +45,6 @@ public final class DataPackView {
         Resource resource
     ) {}
 
-    private final long generation;
     private final HolderLookup.Provider registries;
     private final RegistryOps<JsonElement> jsonOps;
     private final ResourceManagerAccess dataResources;
@@ -57,20 +55,14 @@ public final class DataPackView {
     private static final GenerationalCache<DataPackView> CURRENT =
         new GenerationalCache<>(CacheGenerations::data);
 
-    private DataPackView(
-        long generation,
-        HolderLookup.Provider registries,
-        ResourceManagerAccess dataResources
-    ) {
-        this.generation = generation;
+    private DataPackView(HolderLookup.Provider registries, ResourceManagerAccess dataResources) {
         this.registries = registries;
         this.jsonOps = registries != null ? registries.createSerializationContext(JsonOps.INSTANCE) : null;
         this.dataResources = dataResources;
     }
 
-    public static DataPackView of(MinecraftServer server, HolderLookup.Provider registries, long generation) {
+    private static DataPackView of(MinecraftServer server, HolderLookup.Provider registries) {
         return new DataPackView(
-            generation,
             registries,
             server != null ? ResourceManagerAccess.of(server.getResourceManager()) : null
         );
@@ -87,8 +79,7 @@ public final class DataPackView {
             try {
                 return executor.supplyOnGameThread(() -> of(
                     executor.getActiveServer(),
-                    GameAccess.getRegistryAccess(executor),
-                    CacheGenerations.data()
+                    GameAccess.getRegistryAccess(executor)
                 ), 10_000);
             } catch (Exception e) {
                 throw new InsightException(InsightError.INTERNAL_ERROR, e.getMessage());
@@ -111,10 +102,6 @@ public final class DataPackView {
             InsightError.SERVER_MOD_REQUIRED,
             "This data lives on the server and the connected server does not run McInsight."
         );
-    }
-
-    public long generation() {
-        return generation;
     }
 
     public HolderLookup.Provider registries() {
@@ -180,10 +167,6 @@ public final class DataPackView {
 
     public JsonElement readJson(ResourceRef ref) {
         return encodedCache.computeIfAbsent("res:" + ref.id(), k -> dataResources.read(ref.resource()));
-    }
-
-    public JsonElement readJson(Resource resource) {
-        return dataResources.read(resource);
     }
 
     /** Reads merged pack layers for a resource, lowest priority first. */
@@ -257,46 +240,6 @@ public final class DataPackView {
         List<Resource> stack(ResourceLocation location);
     }
 
-    /** Test double: an in-memory datapack made of id → JSON text. */
-    public static ResourceManagerAccess inMemory(Map<String, String> files) {
-        return new ResourceManagerAccess() {
-            @Override
-            public List<ResourceRef> index(String folder) {
-                List<ResourceRef> refs = new ArrayList<>();
-                for (Map.Entry<String, String> e : files.entrySet()) {
-                    String path = e.getKey();
-                    if (!path.startsWith(folder + "/") || !path.endsWith(".json")) {
-                        continue;
-                    }
-                    int slash = path.indexOf('/');
-                    String ns = path.substring(0, slash);
-                    String clean = path.substring(folder.length() + 1, path.length() - 5);
-                    ResourceLocation rl = ResourceLocation.fromNamespaceAndPath(ns, path.substring(slash + 1));
-                    String fullId = ns + ":" + clean;
-                    refs.add(new ResourceRef(
-                        rl,
-                        fullId,
-                        ns,
-                        fullId.toLowerCase(Locale.ROOT),
-                        ns.toLowerCase(Locale.ROOT),
-                        null
-                    ));
-                }
-                return List.copyOf(refs);
-            }
-
-            @Override
-            public JsonElement read(Resource resource) {
-                return null;
-            }
-
-            @Override
-            public List<Resource> stack(ResourceLocation location) {
-                return List.of();
-            }
-        };
-    }
-
     /** Convenience for callers that only need counts of a dynamic registry. */
     public <T> int count(net.minecraft.resources.ResourceKey<? extends net.minecraft.core.Registry<T>> key) {
         if (registries == null) {
@@ -312,19 +255,6 @@ public final class DataPackView {
         if (registries == null) {
             return List.of();
         }
-        Optional<? extends HolderLookup.RegistryLookup<T>> lookup = registries.lookup(key);
-        if (lookup.isEmpty()) {
-            return List.of();
-        }
-        List<net.minecraft.core.Holder.Reference<T>> out = new ArrayList<>();
-        for (net.minecraft.core.Holder.Reference<T> ref : lookup.get().listElements().toList()) {
-            out.add(ref);
-        }
-        return out;
-    }
-
-    /** Fresh map for collectors that keep their own derived index. */
-    public static <K, V> Map<K, V> newIndex() {
-        return new HashMap<>();
+        return registries.lookup(key).map(lookup -> lookup.listElements().toList()).orElse(List.of());
     }
 }

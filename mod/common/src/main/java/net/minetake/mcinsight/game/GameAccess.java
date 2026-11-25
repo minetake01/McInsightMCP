@@ -79,10 +79,6 @@ public final class GameAccess {
         return code == null || code.isBlank() ? DEFAULT_LANGUAGE : code.trim().toLowerCase(java.util.Locale.ROOT);
     }
 
-    public static boolean hasIntegratedServer(MainThreadExecutor executor) {
-        return executor.getActiveServer() != null;
-    }
-
     public static RegistryOps<JsonElement> jsonOps(HolderLookup.Provider registries) {
         return registries != null ? registries.createSerializationContext(JsonOps.INSTANCE) : null;
     }

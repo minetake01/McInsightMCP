@@ -71,7 +71,4 @@ public final class ViewerModel {
         SLOTS,
         FLAT
     }
-
-    /** The viewer's answer for one query, before filtering and pagination. */
-    public record CategoryRecipes(Category category, List<Recipe> recipes) {}
 }

@@ -1,0 +1,29 @@
+# Plugins and third-party libraries. The Minecraft platform versions (Minecraft, NeoForge,
+# NeoForm, Fabric Loader / API, Parchment) live in gradle.properties instead, because they are
+# also expanded into the mod metadata.
+
+[versions]
+jei = "19.76.1.481"
+emi = "1.1.24+1.21.1"
+rei = "16.0.799"
+junit = "6.1.3"
+
+[libraries]
+jei-common-api = { module = "mezz.jei:jei-1.21.1-common-api", version.ref = "jei" }
+jei-neoforge-api = { module = "mezz.jei:jei-1.21.1-neoforge-api", version.ref = "jei" }
+jei-neoforge = { module = "mezz.jei:jei-1.21.1-neoforge", version.ref = "jei" }
+jei-fabric = { module = "mezz.jei:jei-1.21.1-fabric", version.ref = "jei" }
+emi-xplat-api = { module = "dev.emi:emi-xplat-mojmap", version.ref = "emi" }
+emi-neoforge-api = { module = "dev.emi:emi-neoforge", version.ref = "emi" }
+emi-fabric-api = { module = "dev.emi:emi-fabric", version.ref = "emi" }
+rei-api-neoforge = { module = "me.shedaniel:RoughlyEnoughItems-api-neoforge", version.ref = "rei" }
+rei-plugin-neoforge = { module = "me.shedaniel:RoughlyEnoughItems-default-plugin-neoforge", version.ref = "rei" }
+rei-api-fabric = { module = "me.shedaniel:RoughlyEnoughItems-api-fabric", version.ref = "rei" }
+rei-plugin-fabric = { module = "me.shedaniel:RoughlyEnoughItems-default-plugin-fabric", version.ref = "rei" }
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+
+[plugins]
+loom = { id = "net.fabricmc.fabric-loom-remap", version = "1.19.4" }
+moddev = { id = "net.neoforged.moddev", version = "2.0.148" }

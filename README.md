@@ -47,7 +47,7 @@ McInsightMCP connects MCP-compatible AI assistants (Claude Desktop, Cursor, Clau
 | **Minecraft** | Currently `1.21.1` (Java 21) — see [Releases](https://github.com/minetake01/McInsightMCP/releases) for supported versions |
 | **NeoForge** | Standalone — no required mod dependencies |
 | **Fabric** | Requires [Fabric API](https://modrinth.com/mod/fabric-api) |
-| **MCP Server** | [Node.js](https://nodejs.org/) `>= 20` |
+| **MCP Server** | [Node.js](https://nodejs.org/) `>= 22.12` |
 
 ### Optional In-Game Integrations (Auto-Detected)
 - **JEI, EMI, and REI** (recipe categories, catalysts, and item/fluid/chemical info pages)
@@ -153,7 +153,7 @@ Whenever a tool takes an item, it takes an **exact** id (`namespace:path`) or a 
 
 ## Building from Source
 
-Requires **JDK 21** for the mod and **Node.js >= 20** + **pnpm** for the MCP server.
+Requires **JDK 21** for the mod (Gradle itself runs on **JDK 25**, downloaded if missing) and **Node.js >= 22.12** + **pnpm** for the MCP server.
 
 ```bash
 # 1. Test common logic & build the NeoForge and Fabric mod JARs

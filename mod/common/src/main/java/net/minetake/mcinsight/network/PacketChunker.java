@@ -2,6 +2,7 @@ package net.minetake.mcinsight.network;
 
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -39,10 +40,7 @@ public final class PacketChunker {
         List<byte[]> parts = new ArrayList<>(totalChunks);
         for (int i = 0; i < totalChunks; i++) {
             int offset = i * maxChunkBytes;
-            int len = Math.min(maxChunkBytes, payload.length - offset);
-            byte[] chunk = new byte[len];
-            System.arraycopy(payload, offset, chunk, 0, len);
-            parts.add(chunk);
+            parts.add(Arrays.copyOfRange(payload, offset, Math.min(offset + maxChunkBytes, payload.length)));
         }
         return parts;
     }

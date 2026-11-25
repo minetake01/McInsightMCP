@@ -1,10 +1,9 @@
 import fs from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, '..');
+const repoRoot = path.resolve(import.meta.dirname, '..');
 const resultsDir = path.join(repoRoot, 'bench', 'results');
 const fixtureModsDir = path.join(repoRoot, 'bench', 'fixtures', 'mods');
 const endpointJavaPath = path.join(

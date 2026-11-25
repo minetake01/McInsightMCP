@@ -61,19 +61,10 @@ public final class PerfMetrics {
                 cacheHits.increment();
             }
             totalNs.add(totalElapsedNs);
+            maxTotalNs.accumulateAndGet(totalElapsedNs, Math::max);
             if (mainElapsedNs > 0L) {
                 mainThreadNs.add(mainElapsedNs);
-            }
-            updateMax(maxTotalNs, totalElapsedNs);
-            if (mainElapsedNs > 0L) {
-                updateMax(maxMainThreadNs, mainElapsedNs);
-            }
-        }
-
-        private static void updateMax(AtomicLong target, long candidate) {
-            long prev = target.get();
-            while (candidate > prev && !target.compareAndSet(prev, candidate)) {
-                prev = target.get();
+                maxMainThreadNs.accumulateAndGet(mainElapsedNs, Math::max);
             }
         }
     }

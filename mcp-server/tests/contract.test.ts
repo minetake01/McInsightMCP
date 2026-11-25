@@ -54,7 +54,7 @@ function parseModEndpoints(): Map<string, ModEndpoint> {
     /\(\s*"([^"]+)"\s*,\s*(null|"[^"]*")\s*,[^,]+,[^,]+,[^,]+,\s*Set\.of\(([^)]*)\)\s*(?:,\s*(\d+)\s*,\s*(\d+))?\s*\)/g;
   for (const match of source.matchAll(pattern)) {
     const [, id, rawPath, rawParams, rawDefault, rawMax] = match;
-    const params = rawParams
+    const params = rawParams!
       .split(',')
       .map((value) => value.trim().replace(/^"|"$/g, ''))
       .filter(Boolean);

@@ -34,7 +34,7 @@ public final class McInsightCommon {
         McInsightConstants.LOG.info(
             "Initialized {} v{} client runtime on {} ({})",
             McInsightConstants.MOD_NAME,
-            McInsightConstants.MOD_VERSION,
+            Services.PLATFORM.getModVersion(),
             Services.PLATFORM.getLoaderName(),
             Services.PLATFORM.getLoaderVersion()
         );
@@ -49,7 +49,7 @@ public final class McInsightCommon {
         McInsightConstants.LOG.info(
             "Initialized {} v{} dedicated server sync on {} ({})",
             McInsightConstants.MOD_NAME,
-            McInsightConstants.MOD_VERSION,
+            Services.PLATFORM.getModVersion(),
             Services.PLATFORM.getLoaderName(),
             Services.PLATFORM.getLoaderVersion()
         );

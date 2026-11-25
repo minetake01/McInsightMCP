@@ -61,7 +61,7 @@ public final class TagQuery {
         for (Kind kind : declaring) {
             declaredKinds.add(kind.id() + "_tag");
         }
-        return inspect(declaring.get(0), tagId, limit, offset, declaredKinds);
+        return inspect(declaring.getFirst(), tagId, limit, offset, declaredKinds);
     }
 
     private static JsonObject inspect(

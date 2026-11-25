@@ -42,21 +42,24 @@ jobs:
       - name: Install virtual display and software OpenGL
         run: sudo apt-get update && sudo apt-get install -y xvfb mesa-utils libgl1-mesa-dri
 
-      - name: Setup Java 21
+      # 21 compiles and runs the mod; 25 runs the Gradle daemon (gradle/gradle-daemon-jvm.properties).
+      - name: Setup Java 21 and 25
         uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: 21
+          java-version: |
+            21
+            25
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-home-cache-cleanup: true
+          cache-cleanup: on-success
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
         with:
-          version: 11
+          package_json_file: mcp-server/package.json
 
       - name: Setup Node.js
         uses: actions/setup-node@v7

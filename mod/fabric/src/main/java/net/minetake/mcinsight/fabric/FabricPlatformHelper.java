@@ -1,5 +1,6 @@
 package net.minetake.mcinsight.fabric;
 
+import net.minetake.mcinsight.McInsightConstants;
 import net.minetake.mcinsight.platform.IPlatformHelper;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -23,6 +24,13 @@ public final class FabricPlatformHelper implements IPlatformHelper {
         return FabricLoader.getInstance().getModContainer("fabricloader")
             .map(c -> c.getMetadata().getVersion().getFriendlyString())
             .orElse("unknown");
+    }
+
+    @Override
+    public String getModVersion() {
+        return FabricLoader.getInstance().getModContainer(McInsightConstants.MOD_ID)
+            .orElseThrow()
+            .getMetadata().getVersion().getFriendlyString();
     }
 
     @Override
@@ -72,12 +80,10 @@ public final class FabricPlatformHelper implements IPlatformHelper {
         return FabricLoader.getInstance().getConfigDir();
     }
 
-
-
     private static String resolveOriginJarPath(ModOrigin origin) {
         if (origin == null) return "";
         if (origin.getKind() == ModOrigin.Kind.PATH && !origin.getPaths().isEmpty()) {
-            return origin.getPaths().get(0).toAbsolutePath().toString();
+            return origin.getPaths().getFirst().toAbsolutePath().toString();
         }
         if (origin.getKind() == ModOrigin.Kind.NESTED) {
             String parentPath = FabricLoader.getInstance()

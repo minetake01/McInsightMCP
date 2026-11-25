@@ -615,10 +615,8 @@ Payloads (`mcinsight:hello`, `mcinsight:request`, `mcinsight:response`):
 - **Explicit invalidation** — loaders bump generations on datapack/resource reload listeners, server
   start/stop, client login/logout, and client start/stop (`McInsightCommon`); nothing enumerates the
   collectors. Viewer adapters hold their own category caches, dropped when the viewer (re)attaches
-  (JEI `onRuntimeAvailable`, EMI/REI entrypoint registration); `ViewerRegistry.invalidateCaches()`
-  exists for a caller that needs to drop them explicitly, and `CacheGenerations.onResourceInvalidate`
-  accepts such an invalidator — note that no loader currently registers one, because the viewer
-  runtimes invalidate themselves on attach.
+  (JEI `onRuntimeAvailable`, EMI/REI entrypoint registration), so no generation bump has to reach
+  them.
 - **Request metrics** — `metrics/PerfMetrics` counts per endpoint: request count, cache hits, average
   and maximum total time, and average and maximum main-thread time. It reads
   `MinecraftServer.getTickTimesNanos()` on demand for MSPT/TPS; it does not register per-tick
@@ -784,10 +782,8 @@ server over Streamable HTTP, the way an agent would.
 - **Mod set.** By default the runs load only McInsight, the harness, and JEI (the viewer the real game
   would have), so a run is deterministic. `--extra-mods <dir>` adds every jar in that directory to the
   e2e runs for a local experiment; it is refused under `CI`.
-- **Fabric JEI.** The Fabric e2e runs pin `jei_fabric_e2e_version` (19.21.1.304), the newest Fabric
-  JEI for 1.21.1 that Loom 1.8 can remap; later builds need Loom 1.18, which needs Gradle 9. The
-  NeoForge runs use the compile-time `jei_version`, so the bridge is exercised against both an old and
-  a current JEI.
+- **JEI version.** Both loaders' e2e runs load the JEI build the mod compiles against (`jei` in
+  `mod/gradle/libs.versions.toml`), so the bridge is exercised against the API it was written for.
 - **CI.** `.github/workflows/e2e.yml` runs the `quick` preset on pull requests and pushes. A
   `workflow_dispatch` can choose any preset, and `release.yml` calls it with `release` before
   publishing. On Linux, `MCINSIGHT_E2E_XVFB=1` makes the runner start the client under `xvfb-run` with

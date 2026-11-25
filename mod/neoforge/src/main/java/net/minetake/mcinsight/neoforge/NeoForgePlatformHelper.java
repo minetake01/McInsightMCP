@@ -1,5 +1,6 @@
 package net.minetake.mcinsight.neoforge;
 
+import net.minetake.mcinsight.McInsightConstants;
 import net.minetake.mcinsight.platform.IPlatformHelper;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -23,6 +24,13 @@ public final class NeoForgePlatformHelper implements IPlatformHelper {
         return ModList.get().getModContainerById("neoforge")
             .map(c -> c.getModInfo().getVersion().toString())
             .orElse("unknown");
+    }
+
+    @Override
+    public String getModVersion() {
+        return ModList.get().getModContainerById(McInsightConstants.MOD_ID)
+            .orElseThrow()
+            .getModInfo().getVersion().toString();
     }
 
     @Override
@@ -73,6 +81,4 @@ public final class NeoForgePlatformHelper implements IPlatformHelper {
     public Path getConfigDir() {
         return FMLPaths.CONFIGDIR.get();
     }
-
-
 }

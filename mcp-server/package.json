@@ -15,8 +15,9 @@
   "publishConfig": {
     "access": "public"
   },
+  "packageManager": "pnpm@11.25.0",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12"
   },
   "repository": {
     "type": "git",
@@ -36,9 +37,9 @@
     "ai-assistant"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "prepack": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && npm run build",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc",
     "test": "vitest run",
     "e2e": "node e2e/run.mjs",
     "start:http": "node dist/index.js --http",
@@ -52,9 +53,8 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
+    "@types/node": "^22.19.0",
     "@types/semver": "^7.5.8",
-    "tsx": "^4.19.0",
     "typescript": "^7.0.2",
     "vitest": "^5.1.1"
   }

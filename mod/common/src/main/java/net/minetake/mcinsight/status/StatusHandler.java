@@ -59,7 +59,7 @@ public final class StatusHandler {
         JsonObject out = new JsonObject();
         out.addProperty("ok", true);
         out.addProperty("modId", McInsightConstants.MOD_ID);
-        out.addProperty("modVersion", McInsightConstants.MOD_VERSION);
+        out.addProperty("modVersion", Services.PLATFORM.getModVersion());
         out.addProperty("minecraftVersion", SharedConstants.getCurrentVersion().getName());
         out.addProperty("loader", Services.PLATFORM.getLoaderName());
         out.addProperty("loaderVersion", Services.PLATFORM.getLoaderVersion());

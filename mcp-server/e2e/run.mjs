@@ -16,13 +16,11 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { readSpec } from './launch.mjs';
 import { SCENARIOS, runScenario } from './scenarios.mjs';
 import { SUITE_NAMES, runSuite } from './suites.mjs';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const serverRoot = path.resolve(here, '..');
+const serverRoot = path.resolve(import.meta.dirname, '..');
 const repoRoot = path.resolve(serverRoot, '..');
 const modRoot = path.join(repoRoot, 'mod');
 const entry = path.join(serverRoot, 'dist', 'index.js');

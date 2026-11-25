@@ -258,8 +258,8 @@ final class WorldData {
     static EntitySample entity(Entity entity, boolean detailed) {
         ResourceLocation typeId = BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType());
         boolean living = entity instanceof LivingEntity;
-        float health = living ? ((LivingEntity) entity).getHealth() : 0.0F;
-        float maxHealth = living ? ((LivingEntity) entity).getMaxHealth() : 0.0F;
+        float health = entity instanceof LivingEntity l ? l.getHealth() : 0.0F;
+        float maxHealth = entity instanceof LivingEntity l ? l.getMaxHealth() : 0.0F;
         ItemStack droppedItem = entity instanceof ItemEntity itemEntity ? itemEntity.getItem().copy() : ItemStack.EMPTY;
         CompoundTag nbt = null;
         if (detailed) {

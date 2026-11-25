@@ -9,12 +9,10 @@ updates:
     schedule:
       interval: "weekly"
     ignore:
+      # Typings follow the lowest supported Node (package.json engines), not the newest.
       - dependency-name: "@types/node"
-        versions: [">= 25.0.0"]
+        versions: [">= 23.0.0"]
   - package-ecosystem: "gradle"
     directory: "/mod"
     schedule:
       interval: "weekly"
-    ignore:
-      - dependency-name: "gradle-wrapper"
-        versions: [">= 9.0.0"]

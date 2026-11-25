@@ -17,9 +17,9 @@ public final class Limits {
     private Limits() {}
 
     public static void apply(McInsightConfig config) {
-        scanRadius = clamp(config.maxScanRadius, 1, McInsightConfig.HARD_MAX_SCAN_RADIUS);
-        syncBlockRadius = clamp(config.maxSyncBlockRadius, 1, McInsightConfig.HARD_MAX_SYNC_BLOCK_RADIUS);
-        recipeResults = clamp(config.maxRecipeResults, 1, McInsightConfig.HARD_MAX_RECIPE_RESULTS);
+        scanRadius = Math.clamp(config.maxScanRadius, 1, McInsightConfig.HARD_MAX_SCAN_RADIUS);
+        syncBlockRadius = Math.clamp(config.maxSyncBlockRadius, 1, McInsightConfig.HARD_MAX_SYNC_BLOCK_RADIUS);
+        recipeResults = Math.clamp(config.maxRecipeResults, 1, McInsightConfig.HARD_MAX_RECIPE_RESULTS);
         raycastDistance = McInsightConfig.HARD_MAX_RAYCAST_DISTANCE;
     }
 
@@ -37,9 +37,5 @@ public final class Limits {
 
     public static int recipeResults() {
         return recipeResults;
-    }
-
-    private static int clamp(int value, int min, int max) {
-        return Math.min(Math.max(value, min), max);
     }
 }

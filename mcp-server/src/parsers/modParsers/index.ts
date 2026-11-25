@@ -1,4 +1,4 @@
-import { LoadedModsVersionMap, matchesModVersion } from '../modVersion.js';
+import { type LoadedModsVersionMap, matchesModVersion } from '../modVersion.js';
 import { ae2Parser } from './ae2Parser.js';
 import { arsNouveauParser } from './arsNouveauParser.js';
 import { createParser } from './createParser.js';
@@ -6,7 +6,7 @@ import { farmersDelightParser } from './farmersDelightParser.js';
 import { mekanismParser } from './mekanismParser.js';
 import { oritechParser } from './oritechParser.js';
 import { tofucraftParser } from './tofucraftParser.js';
-import { BuiltinModParser, ModParsedRecipe } from './types.js';
+import { type BuiltinModParser, type ModParsedRecipe } from './types.js';
 
 export type { BuiltinModParser, ModIngredient, ModParsedRecipe } from './types.js';
 

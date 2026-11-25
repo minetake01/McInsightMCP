@@ -23,14 +23,12 @@ import net.minecraft.world.item.Item;
  */
 public final class ItemFilter {
 
-    private final String raw;
     private final String exactId;
     private final String tagId;
     private final Set<String> ids;
     private final Set<String> tags;
 
-    private ItemFilter(String raw, String exactId, String tagId, Set<String> ids, Set<String> tags) {
-        this.raw = raw;
+    private ItemFilter(String exactId, String tagId, Set<String> ids, Set<String> tags) {
         this.exactId = exactId;
         this.tagId = tagId;
         this.ids = ids;
@@ -39,12 +37,12 @@ public final class ItemFilter {
 
     /** An id query whose item belongs to the given tags, as the registry would resolve it. */
     static ItemFilter forItem(String id, Set<String> memberOf) {
-        return new ItemFilter(id, id, null, Set.of(id), Set.copyOf(memberOf));
+        return new ItemFilter(id, null, Set.of(id), Set.copyOf(memberOf));
     }
 
     /** A tag query whose tag holds the given members, as the registry would resolve it. */
     static ItemFilter forTag(String tag, Set<String> members) {
-        return new ItemFilter("#" + tag, null, tag, Set.copyOf(members), Set.of(tag));
+        return new ItemFilter(null, tag, Set.copyOf(members), Set.of(tag));
     }
 
     public static ItemFilter of(ItemQuery query) {
@@ -67,10 +65,6 @@ public final class ItemFilter {
             holder.tags().forEach(t -> tagIds.add(t.location().toString().toLowerCase(Locale.ROOT)))
         );
         return forItem(query.id(), tagIds);
-    }
-
-    public String raw() {
-        return raw;
     }
 
     public boolean isTag() {

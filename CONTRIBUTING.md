@@ -4,8 +4,8 @@ Thank you for your interest in contributing to McInsightMCP!
 
 ## Prerequisites
 
-- **Minecraft Mod (`mod/`)**: JDK 21
-- **MCP Server (`mcp-server/`)**: Node.js `>= 20` and `pnpm` (`11.x`)
+- **Minecraft Mod (`mod/`)**: JDK 21 for the mod. Gradle itself runs on JDK 25 (`mod/gradle/gradle-daemon-jvm.properties`); it uses an installed JDK 25 or downloads one.
+- **MCP Server (`mcp-server/`)**: Node.js `>= 22.12` and the `pnpm` version pinned in `mcp-server/package.json` (`packageManager`; Corepack picks it up)
 
 ## Development Setup & Verification
 
@@ -68,13 +68,12 @@ Please read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before making structura
 
 ## Version Sync
 
-When bumping the release version, keep these three declarations synchronized:
+When bumping the release version, keep these two declarations synchronized:
 
 1. `mod/gradle.properties` (`version`)
-2. `mod/common/src/main/java/net/minetake/mcinsight/McInsightConstants.java` (`MOD_VERSION`)
-3. `mcp-server/package.json` (`version`)
+2. `mcp-server/package.json` (`version`)
 
-`mcp-server/src/server.ts` is not on that list: it calls `readPackageVersion()` (`mcp-server/src/version.ts`), which reads `package.json` at runtime, so there is no copy to drift.
+Neither side keeps a copy in code. The mod asks its loader for its own version (`IPlatformHelper.getModVersion()`), which the build expands into `fabric.mod.json` / `neoforge.mods.toml` from `gradle.properties`. The MCP server calls `readPackageVersion()` (`mcp-server/src/version.ts`), which reads `package.json` at runtime.
 
 ## Pull Request Checklist
 

@@ -10,7 +10,6 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicInteger;
 import net.minetake.mcinsight.McInsightConstants;
 import net.minetake.mcinsight.api.InsightDispatcher;
 import net.minetake.mcinsight.api.InsightEndpoint;
@@ -59,13 +58,11 @@ public final class InsightHttpServer {
             try {
                 HttpServer srv = HttpServer.create(new InetSocketAddress(loopback, candidate), 64);
                 srv.createContext("/api/v1/", this::handleRequest);
-                int threads = Math.max(4, Math.min(8, Runtime.getRuntime().availableProcessors()));
-                AtomicInteger threadNum = new AtomicInteger(1);
-                httpPool = Executors.newFixedThreadPool(threads, r -> {
-                    Thread t = new Thread(r, "McInsight-HTTP-" + threadNum.getAndIncrement());
-                    t.setDaemon(true);
-                    return t;
-                });
+                int threads = Math.clamp(Runtime.getRuntime().availableProcessors(), 4, 8);
+                httpPool = Executors.newFixedThreadPool(
+                    threads,
+                    Thread.ofPlatform().name("McInsight-HTTP-", 1).daemon().factory()
+                );
                 srv.setExecutor(httpPool);
                 srv.start();
                 this.server = srv;

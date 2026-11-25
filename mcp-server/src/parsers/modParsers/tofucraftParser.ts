@@ -1,5 +1,5 @@
 import {
-  BuiltinModParser,
+  type BuiltinModParser,
   IngredientCollector,
   extractModIngredient,
   extractShapedPatternInputs,

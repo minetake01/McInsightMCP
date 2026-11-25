@@ -5,7 +5,7 @@ import {
   localhostOriginValidation,
   toNodeHandler,
 } from '@modelcontextprotocol/node';
-import { ServerDeps, createMcInsightServer } from '../server.js';
+import { type ServerDeps, createMcInsightServer } from '../server.js';
 
 export interface HttpServerHandle {
   server: HttpServer;

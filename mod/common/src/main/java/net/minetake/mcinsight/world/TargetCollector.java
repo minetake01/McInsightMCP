@@ -32,7 +32,6 @@ import net.minecraft.world.phys.HitResult;
  */
 public final class TargetCollector {
 
-    /** The longest cast this endpoint performs, in blocks. */
     /** The longest raycast this endpoint will perform, in blocks. */
     public static double maxRaycastDistance() {
         return net.minetake.mcinsight.config.Limits.raycastDistance();

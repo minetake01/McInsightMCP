@@ -66,8 +66,9 @@ export class McHttpClient {
   }
 
   private async probeHostParallel(host: string): Promise<string | null> {
+    // Aborted by the deadline, or by the first port that answers so the other probes stop.
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 500);
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(500)]);
     let sawUnauthorized = false;
     const probes: Array<Promise<string>> = [];
 
@@ -77,7 +78,7 @@ export class McHttpClient {
         (async () => {
           const res = await fetch(`${candidate}/api/v1/status`, {
             headers: this.buildHeaders(),
-            signal: controller.signal,
+            signal,
           });
           if (res.status === 401) {
             sawUnauthorized = true;
@@ -108,8 +109,6 @@ export class McHttpClient {
         );
       }
       return null;
-    } finally {
-      clearTimeout(timeoutId);
     }
   }
 

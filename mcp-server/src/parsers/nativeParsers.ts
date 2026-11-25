@@ -1,5 +1,5 @@
 import {
-  IngredientExtraction,
+  type IngredientExtraction,
   isRecord,
   unhandledKeys,
   unparsedFieldFlag,

@@ -26,15 +26,11 @@ public final class Params {
         this.values = values;
     }
 
-    public static Params empty() {
-        return EMPTY;
-    }
-
     public static Params of(Map<String, String> values) {
         return values == null || values.isEmpty() ? EMPTY : new Params(values);
     }
 
-    public static Params fromJson(JsonObject json) {
+    private static Params fromJson(JsonObject json) {
         if (json == null || json.isEmpty()) {
             return EMPTY;
         }
@@ -97,7 +93,8 @@ public final class Params {
         }
     }
 
-    public static Params fromJsonText(String jsonText) {        if (jsonText == null || jsonText.isBlank()) {
+    public static Params fromJsonText(String jsonText) {
+        if (jsonText == null || jsonText.isBlank()) {
             return EMPTY;
         }
         try {

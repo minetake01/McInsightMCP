@@ -7,6 +7,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { launch } from './launch.mjs';
 import { freePort, startMcpServer } from './mcp.mjs';
 
@@ -137,7 +138,7 @@ async function waitForViewers(url) {
     const active = status.integrations?.activeRecipeViewers ?? [];
     if (EXPECTED_VIEWERS.every((name) => active.includes(name))) return;
     if (Date.now() > deadline) throw new Error(`Recipe viewers ${EXPECTED_VIEWERS} never became active (active=${active}).`);
-    await new Promise((r) => setTimeout(r, 500));
+    await sleep(500);
   }
 }
 
@@ -147,7 +148,7 @@ async function waitForBridge(url) {
     const status = await fetch(`${url}/api/v1/status`).then((r) => r.json());
     if (status.integrations?.serverSyncAvailable === true) return;
     if (Date.now() > deadline) throw new Error('The client never received the server hello.');
-    await new Promise((r) => setTimeout(r, 500));
+    await sleep(500);
   }
 }
 

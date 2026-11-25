@@ -47,7 +47,7 @@ McInsightMCP を使うと、Claude Desktop・Cursor・Claude Code・VS Code な�
 | Minecraft | 現在は `1.21.1`（Java 21）に対応（対応バージョン一覧は [Releases](https://github.com/minetake01/McInsightMCP/releases) を参照） |
 | NeoForge | 単体で動作（必須の前提 MOD なし） |
 | Fabric | [Fabric API](https://modrinth.com/mod/fabric-api) が必須 |
-| MCP サーバー | [Node.js](https://nodejs.org/) `20` 以上 |
+| MCP サーバー | [Node.js](https://nodejs.org/) `22.12` 以上 |
 
 ### 自動連携するオプション MOD
 - JEI / EMI / REI（レシピカテゴリ、触媒ブロック、アイテム・流体等の説明ページ）
@@ -151,7 +151,7 @@ AI クライアント側で接続先 URL に `http://127.0.0.1:3876/mcp` を指�
 
 ## ソースからのビルド
 
-MOD のビルドには JDK 21、MCP サーバーのビルドには Node.js 20 以上と pnpm が必要です。
+MOD のビルドには JDK 21 が必要です（Gradle 自体は JDK 25 で動き、見つからなければ自動でダウンロードされます）。MCP サーバーのビルドには Node.js 22.12 以上と pnpm が必要です。
 
 ```bash
 # 1. 共通ロジックのテストと NeoForge / Fabric MOD のビルド

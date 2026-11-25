@@ -92,7 +92,8 @@ public final class JsonCodec {
         return obj;
     }
 
-    public static byte[] toUtf8Bytes(JsonObject body) {        ByteArrayOutputStream baos = new ByteArrayOutputStream(4096);
+    public static byte[] toUtf8Bytes(JsonObject body) {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream(4096);
         try (OutputStreamWriter writer = new OutputStreamWriter(baos, StandardCharsets.UTF_8)) {
             GSON.toJson(body, writer);
         } catch (Exception e) {
@@ -171,67 +172,35 @@ public final class JsonCodec {
         Map<Object, Boolean> visited,
         int[] budget
     ) {
-        if (obj == null) {
-            return JsonNull.INSTANCE;
-        }
-        if (obj instanceof JsonElement el) {
-            return el;
-        }
-        if (obj instanceof Boolean b) {
-            return new JsonPrimitive(b);
-        }
-        if (obj instanceof Double d) {
-            return Double.isFinite(d) ? new JsonPrimitive(d) : new JsonPrimitive(Double.toString(d));
-        }
-        if (obj instanceof Float f) {
-            return Float.isFinite(f) ? new JsonPrimitive(f) : new JsonPrimitive(Float.toString(f));
-        }
-        if (obj instanceof Number n) {
-            return new JsonPrimitive(n);
-        }
-        if (obj instanceof Character c) {
-            return new JsonPrimitive(c.toString());
-        }
-        if (obj instanceof String s) {
-            return new JsonPrimitive(s);
-        }
-        if (obj instanceof Enum<?> e) {
-            return new JsonPrimitive(e.name());
-        }
-        if (obj instanceof ResourceLocation rl) {
-            return new JsonPrimitive(rl.toString());
-        }
-        if (obj instanceof ResourceKey<?> key) {
-            return new JsonPrimitive(key.location().toString());
-        }
-        if (obj instanceof Component comp) {
-            return new JsonPrimitive(comp.getString());
-        }
-        if (obj instanceof TagKey<?> tag) {
-            return new JsonPrimitive("#" + tag.location());
-        }
-        if (obj instanceof ItemStack stack) {
-            return serializeItemStack(stack, ops);
-        }
-        if (obj instanceof Holder<?> holder) {
-            return holder.unwrapKey()
+        JsonElement leaf = switch (obj) {
+            case null -> JsonNull.INSTANCE;
+            case JsonElement el -> el;
+            case Boolean b -> new JsonPrimitive(b);
+            case Double d -> Double.isFinite(d) ? new JsonPrimitive(d) : new JsonPrimitive(Double.toString(d));
+            case Float f -> Float.isFinite(f) ? new JsonPrimitive(f) : new JsonPrimitive(Float.toString(f));
+            case Number n -> new JsonPrimitive(n);
+            case Character c -> new JsonPrimitive(c.toString());
+            case String s -> new JsonPrimitive(s);
+            case Enum<?> e -> new JsonPrimitive(e.name());
+            case ResourceLocation rl -> new JsonPrimitive(rl.toString());
+            case ResourceKey<?> key -> new JsonPrimitive(key.location().toString());
+            case Component comp -> new JsonPrimitive(comp.getString());
+            case TagKey<?> tag -> new JsonPrimitive("#" + tag.location());
+            case ItemStack stack -> serializeItemStack(stack, ops);
+            case Holder<?> holder -> holder.unwrapKey()
                 .map(k -> (JsonElement) new JsonPrimitive(k.location().toString()))
                 .orElseGet(() -> new JsonPrimitive("<unregistered:" + holder.getClass().getSimpleName() + ">"));
-        }
-        if (obj instanceof Block block) {
-            return new JsonPrimitive(BuiltInRegistries.BLOCK.getKey(block).toString());
-        }
-        if (obj instanceof Item item) {
-            return new JsonPrimitive(BuiltInRegistries.ITEM.getKey(item).toString());
-        }
-        if (obj instanceof Fluid fluid) {
-            return new JsonPrimitive(BuiltInRegistries.FLUID.getKey(fluid).toString());
-        }
-        if (obj instanceof Optional<?> opt) {
-            return opt.isPresent() ? snapshotObject(opt.get(), depth, ops, visited, budget) : JsonNull.INSTANCE;
-        }
-        if (obj instanceof Level || obj instanceof Class<?> || obj instanceof ClassLoader) {
-            return new JsonPrimitive("<" + obj.getClass().getSimpleName() + ">");
+            case Block block -> new JsonPrimitive(BuiltInRegistries.BLOCK.getKey(block).toString());
+            case Item item -> new JsonPrimitive(BuiltInRegistries.ITEM.getKey(item).toString());
+            case Fluid fluid -> new JsonPrimitive(BuiltInRegistries.FLUID.getKey(fluid).toString());
+            case Optional<?> opt -> opt.isPresent() ? snapshotObject(opt.get(), depth, ops, visited, budget) : JsonNull.INSTANCE;
+            // Runtime handles, not data: walking their fields would dump the game instead of the value.
+            case Object o when o instanceof Level || o instanceof Class<?> || o instanceof ClassLoader ->
+                new JsonPrimitive("<" + o.getClass().getSimpleName() + ">");
+            default -> null;
+        };
+        if (leaf != null) {
+            return leaf;
         }
         if (depth <= 0) {
             return new JsonPrimitive("<maxDepth:" + obj.getClass().getSimpleName() + ">");

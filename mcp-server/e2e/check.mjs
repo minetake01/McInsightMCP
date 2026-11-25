@@ -5,6 +5,7 @@
  * because the scenario does not provide what it needs. Failures are collected rather than thrown so
  * one broken tool does not hide the state of every other one.
  */
+import { setTimeout as sleep } from 'node:timers/promises';
 
 export class Report {
   constructor(scenario) {
@@ -88,6 +89,6 @@ export async function eventually(read, reason, timeoutMs = 10_000) {
     const value = await read();
     if (value !== undefined) return value;
     if (Date.now() > deadline) throw new Error(reason);
-    await new Promise((r) => setTimeout(r, 250));
+    await sleep(250);
   }
 }

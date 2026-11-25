@@ -1,5 +1,5 @@
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
-import { ServerDeps, createMcInsightServer } from '../server.js';
+import { type ServerDeps, createMcInsightServer } from '../server.js';
 
 export interface StdioServerHandle {
   close: () => Promise<void>;

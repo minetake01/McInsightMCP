@@ -9,6 +9,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 /** Reads a launch spec written by `gradlew :<loader>:export<Side>Launch`. */
 export function readSpec(specPath) {
@@ -94,7 +95,7 @@ export class GameProcess {
       // A dedicated server stops cleanly on `stop`; a client ignores stdin and is killed below.
       this.child.stdin.write('stop\n');
     }
-    const timer = new Promise((resolve) => setTimeout(resolve, graceMs, 'timeout'));
+    const timer = sleep(graceMs, 'timeout');
     if ((await Promise.race([exited, timer])) === 'timeout') {
       killTree(this.child.pid);
       await exited;

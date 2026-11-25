@@ -46,6 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Operator caps are now applied inside the collectors (`config/Limits` read by `AreaScanner`, `TargetCollector`, `BlockEntityPart`, `InsightEndpoint`) instead of only in the loopback HTTP handler, so a bridged request is bounded by the same numbers as a local one
 - Native parser tier no longer claims registries/tags: registry data arrives structured from the mod. The native tier covers vanilla recipes, worldgen, biome modifiers, loot tables, and Global Loot Modifiers; the built-in mod tier keeps its fail-closed `modVersionRange` gating; both share one `hasUnparsedFields` envelope
 - Documentation restructured around the contract (endpoint table, error catalogue, response shapes, package map, transports) in `docs/ARCHITECTURE.md`; READMEs and CONTRIBUTING updated to match
+- Build toolchain: Gradle `9.9.2` (daemon on JDK 25 via `gradle-daemon-jvm.properties`; the mod still compiles for Java 21), Fabric Loom `1.19.4` under the `net.fabricmc.fabric-loom-remap` id with its provider-based run API, Fabric Loader `0.20.1`, Fabric API `0.116.18+1.21.1`, Parchment `1.21.1` `2024.11.17`, JEI `19.76.1.481`, JUnit `6.1.3`. Plugins and third-party libraries are declared in `mod/gradle/libs.versions.toml`, every third-party Maven repository is restricted to the groups it serves, and build caching and parallel execution are on
+- Fabric e2e runs load the same JEI build the mod compiles against, instead of a version pinned to what Loom 1.8 could remap
+- The mod reports its version from the loader's mod metadata (`IPlatformHelper.getModVersion()`), so `gradle.properties` is its only declaration
+- MCP server: Node.js `>= 22.12` (Node 20 is end-of-life; CI tests 22 and 24), pnpm pinned through `packageManager`, `@types/node` held at the lowest supported Node, and `tsc` typechecks the tests too, with `noUncheckedIndexedAccess`, `noImplicitOverride`, `noFallthroughCasesInSwitch`, and `verbatimModuleSyntax`. The build emits only the JavaScript the CLI runs
 
 ### Removed
 - The per-collector "no data" codes for loot, worldgen, data maps, recipes, and resources, plus the old advancement-progress and server-data codes: one `DATA_UNAVAILABLE` and one `SERVER_MOD_REQUIRED` now describe every one of those conditions
@@ -53,6 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-endpoint differing pagination fields, and `limit` clamping in place of an error
 - The loot-modifier "more available" flag: loot modifiers are no longer paged alongside the table page, so nothing reports a second `hasMore` for them
 - The `net.minetake.mcinsight.server` and `introspect` packages: replaced by `api/`, `game/`, `cache/`, `data/`, `serial/`, `metrics/`, `http/`, `network/`, and per-concept packages (`recipe/`, `registry/`, `guides/`, `loot/`, `datamaps/`, `worldgen/`, `world/`, `advancement/`, `trade/`, `status/`, `player/`, `reflect/`)
+- `McInsightConstants.MOD_VERSION`, the unused Mixin/MixinExtras compile dependencies and Sponge repository left from the mod template, the never-registered resource-invalidator hook in `CacheGenerations`, and the unused `tsx` dev dependency
+- The Dependabot hold on Gradle 9
 - The stale bench parameters that the new contract rejects (`item=` as a substring, per-run `cantKeepUp` accounting from a server handle the harness never had). Every benchmarked URL now resolves in `InsightEndpoint` with only that endpoint's declared parameters and in-bounds `limit` values
 
 ### Fixed
@@ -66,6 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Benchmark URLs that would now be rejected with `400 INVALID_PARAMETER`: `recipes/query` substring item queries were replaced with exact-id and percent-encoded `#tag` queries, and all paths/parameters were checked against `InsightEndpoint.allowedParams()`
 - `describeBuiltinParsers`/`mc_query_recipes` viewer handling no longer assumes a fixed viewer name set; buckets and availability come from whatever registered
 - Version synchronization instructions: the MCP server version is read from `package.json`, so `server.ts` is no longer a version declaration to keep in sync
+- Recipe JSON encoding cached in the shared recipe index is filled concurrently by HTTP and bridge threads; the cache was a plain `HashMap` and is now concurrent
 
 ## [0.1.0-beta.2] - 2026-11-24
 

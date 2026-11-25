@@ -3,7 +3,7 @@ import * as z from 'zod/v4';
 import { ToolError } from '../api/result.js';
 import { JarInspector } from '../decompiler/jarInspector.js';
 import { fetchClassIntrospection } from '../data/worldState.js';
-import { ToolPathDeps, resolveGameDir, resolveModsDir, tryResolveGameDir } from './helpers.js';
+import { type ToolPathDeps, resolveGameDir, resolveModsDir, tryResolveGameDir } from './helpers.js';
 import { toolResult } from './result.js';
 
 export interface CodeToolDeps extends ToolPathDeps {

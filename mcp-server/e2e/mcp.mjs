@@ -8,6 +8,7 @@
  */
 import { spawn } from 'node:child_process';
 import net from 'node:net';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 const PROTOCOL = '2026-07-28';
 
@@ -88,7 +89,7 @@ export async function startMcpServer({ entry, mcUrl, log }) {
     }
     if (child.exitCode !== null) throw new Error(`MCP server exited early: ${output}`);
     if (Date.now() > deadline) throw new Error(`MCP server did not start: ${output}`);
-    await new Promise((r) => setTimeout(r, 200));
+    await sleep(200);
   }
   return {
     client: new McpClient(url),

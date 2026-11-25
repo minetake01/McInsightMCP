@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { McHttpClient } from '../src/client/mcClient.js';
 import { JarInspector } from '../src/decompiler/jarInspector.js';
-import { HttpServerHandle, startHttpServer } from '../src/transports/http.js';
+import { type HttpServerHandle, startHttpServer } from '../src/transports/http.js';
 
 async function rpcCall(
   url: string,

@@ -3,7 +3,6 @@ package net.minetake.mcinsight.recipe;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.mojang.serialization.JsonOps;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -11,7 +10,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import net.minetake.mcinsight.api.InsightError;
 import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.api.ItemFilter;
@@ -116,7 +117,6 @@ public final class RecipeCollector {
     }
 
     private static final class RecipeIndex {
-        final HolderLookup.Provider registries;
         final RegistryOps<JsonElement> jsonOps;
         final JsonArray recipeTypesArray;
         final List<IndexedRecipe> allRecipes;
@@ -127,11 +127,12 @@ public final class RecipeCollector {
         final Map<String, List<IndexedRecipe>> byOutputTag = new HashMap<>();
         final Map<String, List<IndexedRecipe>> byInputTag = new HashMap<>();
         final List<IndexedRecipe> fallbackCandidates = new ArrayList<>();
-        final Map<ResourceLocation, JsonElement> encodedJson = new HashMap<>();
-        final Map<ResourceLocation, JsonElement> snapshots = new java.util.concurrent.ConcurrentHashMap<>();
+        // The index is shared by concurrent requests, so the lazily filled caches must be concurrent.
+        // A recipe the codec cannot encode is cached as empty, so it is not retried on every request.
+        final Map<ResourceLocation, Optional<JsonElement>> encodedJson = new ConcurrentHashMap<>();
+        final Map<ResourceLocation, JsonElement> snapshots = new ConcurrentHashMap<>();
 
-        RecipeIndex(HolderLookup.Provider registries, RegistryOps<JsonElement> jsonOps, JsonArray recipeTypesArray) {
-            this.registries = registries;
+        RecipeIndex(RegistryOps<JsonElement> jsonOps, JsonArray recipeTypesArray) {
             this.jsonOps = jsonOps;
             this.recipeTypesArray = recipeTypesArray;
             this.allRecipes = new ArrayList<>();
@@ -141,17 +142,14 @@ public final class RecipeCollector {
             if (jsonOps == null) {
                 return null;
             }
-            if (encodedJson.containsKey(rec.id)) {
-                return encodedJson.get(rec.id);
-            }
-            JsonElement encoded = null;
-            try {
-                encoded = Recipe.CODEC.encodeStart(jsonOps, rec.recipe).result().orElse(null);
-            } catch (Exception ignored) {
-                // Falls back to a reflective snapshot at the call site.
-            }
-            encodedJson.put(rec.id, encoded);
-            return encoded;
+            return encodedJson.computeIfAbsent(rec.id, id -> {
+                try {
+                    return Recipe.CODEC.encodeStart(jsonOps, rec.recipe).result();
+                } catch (Exception ignored) {
+                    // Falls back to a reflective snapshot at the call site.
+                    return Optional.empty();
+                }
+            }).orElse(null);
         }
 
         JsonElement snapshot(IndexedRecipe rec) {
@@ -243,7 +241,7 @@ public final class RecipeCollector {
         RegistryOps<JsonElement> jsonOps = GameAccess.jsonOps(boot.registries());
         Map<String, Integer> counts = new LinkedHashMap<>();
         JsonArray recipeTypes = new JsonArray();
-        RecipeIndex index = new RecipeIndex(boot.registries(), jsonOps, recipeTypes);
+        RecipeIndex index = new RecipeIndex(jsonOps, recipeTypes);
 
         for (RecipeHolder<?> holder : boot.holders()) {
             Recipe<?> recipe = holder.value();
@@ -475,9 +473,11 @@ public final class RecipeCollector {
         JsonElement rawJson = index.rawJson(rec);
         if (rawJson != null && rawJson.isJsonObject()) {
             JsonObject obj = rawJson.getAsJsonObject();
-            String[] keys = scope == ViewerQuery.RoleScope.OUTPUT ? OUTPUT_FALLBACK_KEYS
-                : scope == ViewerQuery.RoleScope.INPUT ? INPUT_FALLBACK_KEYS
-                : null;
+            String[] keys = switch (scope) {
+                case OUTPUT -> OUTPUT_FALLBACK_KEYS;
+                case INPUT -> INPUT_FALLBACK_KEYS;
+                default -> null;
+            };
             if (keys != null) {
                 for (String key : keys) {
                     if (obj.has(key) && containsItem(obj.get(key), item)) {

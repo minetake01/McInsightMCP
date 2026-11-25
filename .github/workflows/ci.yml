@@ -22,25 +22,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Verify version synchronization across Java and TypeScript
+      - name: Verify version synchronization across mod and MCP server
         shell: bash
         run: |
           set -euo pipefail
           GRADLE_VER="$(grep -E '^version=' mod/gradle.properties | cut -d'=' -f2- | tr -d '\r')"
-          CONST_VER="$(sed -nE 's/.*MOD_VERSION = "([^"]+)".*/\1/p' mod/common/src/main/java/net/minetake/mcinsight/McInsightConstants.java)"
           PKG_VER="$(node -p "require('./mcp-server/package.json').version")"
           echo "gradle.properties : ${GRADLE_VER}"
-          echo "McInsightConstants: ${CONST_VER}"
           echo "package.json      : ${PKG_VER}"
-          if [[ -z "${GRADLE_VER}" || -z "${CONST_VER}" || -z "${PKG_VER}" ]]; then
+          if [[ -z "${GRADLE_VER}" || -z "${PKG_VER}" ]]; then
             echo "::error::A version declaration could not be read."
             exit 1
           fi
-          if [[ "${GRADLE_VER}" != "${CONST_VER}" || "${GRADLE_VER}" != "${PKG_VER}" ]]; then
+          if [[ "${GRADLE_VER}" != "${PKG_VER}" ]]; then
             echo "::error::Version mismatch across mod and MCP server!"
             exit 1
           fi
-          # The MCP server reports its version by reading package.json, so no third declaration exists to drift.
+          # The mod reads its version from the metadata gradle.properties expands, and the MCP server from
+          # package.json, so no other declaration exists to drift.
           grep -q "readPackageVersion" mcp-server/src/server.ts
           test -s README.md
           test -s README.ja.md
@@ -52,7 +51,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        node-version: [20, 24]
+        node-version: [22, 24]
     defaults:
       run:
         working-directory: mcp-server
@@ -63,7 +62,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
         with:
-          version: 11
+          package_json_file: mcp-server/package.json
 
       - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v7
@@ -94,16 +93,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Setup Java 21
+      # 21 compiles and runs the mod; 25 runs the Gradle daemon (gradle/gradle-daemon-jvm.properties).
+      - name: Setup Java 21 and 25
         uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: 21
+          java-version: |
+            21
+            25
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-home-cache-cleanup: true
+          cache-cleanup: on-success
 
       - name: Test common & Build NeoForge / Fabric JARs
         run: |

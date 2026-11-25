@@ -5,7 +5,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { McHttpClient } from './client/mcClient.js';
 import { JarInspector } from './decompiler/jarInspector.js';
-import { ServerDeps } from './server.js';
+import { type ServerDeps } from './server.js';
 import { startHttpServer } from './transports/http.js';
 import { startStdioServer } from './transports/stdio.js';
 
