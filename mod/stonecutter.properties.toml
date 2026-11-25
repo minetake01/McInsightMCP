@@ -1,8 +1,8 @@
 # Everything a branch's build script needs to know, keyed by Minecraft version and loader.
 #
 # Labels are the node path: [<branch>."<minecraft version>"]. A loader node also reads the plain
-# ["<minecraft version>"] section, so values shared by every branch live there. Lambdas read them
-# with `sc.properties`.
+# ["<minecraft version>"] section, and every node reads the top-level keys, so a value is written at
+# the widest level it holds for. Lambdas read them with `sc.properties`.
 
 mod.id = "mcinsight"
 mod.name = "McInsight"
@@ -15,17 +15,17 @@ mod.homepage = "https://github.com/minetake01/McInsightMCP"
 mod.sources = "https://github.com/minetake01/McInsightMCP"
 mod.issues = "https://github.com/minetake01/McInsightMCP/issues"
 
-# The recipe viewers and JUnit move with the Minecraft version, so the pins are per version below.
+# The unit tests do not touch a Minecraft API that JUnit could depend on.
+deps.junit = "6.1.3"
+
+# The recipe viewers move with the Minecraft version, so their pins are per version below.
 
 ["1.21.1"]
 java = "21"
-# Minecraft's resource pack format, which `pack.mcmeta` has to declare for this version.
-pack_format = "34"
 
 deps.jei = "19.76.1.481"
 deps.emi = "1.1.24+1.21.1"
 deps.rei = "16.0.799"
-deps.junit = "6.1.3"
 
 # Parchment stops at the last obfuscated version; later Minecraft ships its parameter names.
 parchment.minecraft = "1.21.1"
@@ -46,11 +46,9 @@ deps.neo_loader_range = "[4,)"
 # build entirely and comes back the moment a pin is added here.
 ["26.1.2"]
 java = "25"
-pack_format = "46"
 
 deps.jei = "29.54.0.123"
 deps.rei = "26.1.819"
-deps.junit = "6.1.3"
 
 deps.neoform = "26.1.2-1"
 
@@ -64,11 +62,9 @@ deps.neo_loader_range = "[4,)"
 
 ["26.3"]
 java = "25"
-pack_format = "46"
 
 deps.jei = "31.23.0.130"
 deps.rei = "26.3.824"
-deps.junit = "6.1.3"
 
 deps.neoform = "26.3-1"
 

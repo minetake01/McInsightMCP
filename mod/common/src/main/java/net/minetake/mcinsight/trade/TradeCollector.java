@@ -34,24 +34,15 @@ import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.npc.Villager;
+import net.minecraft.world.entity.npc.VillagerProfession;
 import net.minecraft.world.entity.npc.VillagerType;
 import net.minecraft.world.item.trading.MerchantOffer;
 import net.minecraft.world.level.Level;
 //? if >=26.3 {
+/*import net.minecraft.world.entity.EntityTypes;
+*///? }
+//? if >=26.1 {
 /*import net.minecraft.core.HolderSet;
-import net.minecraft.world.entity.EntityTypes;
-import net.minecraft.world.entity.npc.villager.VillagerProfession;
-import net.minecraft.world.item.trading.TradeSet;
-import net.minecraft.world.item.trading.VillagerTrade;
-import net.minecraft.world.level.storage.loot.LootContext;
-import net.minecraft.world.level.storage.loot.LootParams;
-import net.minecraft.world.level.storage.loot.parameters.LootContextParamSets;
-import net.minecraft.world.level.storage.loot.parameters.LootContextParams;
-import net.minecraft.server.level.ServerLevel;
-import net.minecraft.util.Unit;
-*///? } else if >=26.1 {
-/*import net.minecraft.core.HolderSet;
-import net.minecraft.world.entity.npc.villager.VillagerProfession;
 import net.minecraft.world.item.trading.TradeSet;
 import net.minecraft.world.item.trading.VillagerTrade;
 import net.minecraft.world.level.storage.loot.LootContext;
@@ -61,7 +52,6 @@ import net.minecraft.world.level.storage.loot.parameters.LootContextParams;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Unit;
 *///? } else {
-import net.minecraft.world.entity.npc.VillagerProfession;
 import net.minecraft.world.entity.npc.VillagerTrades;
 import org.apache.commons.lang3.tuple.Pair;
 //? }

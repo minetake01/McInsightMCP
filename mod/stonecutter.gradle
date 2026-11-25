@@ -11,4 +11,3 @@ stonecutter.parameters {
     properties { tags(current.project) }
 }
 
-stonecutter.handlers { inherit('java', 'json') }

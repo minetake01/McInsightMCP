@@ -36,7 +36,7 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
       version_type: ${{ steps.meta.outputs.version_type }}
-      mc_versions: ${{ steps.meta.outputs.mc_versions }}
+      mc_targets: ${{ steps.meta.outputs.mc_targets }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -62,19 +62,42 @@ jobs:
             fi
           fi
 
-          # The matrix the mod is built for: one row per Minecraft version, as JSON for `strategy`.
-          MC_VERSIONS="$(grep -E '^minecraft_versions=' mod/gradle.properties | cut -d'=' -f2- | tr -d '\r')"
-          if [[ -z "${VERSION}" || -z "${MC_VERSIONS}" ]]; then
-            echo "::error::Failed to resolve version (${VERSION}) or minecraft_versions (${MC_VERSIONS})."
+          if [[ -z "${VERSION}" ]]; then
+            echo "::error::Failed to resolve version (${VERSION})."
             exit 1
           fi
-          JSON="$(node -e 'const v = process.argv[1].split(",").map((s) => s.trim()).filter(Boolean); if (v.length === 0) process.exit(1); process.stdout.write(JSON.stringify(v));' "${MC_VERSIONS}")"
+          # The matrix the mod is built for, as JSON for `strategy`: one row per Minecraft version in
+          # `minecraft_versions`, with the Java version its section of the Stonecutter properties
+          # pins, because a publish target declares the Java the jar needs.
+          JSON="$(node -e '
+            const fs = require("node:fs");
+            const line = fs.readFileSync("mod/gradle.properties", "utf8").split(/\r?\n/)
+              .find((l) => l.startsWith("minecraft_versions="));
+            const versions = (line ?? "").slice("minecraft_versions=".length).split(",").map((s) => s.trim()).filter(Boolean);
+            if (versions.length === 0) throw new Error("minecraft_versions in mod/gradle.properties is empty.");
+            const java = {};
+            let section;
+            for (const l of fs.readFileSync("mod/stonecutter.properties.toml", "utf8").split(/\r?\n/)) {
+              if (l.startsWith("[")) {
+                // Only a plain ["<version>"] section pins `java`; a loader section does not.
+                section = /^\["([^"]+)"\]\s*$/.exec(l)?.[1];
+                continue;
+              }
+              const pin = /^java\s*=\s*"(\d+)"/.exec(l);
+              if (pin && section) java[section] = pin[1];
+            }
+            const targets = versions.map((mc) => {
+              if (!java[mc]) throw new Error(`mod/stonecutter.properties.toml has no java pin for ["${mc}"].`);
+              return { mc, java: java[mc] };
+            });
+            process.stdout.write(JSON.stringify(targets));
+          ')"
 
           {
             echo "version=${VERSION}"
             echo "tag=${TAG}"
             echo "version_type=${VERSION_TYPE}"
-            echo "mc_versions=${JSON}"
+            echo "mc_targets=${JSON}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Verify version consistency across project files
@@ -174,8 +197,8 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ steps.meta.outputs.version }}"
-          MC_VERSIONS="${{ steps.meta.outputs.mc_versions }}"
-          for mc in $(node -e 'process.stdout.write(JSON.parse(process.argv[1]).join(" "))' "${MC_VERSIONS}"); do
+          MC_TARGETS='${{ steps.meta.outputs.mc_targets }}'
+          for mc in $(node -e 'process.stdout.write(JSON.parse(process.argv[1]).map((t) => t.mc).join(" "))' "${MC_TARGETS}"); do
             for loader in neoforge fabric; do
               jar="mod/${loader}/versions/${mc}/build/libs/mcinsight-${loader}-${mc}-${VERSION}.jar"
               test -f "${jar}"
@@ -189,11 +212,11 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ steps.meta.outputs.version }}"
-          MC_VERSIONS="${{ steps.meta.outputs.mc_versions }}"
+          MC_TARGETS='${{ steps.meta.outputs.mc_targets }}'
           node -e '
             const fs = require("node:fs");
             const version = process.argv[1];
-            const mcVersions = JSON.parse(process.argv[2]).join(", ");
+            const mcVersions = JSON.parse(process.argv[2]).map((t) => t.mc).join(", ");
             const changelog = fs.readFileSync("CHANGELOG.md", "utf8");
             const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
             const re = new RegExp(`^## \\[${escaped}\\][^\\n]*\\n([\\s\\S]*?)(?=^## \\[|(?![\\s\\S]))`, "m");
@@ -202,7 +225,7 @@ jobs:
               ? match[1].trim()
               : `Release v${version} for Minecraft ${mcVersions} (NeoForge & Fabric) + McInsightMCP Server.`;
             fs.writeFileSync("release-out/RELEASE_NOTES.md", notes + "\n", "utf8");
-          ' "${VERSION}" "${MC_VERSIONS}"
+          ' "${VERSION}" "${MC_TARGETS}"
 
       - name: Verify Modrinth sync payload
         env:
@@ -315,9 +338,18 @@ jobs:
     strategy:
       fail-fast: false
       # One upload per (loader, Minecraft version): each jar declares the version it was built for.
+      # The dependencies are the loader's, so `include` adds them to every row of that loader.
       matrix:
-        mc: ${{ fromJSON(needs.build-and-verify.outputs.mc_versions) }}
+        target: ${{ fromJSON(needs.build-and-verify.outputs.mc_targets) }}
         loader: [neoforge, fabric]
+        include:
+          - loader: neoforge
+            dependencies: |
+              jei(optional)
+          - loader: fabric
+            dependencies: |
+              fabric-api(required)
+              jei(optional)
     steps:
       - name: Validate Modrinth token
         env:
@@ -347,13 +379,14 @@ jobs:
         with:
           modrinth-id: ${{ vars.MODRINTH_PROJECT_ID }}
           modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
-          files: release-assets/mcinsight-${{ matrix.loader }}-${{ matrix.mc }}-${{ needs.build-and-verify.outputs.version }}.jar
-          name: McInsight ${{ needs.build-and-verify.outputs.version }} (${{ matrix.loader }}, ${{ matrix.mc }})
-          version: ${{ needs.build-and-verify.outputs.version }}+${{ matrix.loader }}+${{ matrix.mc }}
+          files: release-assets/mcinsight-${{ matrix.loader }}-${{ matrix.target.mc }}-${{ needs.build-and-verify.outputs.version }}.jar
+          name: McInsight ${{ needs.build-and-verify.outputs.version }} (${{ matrix.loader }}, ${{ matrix.target.mc }})
+          version: ${{ needs.build-and-verify.outputs.version }}+${{ matrix.loader }}+${{ matrix.target.mc }}
           version-type: ${{ needs.build-and-verify.outputs.version_type }}
           changelog-file: release-assets/RELEASE_NOTES.md
           loaders: ${{ matrix.loader }}
-          game-versions: ${{ matrix.mc }}
+          game-versions: ${{ matrix.target.mc }}
+          dependencies: ${{ matrix.dependencies }}
           fail-mode: fail
 
       - name: Sync README, license, links, and icon to Modrinth
@@ -447,8 +480,16 @@ jobs:
       fail-fast: false
       # One upload per (loader, Minecraft version), matching publish-modrinth.
       matrix:
-        mc: ${{ fromJSON(needs.build-and-verify.outputs.mc_versions) }}
+        target: ${{ fromJSON(needs.build-and-verify.outputs.mc_targets) }}
         loader: [neoforge, fabric]
+        include:
+          - loader: neoforge
+            dependencies: |
+              jei(optional)
+          - loader: fabric
+            dependencies: |
+              fabric-api(required)
+              jei(optional)
     steps:
       - name: Validate CurseForge token
         env:
@@ -470,14 +511,16 @@ jobs:
         with:
           curseforge-id: ${{ vars.CURSEFORGE_PROJECT_ID }}
           curseforge-token: ${{ secrets.CURSEFORGE_TOKEN }}
-          files: release-assets/mcinsight-${{ matrix.loader }}-${{ matrix.mc }}-${{ needs.build-and-verify.outputs.version }}.jar
-          name: McInsight ${{ needs.build-and-verify.outputs.version }} (${{ matrix.loader }}, ${{ matrix.mc }})
-          version: ${{ needs.build-and-verify.outputs.version }}+${{ matrix.loader }}+${{ matrix.mc }}
+          files: release-assets/mcinsight-${{ matrix.loader }}-${{ matrix.target.mc }}-${{ needs.build-and-verify.outputs.version }}.jar
+          name: McInsight ${{ needs.build-and-verify.outputs.version }} (${{ matrix.loader }}, ${{ matrix.target.mc }})
+          version: ${{ needs.build-and-verify.outputs.version }}+${{ matrix.loader }}+${{ matrix.target.mc }}
           version-type: ${{ needs.build-and-verify.outputs.version_type }}
           changelog-file: release-assets/RELEASE_NOTES.md
           loaders: ${{ matrix.loader }}
-          game-versions: ${{ matrix.mc }}
+          game-versions: ${{ matrix.target.mc }}
+          java: Java ${{ matrix.target.java }}
           environment: client | server
+          dependencies: ${{ matrix.dependencies }}
           fail-mode: fail
 
   publish-npm:
@@ -535,4 +578,3 @@ jobs:
             # Uses npm Trusted Publishing (OIDC) configured on npmjs.com
             npm publish --access public --tag "${DIST_TAG}"
           fi
-

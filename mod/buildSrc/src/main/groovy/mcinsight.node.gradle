@@ -94,16 +94,18 @@ tasks.withType(JavaCompile).configureEach {
 // renamed a class gets the new name substituted rather than carrying an `//? if` around every use.
 // Only the renames that are purely lexical belong here: a class that also changed shape is handled
 // where it is used, because a substitution would hide the difference instead of showing it.
-def renamedIn26 = !mcVersion.startsWith('1.21')
+// Decided with the same comparison the sources' `//? if >=26.1` use, so the two cannot disagree on
+// which side of the line a version is.
+def is26 = sc.eval(mcVersion, '>=26.1')
 sc.replacements {
-    string(renamedIn26) {
+    string(is26) {
         include '**/*.java'
         replace 'net.minecraft.Util', 'net.minecraft.util.Util'
         replace 'net.minecraft.world.entity.npc.VillagerProfession', 'net.minecraft.world.entity.npc.villager.VillagerProfession'
         replace 'net.minecraft.world.entity.npc.VillagerType', 'net.minecraft.world.entity.npc.villager.VillagerType'
         replace 'net.minecraft.world.entity.npc.Villager', 'net.minecraft.world.entity.npc.villager.Villager'
     }
-    regex(renamedIn26) {
+    regex(is26) {
         include '**/*.java'
         replace '\\bResourceLocation\\b', 'Identifier', '\\bIdentifier\\b', 'ResourceLocation'
     }
@@ -145,7 +147,6 @@ def expandProps = [
     'mod_sources'                  : props.get('mod.sources'),
     'mod_issues'                   : props.get('mod.issues'),
     'minecraft_version'            : mcVersion,
-    'pack_format'                  : props.get('pack_format'),
     // JSON and TOML have no comment syntax, so an entry that only some versions carry is emitted as
     // data rather than wrapped in a `//? if`. Each fragment keeps its own file's separators, so it
     // collapses to nothing without leaving a dangling comma or a blank dependency block.
@@ -170,7 +171,7 @@ side="CLIENT"
     // square, so on 26.x it is the icon and before that it is the logo. A comment marker would do,
     // but the loader parses this file before anything reads it back as text, so the choice is made
     // where the other per-version values are.
-    'mod_icon_attributes'          : renamedIn26
+    'mod_icon_attributes'          : is26
         ? 'iconFile="mcinsight.png"'
         : 'logoFile="mcinsight.png"\nlogoBlur=false',
     'java_version'                 : javaVersion,
@@ -181,7 +182,7 @@ side="CLIENT"
 
 tasks.named('processResources', ProcessResources) {
     inputs.properties(expandProps)
-    filesMatching(['pack.mcmeta', 'fabric.mod.json', 'META-INF/neoforge.mods.toml']) {
+    filesMatching(['fabric.mod.json', 'META-INF/neoforge.mods.toml']) {
         expand expandProps
     }
 }
