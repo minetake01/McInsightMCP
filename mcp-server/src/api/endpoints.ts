@@ -204,12 +204,12 @@ export const ENDPOINTS = {
   }),
   datamaps_query: endpoint<
     'datamaps_query',
-    'q' | 'registry' | 'mod' | 'includeRaw' | 'limit' | 'offset',
+    'q' | 'item' | 'registry' | 'mod' | 'includeRaw' | 'limit' | 'offset',
     DataMapsResponse
   >({
     id: 'datamaps_query',
     path: '/api/v1/datamaps/query',
-    params: ['q', 'registry', 'mod', 'includeRaw', 'limit', 'offset'],
+    params: ['q', 'item', 'registry', 'mod', 'includeRaw', 'limit', 'offset'],
     defaultLimit: 30,
     maxLimit: 100,
   }),

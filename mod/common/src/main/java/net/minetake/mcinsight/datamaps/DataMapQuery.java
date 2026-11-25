@@ -3,11 +3,14 @@ package net.minetake.mcinsight.datamaps;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import net.minetake.mcinsight.api.InsightEndpoint;
 import net.minetake.mcinsight.api.InsightError;
 import net.minetake.mcinsight.api.InsightException;
+import net.minetake.mcinsight.api.ItemFilter;
+import net.minetake.mcinsight.api.ItemQuery;
 import net.minetake.mcinsight.api.Page;
 import net.minetake.mcinsight.api.Params;
 import net.minetake.mcinsight.api.RequestContext;
@@ -35,6 +38,7 @@ public final class DataMapQuery {
         int limit = InsightEndpoint.DATAMAPS_QUERY.limit(p);
         int offset = p.offset();
         String query = lower(p.string("q"));
+        ItemFilter item = ItemFilter.of(ItemQuery.optional(p.string("item")));
         String registry = lower(p.string("registry"));
         String modId = lower(p.string("mod"));
         boolean includeRaw = p.bool("includeRaw", false);
@@ -61,13 +65,14 @@ public final class DataMapQuery {
 
             JsonObject values = map.values();
             int valueCount = values == null ? 0 : values.size();
-            boolean idHit = query.isEmpty() || map.idLower().contains(query);
+            boolean selective = !query.isEmpty() || item != null;
+            boolean idHit = item == null && (query.isEmpty() || map.idLower().contains(query));
             JsonObject matchedValues = null;
             int matchedCount = 0;
-            if (values != null && !query.isEmpty()) {
+            if (values != null && selective) {
                 matchedValues = new JsonObject();
                 for (Map.Entry<String, JsonElement> entry : values.entrySet()) {
-                    if (!matches(entry.getKey(), entry.getValue(), query)) {
+                    if (!matches(entry.getKey(), entry.getValue(), query, item)) {
                         continue;
                     }
                     matchedCount++;
@@ -77,12 +82,12 @@ public final class DataMapQuery {
                 }
             }
             boolean hasContentHit = matchedValues != null && !matchedValues.isEmpty();
-            if (!query.isEmpty() && !idHit && !hasContentHit) {
+            if (selective && !idHit && !hasContentHit) {
                 continue;
             }
 
             if (total >= offset && entries.size() < limit) {
-                entries.add(describe(map, includeRaw, query, valueCount, matchedValues, matchedCount));
+                entries.add(describe(map, includeRaw, selective, valueCount, matchedValues, matchedCount));
             }
             total++;
         }
@@ -92,7 +97,7 @@ public final class DataMapQuery {
     private static JsonObject describe(
         DataMapIndex.DataMap map,
         boolean includeRaw,
-        String query,
+        boolean selective,
         int valueCount,
         JsonObject matchedValues,
         int matchedCount
@@ -109,14 +114,29 @@ public final class DataMapQuery {
                 entry.addProperty("matchedValuesTruncated", true);
             }
         }
-        if (map.rawJson() != null && (includeRaw || query.isEmpty() || valueCount <= MAX_IMPLICIT_RAW_VALUES)) {
+        if (map.rawJson() != null && (includeRaw || !selective || valueCount <= MAX_IMPLICIT_RAW_VALUES)) {
             entry.add("rawJson", map.rawJson());
         }
         return entry;
     }
 
-    private static boolean matches(String key, JsonElement value, String query) {
-        return lower(key).contains(query) || lower(value.toString()).contains(query);
+    /**
+     * Whether one value of a data map is selected.
+     *
+     * <p>{@code item=} matches the value's key, which is the registry entry or {@code #tag} the value
+     * is attached to; it never looks inside the value. {@code q} is the free-text search and does.
+     */
+    private static boolean matches(String key, JsonElement value, String query, ItemFilter item) {
+        if (item != null) {
+            String keyLower = lower(key);
+            boolean keyHit = keyLower.startsWith("#")
+                ? item.matches(null, List.of(keyLower.substring(1)))
+                : item.matches(keyLower, List.of());
+            if (!keyHit) {
+                return false;
+            }
+        }
+        return query.isEmpty() || lower(key).contains(query) || lower(value.toString()).contains(query);
     }
 
     private static void requireNeoForge() {
