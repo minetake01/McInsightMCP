@@ -213,6 +213,121 @@ describe('modParsers (version-scoped built-in major mod parsers)', () => {
     expect(oritechNonGenerator.parsed?.hasUnparsedFields).toBe(true);
   });
 
+  it('flags hasUnparsedFields in every built-in parser when a key is not explained', () => {
+    // Each case appends one key no branch handles; every parser must report it rather than drop it.
+    const cases: Array<[string, Record<string, unknown>]> = [
+      [
+        'create:crushing',
+        {
+          type: 'create:crushing',
+          ingredients: [{ item: 'minecraft:iron_ore' }],
+          results: [{ id: 'create:crushed_raw_iron' }],
+          unknown_flag: { keep: true },
+        },
+      ],
+      [
+        'farmersdelight:cutting',
+        {
+          type: 'farmersdelight:cutting',
+          ingredients: [{ item: 'farmersdelight:cabbage' }],
+          tool: [{ tag: 'c:tools/knife' }],
+          result: [{ item: { id: 'farmersdelight:cabbage_leaf' } }],
+          unknown_flag: 'keep',
+        },
+      ],
+      [
+        'tofucraft:bittern',
+        {
+          type: 'tofucraft:bittern',
+          process: { id: 'tofucraft:soymilk', amount: 1000 },
+          extra_fluid: { id: 'tofucraft:bittern', amount: 250 },
+          result: { id: 'tofucraft:blocktofukinu' },
+          unknown_flag: 1,
+        },
+      ],
+      [
+        'mekanism:enriching',
+        {
+          type: 'mekanism:enriching',
+          input: { tag: 'c:ores/iron' },
+          output: { id: 'mekanism:dust_iron' },
+          unknown_flag: true,
+        },
+      ],
+      [
+        'ae2:charger',
+        {
+          type: 'ae2:charger',
+          ingredient: { item: 'minecraft:redstone' },
+          result: { id: 'ae2:charged_staff' },
+          unknown_flag: true,
+        },
+      ],
+      [
+        'ars_nouveau:imbuement',
+        {
+          type: 'ars_nouveau:imbuement',
+          input: { item: 'minecraft:lapis_lazuli' },
+          output: { id: 'ars_nouveau:source_gem' },
+          unknown_flag: true,
+        },
+      ],
+      [
+        'oritech:pulverizer',
+        {
+          type: 'oritech:pulverizer',
+          ingredients: [{ tag: 'c:raw_materials/iron' }],
+          results: [{ id: 'oritech:iron_dust' }],
+          unknown_flag: true,
+        },
+      ],
+    ];
+
+    for (const [recipeType, rawJson] of cases) {
+      const parsed = parseWithBuiltinModParser(recipeType, rawJson, compatibleVersions);
+      expect(parsed.parsed, `Expected ${recipeType} to parse`).toBeDefined();
+      expect(parsed.parsed?.hasUnparsedFields, `Expected ${recipeType} to report unparsed keys`).toBe(true);
+    }
+  });
+
+  it('leaves hasUnparsedFields unset when every key is explained', () => {
+    const clean = parseWithBuiltinModParser(
+      'create:pressing',
+      {
+        type: 'create:pressing',
+        ingredients: [{ item: 'minecraft:iron_ingot' }],
+        results: [{ id: 'create:iron_sheet' }],
+        processing_time: 100,
+      },
+      compatibleVersions,
+    );
+    expect(clean.parsed?.hasUnparsedFields).toBeUndefined();
+
+    const cleanCutting = parseWithBuiltinModParser(
+      'farmersdelight:cutting',
+      {
+        type: 'farmersdelight:cutting',
+        ingredients: [{ item: 'farmersdelight:cabbage' }],
+        tool: [{ tag: 'c:tools/knife' }],
+        result: [{ item: { id: 'farmersdelight:cabbage_leaf', count: 2 } }],
+      },
+      compatibleVersions,
+    );
+    expect(cleanCutting.parsed?.hasUnparsedFields).toBeUndefined();
+
+    const cleanTofu = parseWithBuiltinModParser(
+      'tofucraft:bittern',
+      {
+        type: 'tofucraft:bittern',
+        process: { id: 'tofucraft:soymilk', amount: 1000 },
+        extra_fluid: { id: 'tofucraft:bittern', amount: 250 },
+        result: { id: 'tofucraft:blocktofukinu' },
+      },
+      compatibleVersions,
+    );
+    expect(cleanTofu.parsed?.hasUnparsedFields).toBeUndefined();
+  });
+
   it.skipIf(!hasRealModpack)('parses real recipe JSON files directly from mod JARs via MCINSIGHT_TEST_MODS_DIR', async () => {
     const inspector = new JarInspector(path.resolve('.tools'));
     const samples: Array<[string, string]> = [

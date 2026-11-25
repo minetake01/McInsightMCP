@@ -1,9 +1,10 @@
 import {
   BuiltinModParser,
-  ModIngredient,
+  IngredientCollector,
   extractModIngredient,
   extractShapedPatternInputs,
   isRecord,
+  unparsedRecipeFlag,
 } from './types.js';
 
 const PROCESSING_MECHANISMS: Record<string, string> = {
@@ -23,13 +24,51 @@ const PROCESSING_MECHANISMS: Record<string, string> = {
   'create:item_application': 'Create Item Application (world block click / Deployer)',
 };
 
-function extractCreateResults(raw: unknown, role: string): ModIngredient[] {
-  if (raw === undefined || raw === null) return [];
+/** Create processing recipes are a flat shape: ingredients in, weighted results out. */
+const HANDLED_PROCESSING_KEYS = new Set([
+  'type',
+  'ingredients',
+  'results',
+  'processing_time',
+  'heat_requirement',
+  'keep_held_item',
+]);
+
+const HANDLED_MECHANICAL_CRAFTING_KEYS = new Set([
+  'type',
+  'pattern',
+  'key',
+  'result',
+  'accept_mirrored',
+  'processing_time',
+]);
+
+const HANDLED_SEQUENCED_ASSEMBLY_KEYS = new Set([
+  'type',
+  'ingredient',
+  'transitional_item',
+  'sequence',
+  'results',
+  'loops',
+]);
+
+/** Per-step keys a sequenced assembly step may carry. */
+const HANDLED_SEQUENCE_STEP_KEYS = new Set([
+  'type',
+  'ingredients',
+  'results',
+  'processing_time',
+  'keep_held_item',
+]);
+
+function extractCreateResults(raw: unknown, role: string): ReturnType<typeof extractModIngredient> {
+  if (raw === undefined || raw === null) return { items: [], hasUnparsed: false };
   const arr = Array.isArray(raw) ? raw : [raw];
-  const out: ModIngredient[] = [];
+  const collector = new IngredientCollector();
   for (const el of arr) {
     if (isRecord(el) && typeof el.id === 'string' && typeof el.amount === 'number' && el.count === undefined) {
-      out.push({
+      // Create fluids are `{id, amount}`; anything else goes through the shared extractor.
+      collector.items.push({
         kind: 'fluid',
         id: el.id,
         amount: el.amount,
@@ -38,10 +77,10 @@ function extractCreateResults(raw: unknown, role: string): ModIngredient[] {
         slotOrRole: role,
       });
     } else {
-      out.push(...extractModIngredient(el, 'auto', role));
+      collector.add(extractModIngredient(el, 'auto', role));
     }
   }
-  return out;
+  return { items: collector.items, hasUnparsed: collector.hasUnparsed };
 }
 
 function getIngredientPrimaryId(raw: unknown): string | undefined {
@@ -71,15 +110,23 @@ export const createParser: BuiltinModParser = {
     if (!isRecord(rawJson)) return null;
 
     if (recipeType === 'create:mechanical_crafting') {
+      const inputs = extractShapedPatternInputs(rawJson);
+      const outputs = extractModIngredient(rawJson.result, 'item', 'result');
       return {
         parserId: this.id,
         modId: this.modId,
         modVersionRange: this.modVersionRange,
         recipeType,
         mechanism: 'Create Mechanical Crafters (arbitrary grid)',
-        inputs: extractShapedPatternInputs(rawJson),
-        outputs: extractModIngredient(rawJson.result, 'item', 'result'),
+        inputs: inputs.items,
+        outputs: outputs.items,
         conditions: rawJson.accept_mirrored === false ? ['mirroring disabled'] : undefined,
+        hasUnparsedFields: unparsedRecipeFlag(
+          rawJson,
+          HANDLED_MECHANICAL_CRAFTING_KEYS,
+          inputs,
+          outputs,
+        ),
       };
     }
 
@@ -88,12 +135,20 @@ export const createParser: BuiltinModParser = {
       const transitionalId = getIngredientPrimaryId(rawJson.transitional_item);
       const loops = typeof rawJson.loops === 'number' ? rawJson.loops : 1;
       const steps: string[] = [];
-      const extraStepInputs: ModIngredient[] = [];
       const stepDetails: Array<Record<string, unknown>> = [];
+      const inputs = new IngredientCollector();
+      inputs.add(extractModIngredient(rawJson.ingredient, 'auto', 'base_ingredient'));
+      let stepUnparsed = false;
 
       for (let i = 0; i < sequence.length; i++) {
         const step = sequence[i];
-        if (!isRecord(step)) continue;
+        if (!isRecord(step)) {
+          stepUnparsed = true;
+          continue;
+        }
+        if (Object.keys(step).some((key) => !HANDLED_SEQUENCE_STEP_KEYS.has(key))) {
+          stepUnparsed = true;
+        }
         const stepType = typeof step.type === 'string' ? step.type : 'unknown';
         const rawStepIngs = Array.isArray(step.ingredients) ? step.ingredients : [];
         // Exclude the transitional item placeholder without blindly dropping index 0 if absent
@@ -101,8 +156,10 @@ export const createParser: BuiltinModParser = {
           const xId = getIngredientPrimaryId(x);
           return !transitionalId || xId !== transitionalId;
         });
-        const stepIngs = filteredIngs.flatMap((x) => extractModIngredient(x, 'auto', `step_${i + 1}`));
-        extraStepInputs.push(...stepIngs);
+        const stepIngs = filteredIngs.flatMap((x) => extractModIngredient(x, 'auto', `step_${i + 1}`).items);
+        for (const ingredient of stepIngs) {
+          inputs.items.push(ingredient);
+        }
 
         const stepExtras: string[] = [];
         if (typeof step.processing_time === 'number') stepExtras.push(`${step.processing_time}t`);
@@ -115,25 +172,21 @@ export const createParser: BuiltinModParser = {
           step: i + 1,
           type: stepType,
           inputs: stepIngs,
-          outputs: extractCreateResults(step.results, `step_${i + 1}_result`),
+          outputs: extractCreateResults(step.results, `step_${i + 1}_result`).items,
           processingTime: typeof step.processing_time === 'number' ? step.processing_time : undefined,
           keepHeldItem: step.keep_held_item === true ? true : undefined,
         });
       }
 
-      const inputs = [
-        ...extractModIngredient(rawJson.ingredient, 'auto', 'base_ingredient'),
-        ...extraStepInputs,
-      ];
-
+      const outputs = extractCreateResults(rawJson.results, 'weighted_result');
       return {
         parserId: this.id,
         modId: this.modId,
         modVersionRange: this.modVersionRange,
         recipeType,
         mechanism: `Create Sequenced Assembly (${loops} loop${loops === 1 ? '' : 's'})`,
-        inputs,
-        outputs: extractCreateResults(rawJson.results, 'weighted_result'),
+        inputs: inputs.items,
+        outputs: outputs.items,
         steps,
         conditions: loops > 1 ? [`loops: ${loops} (per-step inputs repeat each loop)`] : undefined,
         extra: {
@@ -142,6 +195,13 @@ export const createParser: BuiltinModParser = {
           stepDetails,
           note: 'In create:sequenced_assembly, output chance values represent relative weights, not 0..1 probabilities.',
         },
+        hasUnparsedFields: unparsedRecipeFlag(
+          rawJson,
+          HANDLED_SEQUENCED_ASSEMBLY_KEYS,
+          inputs,
+          outputs,
+          stepUnparsed,
+        ),
       };
     }
 
@@ -164,10 +224,11 @@ export const createParser: BuiltinModParser = {
       modVersionRange: this.modVersionRange,
       recipeType,
       mechanism: mech,
-      inputs,
-      outputs,
+      inputs: inputs.items,
+      outputs: outputs.items,
       durationTicks: typeof rawJson.processing_time === 'number' ? rawJson.processing_time : undefined,
       conditions: conditions.length > 0 ? conditions : undefined,
+      hasUnparsedFields: unparsedRecipeFlag(rawJson, HANDLED_PROCESSING_KEYS, inputs, outputs),
     };
   },
 };

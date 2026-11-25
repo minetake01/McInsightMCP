@@ -1,3 +1,10 @@
+import {
+  IngredientExtraction,
+  isRecord,
+  unhandledKeys,
+  unparsedFieldFlag,
+} from './shared.js';
+
 export interface NativeIngredient {
   kind: 'item' | 'tag' | 'custom';
   id: string;
@@ -112,16 +119,7 @@ export interface NativeLootSummary {
   hasUnparsedFields?: boolean;
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
-interface IngredientExtractResult {
-  items: NativeIngredient[];
-  hasUnparsed: boolean;
-}
-
-function extractVanillaIngredient(raw: unknown, slotOrRole?: string, count?: number): IngredientExtractResult {
+function extractVanillaIngredient(raw: unknown, slotOrRole?: string, count?: number): IngredientExtraction<NativeIngredient> {
   if (raw === undefined || raw === null) return { items: [], hasUnparsed: false };
   if (Array.isArray(raw)) {
     if (raw.length === 0) return { items: [], hasUnparsed: false };
@@ -244,8 +242,7 @@ export function parseNativeRecipe(recipeType: string, rawJson: unknown): NativeR
   if (!isRecord(rawJson)) return null;
   const group = typeof rawJson.group === 'string' && rawJson.group.length > 0 ? rawJson.group : undefined;
   const category = typeof rawJson.category === 'string' ? rawJson.category : undefined;
-  const hasExtraTopLevelKeys = (allowed: Set<string>): boolean =>
-    Object.keys(rawJson).some((k) => !allowed.has(k));
+  const hasExtraTopLevelKeys = (allowed: Set<string>): boolean => unhandledKeys(rawJson, allowed).length > 0;
 
   switch (recipeType) {
     case 'minecraft:crafting_shaped': {
@@ -277,7 +274,7 @@ export function parseNativeRecipe(recipeType: string, rawJson: unknown): NativeR
         outputs: outRes.items,
         group,
         category,
-        hasUnparsedFields: hasUnparsed || outRes.hasUnparsed || extra || undefined,
+        hasUnparsedFields: unparsedFieldFlag(extra, hasUnparsed, outRes.hasUnparsed),
       };
     }
 
@@ -299,7 +296,7 @@ export function parseNativeRecipe(recipeType: string, rawJson: unknown): NativeR
         outputs: outRes.items,
         group,
         category,
-        hasUnparsedFields: hasUnparsed || outRes.hasUnparsed || extra || undefined,
+        hasUnparsedFields: unparsedFieldFlag(extra, hasUnparsed, outRes.hasUnparsed),
       };
     }
 
@@ -327,7 +324,7 @@ export function parseNativeRecipe(recipeType: string, rawJson: unknown): NativeR
         experience: typeof rawJson.experience === 'number' ? rawJson.experience : undefined,
         group,
         category,
-        hasUnparsedFields: inRes.hasUnparsed || outRes.hasUnparsed || extra || undefined,
+        hasUnparsedFields: unparsedFieldFlag(extra, inRes.hasUnparsed, outRes.hasUnparsed),
       };
     }
 
@@ -341,7 +338,7 @@ export function parseNativeRecipe(recipeType: string, rawJson: unknown): NativeR
         inputs: inRes.items,
         outputs: outRes.items,
         group,
-        hasUnparsedFields: inRes.hasUnparsed || outRes.hasUnparsed || extra || undefined,
+        hasUnparsedFields: unparsedFieldFlag(extra, inRes.hasUnparsed, outRes.hasUnparsed),
       };
     }
 
@@ -362,8 +359,13 @@ export function parseNativeRecipe(recipeType: string, rawJson: unknown): NativeR
             : 'Vanilla Smithing Table (Upgrade)',
         inputs: [...tRes.items, ...bRes.items, ...aRes.items],
         outputs: outRes.items,
-        hasUnparsedFields:
-          tRes.hasUnparsed || bRes.hasUnparsed || aRes.hasUnparsed || outRes.hasUnparsed || extra || undefined,
+        hasUnparsedFields: unparsedFieldFlag(
+          extra,
+          tRes.hasUnparsed,
+          bRes.hasUnparsed,
+          aRes.hasUnparsed,
+          outRes.hasUnparsed,
+        ),
       };
     }
 
@@ -416,6 +418,12 @@ const HANDLED_BIOME_MODIFIER_KEYS = new Set([
   'step',
 ]);
 
+/** Loot-table keys the native parser explains; anything else forces `rawJson` retention. */
+const HANDLED_LOOT_TABLE_KEYS = new Set(['type', 'pools', 'functions', 'random_sequence']);
+
+/** Loot-pool keys the native parser explains. */
+const HANDLED_LOOT_POOL_KEYS = new Set(['rolls', 'bonus_rolls', 'entries', 'conditions', 'functions']);
+
 /**
  * Mechanical parser for Minecraft's native worldgen JSON structures.
  */
@@ -439,9 +447,7 @@ export function parseNativeWorldgen(kind: string, id: string, rawJson: unknown):
         summary.discardChanceOnAirExposure = cfg.discard_chance_on_air_exposure;
       }
       const handledOreKeys = new Set(['targets', 'size', 'discard_chance_on_air_exposure']);
-      if (Object.keys(cfg).some((k) => !handledOreKeys.has(k))) {
-        summary.hasUnparsedFields = true;
-      }
+      summary.hasUnparsedFields = unparsedFieldFlag(unhandledKeys(cfg, handledOreKeys).length > 0);
       return summary;
     }
 
@@ -491,7 +497,7 @@ export function parseNativeWorldgen(kind: string, id: string, rawJson: unknown):
     }
 
     // Unknown/modded configured_feature: keep rawJson available
-    summary.hasUnparsedFields = true;
+    summary.hasUnparsedFields = unparsedFieldFlag(true);
     return summary;
   }
 
@@ -529,9 +535,7 @@ export function parseNativeWorldgen(kind: string, id: string, rawJson: unknown):
     if (parsedPlacements.length > 0) {
       summary.placements = parsedPlacements;
     }
-    if (hasUnknownPlacement) {
-      summary.hasUnparsedFields = true;
-    }
+    summary.hasUnparsedFields = unparsedFieldFlag(hasUnknownPlacement);
     return summary;
   }
 
@@ -559,7 +563,6 @@ export function parseNativeWorldgen(kind: string, id: string, rawJson: unknown):
   }
 
   if (kind === 'structure') {
-    const hasExtra = Object.keys(rawJson).some((k) => !HANDLED_STRUCTURE_KEYS.has(k));
     return {
       kind,
       id,
@@ -573,7 +576,7 @@ export function parseNativeWorldgen(kind: string, id: string, rawJson: unknown):
       startHeight: rawJson.start_height,
       projectStartToHeightmap:
         typeof rawJson.project_start_to_heightmap === 'string' ? rawJson.project_start_to_heightmap : undefined,
-      hasUnparsedFields: hasExtra || undefined,
+      hasUnparsedFields: unparsedFieldFlag(unhandledKeys(rawJson, HANDLED_STRUCTURE_KEYS).length > 0),
     };
   }
 
@@ -603,7 +606,6 @@ export function parseNativeWorldgen(kind: string, id: string, rawJson: unknown):
 
 export function parseNativeBiomeModifier(id: string, rawJson: unknown): NativeBiomeModifierSummary | null {
   if (!isRecord(rawJson)) return null;
-  const hasExtra = Object.keys(rawJson).some((k) => !HANDLED_BIOME_MODIFIER_KEYS.has(k));
   return {
     id,
     modifierType: typeof rawJson.type === 'string' ? rawJson.type : undefined,
@@ -613,7 +615,7 @@ export function parseNativeBiomeModifier(id: string, rawJson: unknown): NativeBi
     features: rawJson.features,
     carvers: rawJson.carvers,
     step: typeof rawJson.step === 'string' ? rawJson.step : undefined,
-    hasUnparsedFields: hasExtra || undefined,
+    hasUnparsedFields: unparsedFieldFlag(unhandledKeys(rawJson, HANDLED_BIOME_MODIFIER_KEYS).length > 0),
   };
 }
 
@@ -683,7 +685,7 @@ function parseLootEntries(rawEntries: unknown): { entries: NativeLootEntry[]; ha
       hasUnparsed = true;
       continue;
     }
-    if (Object.keys(e).some((k) => !knownEntryKeys.has(k))) {
+    if (unhandledKeys(e, knownEntryKeys).length > 0) {
       hasUnparsed = true;
     }
     const type = typeof e.type === 'string' ? e.type : 'unknown';
@@ -718,9 +720,12 @@ function parseLootEntries(rawEntries: unknown): { entries: NativeLootEntry[]; ha
 export function parseNativeLootTable(id: string, rawJson: unknown): NativeLootSummary | null {
   if (!isRecord(rawJson)) return null;
   const rawPools = Array.isArray(rawJson.pools) ? rawJson.pools : [];
-  let hasUnparsed = false;
+  let hasUnparsed = unhandledKeys(rawJson, HANDLED_LOOT_TABLE_KEYS).length > 0;
 
   const pools = rawPools.filter(isRecord).map((pool) => {
+    if (unhandledKeys(pool, HANDLED_LOOT_POOL_KEYS).length > 0) {
+      hasUnparsed = true;
+    }
     const parsedEntries = parseLootEntries(pool.entries);
     if (parsedEntries.hasUnparsed) hasUnparsed = true;
     return {
@@ -736,7 +741,7 @@ export function parseNativeLootTable(id: string, rawJson: unknown): NativeLootSu
     lootType: typeof rawJson.type === 'string' ? rawJson.type : undefined,
     functions: parseFunctions(rawJson.functions),
     pools,
-    hasUnparsedFields: hasUnparsed || undefined,
+    hasUnparsedFields: unparsedFieldFlag(hasUnparsed),
   };
 }
 
@@ -821,18 +826,14 @@ export function parseNativeLootModifier(
   extractExplicitModifierItems(rawJson, itemSet);
 
   const modType = typeof rawJson.type === 'string' ? rawJson.type : serverMeta?.type;
-  const hasUnhandled = Object.keys(rawJson).some((k) => !KNOWN_GLM_KEYS.has(k));
 
-  const result: NativeLootModifierSummary = {
+  return {
     id,
     type: modType,
     targetLootTables: targetLootTables.size > 0 ? Array.from(targetLootTables) : undefined,
     injectedTable,
     items: itemSet.size > 0 ? Array.from(itemSet) : undefined,
     conditions: parseConditions(rawJson.conditions),
+    hasUnparsedFields: unparsedFieldFlag(unhandledKeys(rawJson, KNOWN_GLM_KEYS).length > 0),
   };
-  if (hasUnhandled) {
-    result.hasUnparsedFields = true;
-  }
-  return result;
 }

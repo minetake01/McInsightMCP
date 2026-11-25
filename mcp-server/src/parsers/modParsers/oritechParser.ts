@@ -1,4 +1,11 @@
-import { BuiltinModParser, ModIngredient, extractModIngredient, isRecord } from './types.js';
+import {
+  BuiltinModParser,
+  IngredientCollector,
+  ModIngredient,
+  extractModIngredient,
+  isRecord,
+  unparsedRecipeFlag,
+} from './types.js';
 
 const ORITECH_MACHINES: Record<string, string> = {
   'oritech:pulverizer': 'Oritech Pulverizer',
@@ -53,29 +60,24 @@ export const oritechParser: BuiltinModParser = {
     const mechanism = ORITECH_MECHANISMS[recipeType];
     if (!mechanism) return null;
 
-    const inputs: ModIngredient[] = [];
-    if (rawJson.ingredients !== undefined) {
-      inputs.push(...extractModIngredient(rawJson.ingredients, 'auto', 'ingredient'));
-    }
-    if (rawJson.fluidInput !== undefined) {
-      inputs.push(...filterEmptyFluids(extractModIngredient(rawJson.fluidInput, 'fluid', 'fluid_input')));
-    }
-    if (rawJson.fluidInputs !== undefined) {
-      inputs.push(...filterEmptyFluids(extractModIngredient(rawJson.fluidInputs, 'fluid', 'fluid_input')));
+    const inputs = new IngredientCollector();
+    for (const key of ['ingredients', 'fluidInput', 'fluidInputs']) {
+      if (rawJson[key] === undefined) continue;
+      const kind = key === 'ingredients' ? 'auto' : 'fluid';
+      const extraction = extractModIngredient(rawJson[key], kind, key === 'ingredients' ? 'ingredient' : 'fluid_input');
+      inputs.items.push(...filterEmptyFluids(extraction.items));
+      if (extraction.hasUnparsed) inputs.hasUnparsed = true;
     }
 
-    const outputs: ModIngredient[] = [];
-    if (rawJson.results !== undefined) {
-      outputs.push(...extractModIngredient(rawJson.results, 'auto', 'result'));
-    }
-    if (rawJson.fluidOutputs !== undefined) {
-      outputs.push(...filterEmptyFluids(extractModIngredient(rawJson.fluidOutputs, 'fluid', 'fluid_output')));
-    }
-    if (rawJson.fluidOutput !== undefined) {
-      outputs.push(...filterEmptyFluids(extractModIngredient(rawJson.fluidOutput, 'fluid', 'fluid_output')));
+    const outputs = new IngredientCollector();
+    for (const key of ['results', 'fluidOutputs', 'fluidOutput']) {
+      if (rawJson[key] === undefined) continue;
+      const kind = key === 'results' ? 'auto' : 'fluid';
+      const extraction = extractModIngredient(rawJson[key], kind, key === 'results' ? 'result' : 'fluid_output');
+      outputs.items.push(...filterEmptyFluids(extraction.items));
+      if (extraction.hasUnparsed) outputs.hasUnparsed = true;
     }
 
-    const hasUnhandled = Object.keys(rawJson).some((k) => !HANDLED_ORITECH_KEYS.has(k));
     const isGenerator = recipeType in ORITECH_GENERATORS;
 
     return {
@@ -84,11 +86,18 @@ export const oritechParser: BuiltinModParser = {
       modVersionRange: this.modVersionRange,
       recipeType,
       mechanism,
-      inputs,
-      outputs,
+      inputs: inputs.items,
+      outputs: outputs.items,
       durationTicks: typeof rawJson.time === 'number' ? rawJson.time : undefined,
       conditions: isGenerator ? ['generator fuel recipe (produces RF/FE over time)'] : undefined,
-      hasUnparsedFields: hasUnhandled || (isGenerator && outputs.length === 0),
+      // A generator whose fuel vector came out empty is described by nothing but its JSON.
+      hasUnparsedFields: unparsedRecipeFlag(
+        rawJson,
+        HANDLED_ORITECH_KEYS,
+        inputs,
+        outputs,
+        isGenerator && outputs.items.length === 0,
+      ),
     };
   },
 };
