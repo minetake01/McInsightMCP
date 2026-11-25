@@ -2,6 +2,7 @@ package net.minetake.mcinsight.neoforge;
 
 import net.minetake.mcinsight.McInsightCommon;
 import net.minecraft.client.Minecraft;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
@@ -18,18 +19,21 @@ public final class McInsightNeoForgeClient {
     private McInsightNeoForgeClient() {}
 
     public static void register(IEventBus modEventBus) {
-        NeoForgePlatformHelper.setClientPacketSender(payload -> {
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.getConnection() == null || !mc.getConnection().hasChannel(payload.type())) {
-                return false;
-            }
-            PacketDistributor.sendToServer(payload);
-            return true;
-        });
+
         modEventBus.addListener(McInsightNeoForgeClient::onClientSetup);
         modEventBus.addListener(McInsightNeoForgeClient::onRegisterClientReloadListeners);
         NeoForge.EVENT_BUS.addListener(McInsightNeoForgeClient::onClientLogin);
         NeoForge.EVENT_BUS.addListener(McInsightNeoForgeClient::onClientLogout);
+    }
+
+    /** The client direction of the transport; false when the server negotiated no McInsight channel. */
+    static boolean sendToServer(CustomPacketPayload payload) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.getConnection() == null || !mc.getConnection().hasChannel(payload.type())) {
+            return false;
+        }
+        PacketDistributor.sendToServer(payload);
+        return true;
     }
 
     private static void onClientSetup(FMLClientSetupEvent event) {

@@ -2,8 +2,10 @@ package net.minetake.mcinsight.data;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import java.util.Arrays;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -14,10 +16,10 @@ import net.minetake.mcinsight.api.InsightError;
 import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.api.Params;
 import net.minetake.mcinsight.network.InsightHelloPayload;
+import net.minetake.mcinsight.network.InsightNetworking;
 import net.minetake.mcinsight.network.InsightRequestPayload;
 import net.minetake.mcinsight.network.InsightResponsePayload;
 import net.minetake.mcinsight.network.PacketChunker;
-import net.minetake.mcinsight.platform.Services;
 
 /**
  * The client side of the multiplayer read-only sync.
@@ -30,9 +32,8 @@ public final class ServerSync {
 
     private static final long TRANSPORT_MARGIN_MS = 2_000L;
 
-    private static volatile boolean shakeHanded;
-    private static volatile String remoteLoader;
-    private static volatile int remoteProtocolVersion;
+    /** The endpoint ids the connected host announced it serves; empty until a matching hello. */
+    private static volatile Set<String> remoteCapabilities = Set.of();
     private static final PacketChunker.Assembler ASSEMBLER = new PacketChunker.Assembler();
     private static final Map<UUID, CompletableFuture<JsonObject>> PENDING = new ConcurrentHashMap<>();
 
@@ -42,9 +43,10 @@ public final class ServerSync {
         if (hello == null) {
             return;
         }
-        remoteProtocolVersion = hello.protocolVersion();
-        remoteLoader = hello.loaderName();
-        shakeHanded = hello.protocolVersion() == InsightHelloPayload.PROTOCOL_VERSION;
+        // A host speaking another protocol version serves nothing this client can parse.
+        remoteCapabilities = hello.protocolVersion() == InsightHelloPayload.PROTOCOL_VERSION
+            ? parseCapabilities(hello.capabilities())
+            : Set.of();
     }
 
     public static void onResponseChunk(InsightResponsePayload chunk) {
@@ -72,9 +74,7 @@ public final class ServerSync {
     }
 
     public static void reset() {
-        shakeHanded = false;
-        remoteLoader = null;
-        remoteProtocolVersion = 0;
+        remoteCapabilities = Set.of();
         ASSEMBLER.clear();
         for (CompletableFuture<JsonObject> f : PENDING.values()) {
             f.cancel(true);
@@ -83,11 +83,14 @@ public final class ServerSync {
     }
 
     public static boolean isAvailable() {
-        return shakeHanded && remoteProtocolVersion == InsightHelloPayload.PROTOCOL_VERSION;
+        return !remoteCapabilities.isEmpty();
     }
 
-    public static String remoteLoader() {
-        return remoteLoader;
+    private static Set<String> parseCapabilities(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return Set.of();
+        }
+        return Set.copyOf(Arrays.stream(raw.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList());
     }
 
     public static JsonObject request(InsightEndpoint endpoint, Params params) {
@@ -97,11 +100,19 @@ public final class ServerSync {
                 "The connected server does not run McInsight, so " + endpoint.id() + " data is unavailable."
             );
         }
+        if (!remoteCapabilities.contains(endpoint.id())) {
+            // The host runs McInsight but a build that does not serve this endpoint; asking would
+            // only earn an UNSUPPORTED_ENDPOINT after a round trip.
+            throw new InsightException(
+                InsightError.SERVER_MOD_REQUIRED,
+                "The server's McInsight does not serve " + endpoint.id() + "; update the server's McInsight."
+            );
+        }
         UUID id = UUID.randomUUID();
         CompletableFuture<JsonObject> future = new CompletableFuture<>();
         PENDING.put(id, future);
         try {
-            boolean sent = Services.PLATFORM.sendToServer(
+            boolean sent = InsightNetworking.sendToServer(
                 new InsightRequestPayload(id, endpoint.id(), params.toJson().toString())
             );
             if (!sent) {

@@ -21,13 +21,13 @@ public final class McInsightFabricClient implements ClientModInitializer {
     public void onInitializeClient() {
         McInsightCommon.initClient();
 
-        FabricPlatformHelper.setClientPacketSender(payload -> {
+        InsightNetworking.bind(new FabricTransport(payload -> {
             if (!ClientPlayNetworking.canSend(payload.type())) {
                 return false;
             }
             ClientPlayNetworking.send(payload);
             return true;
-        });
+        }));
 
         ClientPlayNetworking.registerGlobalReceiver(
             InsightHelloPayload.TYPE,

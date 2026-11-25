@@ -1,7 +1,6 @@
 package net.minetake.mcinsight.network;
 
 import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -15,7 +14,6 @@ import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.api.Params;
 import net.minetake.mcinsight.api.RequestContext;
 import net.minetake.mcinsight.game.MainThreadExecutor;
-import net.minetake.mcinsight.platform.Services;
 import net.minetake.mcinsight.serial.JsonCodec;
 import net.minecraft.server.level.ServerPlayer;
 
@@ -116,7 +114,7 @@ public final class ServerPacketHandler {
                 return;
             }
             for (int i = 0; i < total; i++) {
-                Services.PLATFORM.sendToPlayer(sender, new InsightResponsePayload(id, i, total, finalChunks.get(i)));
+                InsightNetworking.sendToPlayer(sender, new InsightResponsePayload(id, i, total, finalChunks.get(i)));
             }
         });
     }

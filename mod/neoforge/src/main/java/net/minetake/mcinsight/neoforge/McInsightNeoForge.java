@@ -6,7 +6,6 @@ import net.minetake.mcinsight.network.InsightHelloPayload;
 import net.minetake.mcinsight.network.InsightNetworking;
 import net.minetake.mcinsight.network.InsightRequestPayload;
 import net.minetake.mcinsight.network.InsightResponsePayload;
-import net.minetake.mcinsight.platform.Services;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
 import net.neoforged.api.distmarker.Dist;
@@ -27,9 +26,11 @@ public final class McInsightNeoForge {
 
     public McInsightNeoForge(IEventBus modEventBus) {
         if (FMLEnvironment.dist == Dist.CLIENT) {
+            InsightNetworking.bind(new NeoForgeTransport(McInsightNeoForgeClient::sendToServer));
             McInsightCommon.initClient();
             McInsightNeoForgeClient.register(modEventBus);
         } else {
+            InsightNetworking.bind(new NeoForgeTransport(payload -> false));
             McInsightCommon.initServer();
         }
 
@@ -42,7 +43,7 @@ public final class McInsightNeoForge {
     }
 
     private static void onRegisterPayloads(RegisterPayloadHandlersEvent event) {
-        PayloadRegistrar registrar = event.registrar("1").optional();
+        PayloadRegistrar registrar = event.registrar(InsightNetworking.CHANNEL_VERSION).optional();
         registrar.playToClient(
             InsightHelloPayload.TYPE,
             InsightHelloPayload.STREAM_CODEC,
@@ -65,9 +66,8 @@ public final class McInsightNeoForge {
     }
 
     private static void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
-        if (event.getEntity() instanceof ServerPlayer sp
-            && Services.PLATFORM.canSendToPlayer(sp, InsightHelloPayload.TYPE)) {
-            Services.PLATFORM.sendToPlayer(sp, InsightNetworking.hello());
+        if (event.getEntity() instanceof ServerPlayer sp) {
+            InsightNetworking.onPlayerJoined(sp);
         }
     }
 

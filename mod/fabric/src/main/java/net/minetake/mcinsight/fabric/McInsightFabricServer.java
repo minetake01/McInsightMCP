@@ -10,9 +10,8 @@ public final class McInsightFabricServer implements DedicatedServerModInitialize
     public void onInitializeServer() {
         McInsightCommon.initServer();
 
-        ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
-            McInsightCommon.detachServer(server);
-            McInsightCommon.shutdown();
-        });
+        // The common entrypoint already detaches on SERVER_STOPPING; a dedicated server's process
+        // ends with its server, so this is where its runtime is released.
+        ServerLifecycleEvents.SERVER_STOPPED.register(server -> McInsightCommon.shutdown());
     }
 }

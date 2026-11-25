@@ -5,7 +5,6 @@ import net.minetake.mcinsight.network.InsightHelloPayload;
 import net.minetake.mcinsight.network.InsightNetworking;
 import net.minetake.mcinsight.network.InsightRequestPayload;
 import net.minetake.mcinsight.network.InsightResponsePayload;
-import net.minetake.mcinsight.network.ServerPacketHandler;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
@@ -20,6 +19,9 @@ public final class McInsightFabricCommon implements ModInitializer {
 
     @Override
     public void onInitialize() {
+        // The client entrypoint runs after this one and rebinds with its client direction.
+        InsightNetworking.bind(new FabricTransport(payload -> false));
+
         PayloadTypeRegistry.playS2C().register(InsightHelloPayload.TYPE, InsightHelloPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(InsightResponsePayload.TYPE, InsightResponsePayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(InsightRequestPayload.TYPE, InsightRequestPayload.STREAM_CODEC);
@@ -29,11 +31,8 @@ public final class McInsightFabricCommon implements ModInitializer {
             (payload, context) -> InsightNetworking.onRequest(context.player(), payload)
         );
 
-        ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
-            if (ServerPlayNetworking.canSend(handler.getPlayer(), InsightHelloPayload.TYPE)) {
-                sender.sendPacket(InsightNetworking.hello());
-            }
-        });
+        ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> InsightNetworking.onPlayerJoined(handler.getPlayer()));
+
 
         ServerLifecycleEvents.SERVER_STARTED.register(McInsightCommon::attachServer);
         ServerLifecycleEvents.SERVER_STOPPING.register(McInsightCommon::detachServer);

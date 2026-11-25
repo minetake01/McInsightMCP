@@ -5,23 +5,14 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.function.Predicate;
 import net.fabricmc.api.EnvType;
-import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.loader.api.ModContainer;
 import net.fabricmc.loader.api.metadata.ModOrigin;
-import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.server.level.ServerPlayer;
 
 public final class FabricPlatformHelper implements IPlatformHelper {
 
-    private static volatile Predicate<CustomPacketPayload> clientSender;
     private volatile List<IPlatformHelper.ModMetadata> cachedMods;
-
-    public static void setClientPacketSender(Predicate<CustomPacketPayload> sender) {
-        clientSender = sender;
-    }
 
     @Override
     public String getLoaderName() {
@@ -87,25 +78,7 @@ public final class FabricPlatformHelper implements IPlatformHelper {
         return FabricLoader.getInstance().getEnvironmentType() == EnvType.CLIENT;
     }
 
-    @Override
-    public boolean sendToServer(CustomPacketPayload payload) {
-        Predicate<CustomPacketPayload> sender = clientSender;
-        return sender != null && payload != null && sender.test(payload);
-    }
 
-    @Override
-    public boolean sendToPlayer(ServerPlayer player, CustomPacketPayload payload) {
-        if (player == null || payload == null || !ServerPlayNetworking.canSend(player, payload.type())) {
-            return false;
-        }
-        ServerPlayNetworking.send(player, payload);
-        return true;
-    }
-
-    @Override
-    public boolean canSendToPlayer(ServerPlayer player, CustomPacketPayload.Type<?> type) {
-        return player != null && type != null && ServerPlayNetworking.canSend(player, type);
-    }
 
     private static String resolveOriginJarPath(ModOrigin origin) {
         if (origin == null) return "";

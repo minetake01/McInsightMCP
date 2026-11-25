@@ -2,9 +2,13 @@ package net.minetake.mcinsight.platform;
 
 import java.nio.file.Path;
 import java.util.List;
-import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.server.level.ServerPlayer;
 
+/**
+ * What differs between loaders and is not networking: identity, installed mods, and paths.
+ *
+ * <p>Packet transport is bound separately through {@link net.minetake.mcinsight.network.InsightNetworking},
+ * so this ServiceLoader-created object holds no state injected after construction.
+ */
 public interface IPlatformHelper {
 
     record ModMetadata(
@@ -35,9 +39,4 @@ public interface IPlatformHelper {
 
     boolean isClientSide();
 
-    boolean sendToServer(CustomPacketPayload payload);
-
-    boolean sendToPlayer(ServerPlayer player, CustomPacketPayload payload);
-
-    boolean canSendToPlayer(ServerPlayer player, CustomPacketPayload.Type<?> type);
 }

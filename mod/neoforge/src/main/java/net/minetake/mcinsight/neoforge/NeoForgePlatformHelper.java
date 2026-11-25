@@ -5,24 +5,15 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.function.Predicate;
-import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.fml.ModList;
 import net.neoforged.fml.loading.FMLEnvironment;
 import net.neoforged.fml.loading.FMLPaths;
-import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforgespi.language.IModInfo;
 
 public final class NeoForgePlatformHelper implements IPlatformHelper {
 
-    private static volatile Predicate<CustomPacketPayload> clientSender;
     private volatile List<ModMetadata> cachedMods;
-
-    public static void setClientPacketSender(Predicate<CustomPacketPayload> sender) {
-        clientSender = sender;
-    }
 
     @Override
     public String getLoaderName() {
@@ -90,26 +81,5 @@ public final class NeoForgePlatformHelper implements IPlatformHelper {
         return FMLEnvironment.dist == Dist.CLIENT;
     }
 
-    @Override
-    public boolean sendToServer(CustomPacketPayload payload) {
-        Predicate<CustomPacketPayload> sender = clientSender;
-        return sender != null && payload != null && sender.test(payload);
-    }
 
-    @Override
-    public boolean sendToPlayer(ServerPlayer player, CustomPacketPayload payload) {
-        if (player == null || payload == null || player.connection == null) {
-            return false;
-        }
-        if (!player.connection.hasChannel(payload.type())) {
-            return false;
-        }
-        PacketDistributor.sendToPlayer(player, payload);
-        return true;
-    }
-
-    @Override
-    public boolean canSendToPlayer(ServerPlayer player, CustomPacketPayload.Type<?> type) {
-        return player != null && type != null && player.connection != null && player.connection.hasChannel(type);
-    }
 }
