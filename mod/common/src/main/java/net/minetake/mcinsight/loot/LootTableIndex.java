@@ -82,9 +82,9 @@ public final class LootTableIndex {
      */
     static boolean valueMatches(String declaredLower, ItemFilter filter) {
         if (declaredLower.startsWith("#")) {
-            return filter.matches(null, List.of(declaredLower.substring(1)));
+            return filter.matchesTagSlot(declaredLower.substring(1));
         }
-        return filter.matches(declaredLower, List.of());
+        return filter.matchesItem(declaredLower, List.of());
     }
 
     private static List<Table> build(DataPackView view) {

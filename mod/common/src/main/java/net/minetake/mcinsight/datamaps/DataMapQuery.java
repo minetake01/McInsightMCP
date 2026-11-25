@@ -130,8 +130,8 @@ public final class DataMapQuery {
         if (item != null) {
             String keyLower = lower(key);
             boolean keyHit = keyLower.startsWith("#")
-                ? item.matches(null, List.of(keyLower.substring(1)))
-                : item.matches(keyLower, List.of());
+                ? item.matchesTagSlot(keyLower.substring(1))
+                : item.matchesItem(keyLower, List.of());
             if (!keyHit) {
                 return false;
             }

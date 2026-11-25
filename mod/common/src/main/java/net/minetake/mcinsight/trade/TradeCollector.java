@@ -169,7 +169,7 @@ public final class TradeCollector {
 
     private static boolean anyMatches(List<StackRef> stacks, ItemFilter item) {
         for (StackRef stack : stacks) {
-            if (item.matches(stack.id(), stack.tagsLower())) {
+            if (item.matchesItem(stack.id(), stack.tagsLower())) {
                 return true;
             }
         }

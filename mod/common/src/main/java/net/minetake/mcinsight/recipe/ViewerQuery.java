@@ -227,16 +227,10 @@ public final class ViewerQuery {
         if (ingredients == null) {
             return false;
         }
+        // Viewers expand a tag slot into its member stacks, so every alternative is a concrete item.
         for (ViewerModel.Ingredient ingredient : ingredients) {
-            if (ingredient.id() != null && item.matches(ingredient.id(), ingredient.tags())) {
+            if (item.matchesItem(ingredient.id(), ingredient.tags())) {
                 return true;
-            }
-            if (ingredient.tags() != null && item.isTag()) {
-                for (String tag : ingredient.tags()) {
-                    if (tag.equalsIgnoreCase(item.tagId())) {
-                        return true;
-                    }
-                }
             }
         }
         return false;

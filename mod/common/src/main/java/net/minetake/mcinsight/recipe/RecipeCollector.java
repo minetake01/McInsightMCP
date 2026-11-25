@@ -128,7 +128,7 @@ public final class RecipeCollector {
         final Map<String, List<IndexedRecipe>> byInputTag = new HashMap<>();
         final List<IndexedRecipe> fallbackCandidates = new ArrayList<>();
         final Map<ResourceLocation, JsonElement> encodedJson = new HashMap<>();
-        final Map<ResourceLocation, String> encodedLower = new HashMap<>();
+        final Map<ResourceLocation, JsonElement> snapshots = new java.util.concurrent.ConcurrentHashMap<>();
 
         RecipeIndex(HolderLookup.Provider registries, RegistryOps<JsonElement> jsonOps, JsonArray recipeTypesArray) {
             this.registries = registries;
@@ -154,18 +154,8 @@ public final class RecipeCollector {
             return encoded;
         }
 
-        String lowerString(IndexedRecipe rec) {
-            String cached = encodedLower.get(rec.id);
-            if (cached != null) {
-                return cached;
-            }
-            JsonElement el = rawJson(rec);
-            if (el == null) {
-                el = JsonCodec.snapshotObject(rec.recipe, 3, jsonOps);
-            }
-            String lower = el != null ? el.toString().toLowerCase(Locale.ROOT) : "";
-            encodedLower.put(rec.id, lower);
-            return lower;
+        JsonElement snapshot(IndexedRecipe rec) {
+            return snapshots.computeIfAbsent(rec.id, id -> JsonCodec.snapshotObject(rec.recipe, 3, jsonOps));
         }
     }
 
@@ -427,10 +417,6 @@ public final class RecipeCollector {
                 if (scope == ViewerQuery.RoleScope.ANY || scope == ViewerQuery.RoleScope.INPUT) {
                     combined.addAll(index.byInputItemId.getOrDefault(item.exactId(), List.of()));
                 }
-                for (String tag : item.resolvedTags()) {
-                    combined.addAll(index.byOutputTag.getOrDefault(tag, List.of()));
-                    combined.addAll(index.byInputTag.getOrDefault(tag, List.of()));
-                }
             } else {
                 if (scope == ViewerQuery.RoleScope.ANY || scope == ViewerQuery.RoleScope.OUTPUT) {
                     combined.addAll(index.byOutputTag.getOrDefault(item.tagId(), List.of()));
@@ -463,13 +449,13 @@ public final class RecipeCollector {
         boolean checkIn = scope == ViewerQuery.RoleScope.ANY || scope == ViewerQuery.RoleScope.INPUT;
 
         if (checkOut && rec.resultItemIdLower != null
-            && item.matches(rec.resultItemIdLower, List.of(rec.resultTagsLower))) {
+            && item.matchesItem(rec.resultItemIdLower, List.of(rec.resultTagsLower))) {
             return true;
         }
         if (checkIn) {
             List<String> tags = List.of(rec.inputTagsLower);
             for (String inId : rec.inputItemIdsLower) {
-                if (item.matches(inId, tags)) {
+                if (item.matchesItem(inId, tags)) {
                     return true;
                 }
             }
@@ -501,7 +487,9 @@ public final class RecipeCollector {
                 return false;
             }
         }
-        return containsItem(rawJson, item) || index.lowerString(rec).contains(item.raw().toLowerCase(Locale.ROOT));
+        // A recipe that could not be encoded is searched through its reflective snapshot, with the
+        // same quoted exact-id rule; a bare substring would widen "minecraft:iron" to iron_ingot.
+        return rawJson != null ? containsItem(rawJson, item) : containsItem(index.snapshot(rec), item);
     }
 
     private static boolean containsItem(JsonElement element, ItemFilter item) {
@@ -514,11 +502,10 @@ public final class RecipeCollector {
                 return true;
             }
         }
-        if (item.isTag() && text.contains("\"" + item.tagId() + "\"")) {
-            return true;
-        }
-        for (String tag : item.resolvedTags()) {
-            if (text.contains("\"" + tag + "\"")) {
+        // A tag named in the payload is a slot that accepts its members, so an id query matches it
+        // when the item is a member, and a tag query when it is that tag.
+        for (String tag : item.isTag() ? Set.of(item.tagId()) : item.resolvedTags()) {
+            if (text.contains("\"" + tag + "\"") || text.contains("\"#" + tag + "\"")) {
                 return true;
             }
         }
