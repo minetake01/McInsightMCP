@@ -49,7 +49,9 @@ public final class GameAccess {
     public static HolderLookup.Provider getRegistryAccess(MainThreadExecutor executor) {
         MinecraftServer server = executor.getActiveServer();
         if (server != null) {
-            return server.registryAccess();
+            // Not server.registryAccess(): its RELOADABLE layer is a placeholder, so loot tables,
+            // predicates, and item modifiers are missing there. The reload result holds every layer.
+            return server.reloadableRegistries().get();
         }
         Level level = getLevel(executor);
         return level != null ? level.registryAccess() : null;
