@@ -31,12 +31,24 @@ public final class ViewerQuery {
                 return ANY;
             }
             return switch (raw.trim().toLowerCase(Locale.ROOT)) {
+                case "any" -> ANY;
                 case "input" -> INPUT;
                 case "output" -> OUTPUT;
                 case "catalyst" -> CATALYST;
                 case "workstation" -> WORKSTATION;
-                default -> ANY;
+                default -> throw new InsightException(
+                    InsightError.INVALID_PARAMETER,
+                    "Parameter 'role' must be one of any, input, output, catalyst, workstation, got: " + raw + "."
+                );
             };
+        }
+
+        /**
+         * Whether the recipe manager can hold a recipe in this role. Catalysts and workstations are
+         * concepts only viewers have, so the vanilla page for them is empty rather than an error.
+         */
+        public boolean vanillaHasIt() {
+            return this == ANY || this == INPUT || this == OUTPUT;
         }
 
         boolean acceptsIngredient() {
@@ -72,7 +84,6 @@ public final class ViewerQuery {
             throw new InsightException(InsightError.VIEWER_UNAVAILABLE, "No recipe viewer integration is active.");
         }
         JsonObject out = new JsonObject();
-        out.addProperty("ok", true);
         for (Map.Entry<String, JsonObject> e : pages.entrySet()) {
             out.add(e.getKey(), e.getValue());
         }
@@ -98,17 +109,27 @@ public final class ViewerQuery {
         return out;
     }
 
+    /**
+     * The adapters a {@code source} other than {@code all}/{@code vanilla} selects.
+     *
+     * <p>{@code viewer} means every active adapter. Any other value is a viewer name: an installed but
+     * inactive viewer is {@code VIEWER_UNAVAILABLE}, and a name no adapter registered is an invalid
+     * source, because no session could ever answer it.
+     */
     public static List<IRecipeViewerBridge> resolve(String source) {
-        String norm = source == null || source.isBlank() ? "viewer" : source.trim().toLowerCase(Locale.ROOT);
-        if ("viewer".equals(norm) || "all".equals(norm)) {
+        String norm = source.trim().toLowerCase(Locale.ROOT);
+        if ("viewer".equals(norm)) {
             return ViewerRegistry.active();
         }
         IRecipeViewerBridge specific = ViewerRegistry.byName(norm);
-        if (specific == null || !specific.isAvailable()) {
+        if (specific == null) {
             throw new InsightException(
-                InsightError.VIEWER_UNAVAILABLE,
-                "Recipe viewer '" + norm + "' is not active."
+                InsightError.INVALID_SOURCE,
+                "Parameter 'source' must be all, vanilla, viewer, or a registered viewer name, got: " + source + "."
             );
+        }
+        if (!specific.isAvailable()) {
+            throw new InsightException(InsightError.VIEWER_UNAVAILABLE, "Recipe viewer '" + norm + "' is not active.");
         }
         return List.of(specific);
     }

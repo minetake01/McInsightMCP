@@ -22,6 +22,7 @@ import net.minetake.mcinsight.api.RequestContext;
 import net.minetake.mcinsight.cache.CacheGenerations;
 import net.minetake.mcinsight.cache.GenerationalCache;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
+import net.minetake.mcinsight.compat.ViewerRegistry;
 import net.minetake.mcinsight.game.GameAccess;
 import net.minetake.mcinsight.game.MainThreadExecutor;
 import net.minetake.mcinsight.metrics.PerfMetrics;
@@ -175,7 +176,7 @@ public final class RecipeCollector {
         out.addProperty("recipeManagerAvailable", index != null);
         out.add("recipeTypes", index != null ? index.recipeTypesArray.deepCopy() : new JsonArray());
 
-        List<IRecipeViewerBridge> bridges = net.minetake.mcinsight.compat.ViewerRegistry.active();
+        List<IRecipeViewerBridge> bridges = ViewerRegistry.active();
         JsonArray activeViewers = new JsonArray();
         for (IRecipeViewerBridge bridge : bridges) {
             activeViewers.add(bridge.viewerName());
@@ -186,18 +187,14 @@ public final class RecipeCollector {
     }
 
     public static JsonObject query(RequestContext ctx, Params params) throws Exception {
+        // "all", "vanilla", and "viewer" are scopes; any other value names one viewer, and the
+        // registry — not this method — decides whether such a viewer exists.
         String source = params.stringOr("source", "all").toLowerCase(Locale.ROOT);
-        boolean wantVanilla = switch (source) {
-            case "all", "vanilla" -> true;
-            case "viewer", "jei", "emi", "rei" -> false;
-            default -> throw new InsightException(
-                InsightError.INVALID_SOURCE,
-                "Parameter 'source' must be one of all, vanilla, viewer, or a registered viewer name, got: " + source
-            );
-        };
+        boolean wantVanilla = "all".equals(source) || "vanilla".equals(source);
+        boolean wantViewers = !"vanilla".equals(source);
         int limit = net.minetake.mcinsight.api.InsightEndpoint.RECIPES_QUERY.limit(params);
         int offset = params.offset();
-        String role = params.stringOr("role", "any");
+        ViewerQuery.RoleScope role = ViewerQuery.RoleScope.parse(params.string("role"));
         ItemFilter item = ItemFilter.of(ItemQuery.optional(params.string("item")));
         String type = params.string("type");
         String modId = params.string("mod");
@@ -205,43 +202,29 @@ public final class RecipeCollector {
         JsonObject out = new JsonObject();
         out.addProperty("ok", true);
 
-        if (wantVanilla) {
-            RecipeIndex index = INDEX.get(() -> buildIndex(ctx.executor()));
-            if (index == null) {
-                if ("vanilla".equals(source)) {
-                    throw new InsightException(InsightError.DATA_UNAVAILABLE, "The recipe manager is not available.");
-                }
-            } else {
-                out.add("vanilla", ViewerQuery.RoleScope.parse(role) == ViewerQuery.RoleScope.CATALYST
-                    ? Page.of("recipes", new JsonArray(), offset, 0)
-                    : queryIndex(index, item, role, type, modId, limit, offset));
-            }
+        RecipeIndex index = wantVanilla ? INDEX.get(() -> buildIndex(ctx.executor())) : null;
+        if (wantVanilla && index == null && "vanilla".equals(source)) {
+            throw new InsightException(InsightError.DATA_UNAVAILABLE, "The recipe manager is not available.");
+        }
+        List<IRecipeViewerBridge> bridges = wantViewers
+            ? ("all".equals(source) ? ViewerRegistry.active() : ViewerQuery.resolve(source))
+            : List.of();
+        if (index == null && bridges.isEmpty()) {
+            throw new InsightException(
+                wantVanilla ? InsightError.DATA_UNAVAILABLE : InsightError.VIEWER_UNAVAILABLE,
+                wantVanilla
+                    ? "Neither the recipe manager nor any recipe viewer integration is available."
+                    : "No recipe viewer integration is active."
+            );
         }
 
-        if (!wantVanilla || "all".equals(source)) {
-            List<IRecipeViewerBridge> bridges = ViewerQuery.resolve(source);
-            if (!wantVanilla && bridges.isEmpty()) {
-                throw new InsightException(InsightError.VIEWER_UNAVAILABLE, "No recipe viewer integration is active.");
-            }
-            if (!bridges.isEmpty()) {
-                JsonObject viewerPages = ViewerQuery.page(
-                    bridges, item, ViewerQuery.RoleScope.parse(role), type, modId, limit, offset);
-                for (String key : viewerPages.keySet()) {
-                    if (!"ok".equals(key)) {
-                        out.add(key, viewerPages.get(key));
-                    }
-                }
-                JsonArray names = new JsonArray();
-                for (IRecipeViewerBridge bridge : bridges) {
-                    names.add(bridge.viewerName());
-                }
-                out.add("activeViewers", names);
-            } else if (wantVanilla) {
-                throw new InsightException(
-                    InsightError.DATA_UNAVAILABLE,
-                    "Neither the recipe manager nor any recipe viewer integration is available."
-                );
-            }
+        if (index != null) {
+            out.add("vanilla", role.vanillaHasIt()
+                ? queryIndex(index, item, role, type, modId, limit, offset)
+                : Page.of("recipes", new JsonArray(), offset, 0));
+        }
+        if (!bridges.isEmpty()) {
+            out.add("viewers", ViewerQuery.page(bridges, item, role, type, modId, limit, offset));
         }
         return out;
     }
@@ -364,7 +347,7 @@ public final class RecipeCollector {
     private static JsonObject queryIndex(
         RecipeIndex index,
         ItemFilter item,
-        String role,
+        ViewerQuery.RoleScope scope,
         String type,
         String modId,
         int limit,
@@ -372,7 +355,6 @@ public final class RecipeCollector {
     ) {
         String normType = type == null ? "" : type.trim().toLowerCase(Locale.ROOT);
         String normMod = modId == null ? "" : modId.trim().toLowerCase(Locale.ROOT);
-        ViewerQuery.RoleScope scope = ViewerQuery.RoleScope.parse(role);
 
         JsonArray page = new JsonArray();
         Set<ResourceLocation> seen = new HashSet<>();

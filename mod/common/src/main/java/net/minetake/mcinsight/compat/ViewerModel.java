@@ -14,30 +14,6 @@ public final class ViewerModel {
 
     private ViewerModel() {}
 
-    /** Which part of a recipe an ingredient occupies. */
-    public enum Role {
-        INPUT,
-        OUTPUT,
-        CATALYST,
-        ANY;
-
-        public static Role parse(String raw) {
-            if (raw == null || raw.isBlank()) {
-                return ANY;
-            }
-            return switch (raw.trim().toLowerCase(java.util.Locale.ROOT)) {
-                case "input" -> INPUT;
-                case "output" -> OUTPUT;
-                case "catalyst" -> CATALYST;
-                default -> ANY;
-            };
-        }
-
-        public boolean includes(Role slot) {
-            return this == ANY || this == slot;
-        }
-    }
-
     /** One concrete ingredient (one item stack, one fluid stack, one chemical, ...). */
     public record Ingredient(
         String type,
