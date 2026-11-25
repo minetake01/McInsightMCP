@@ -14,7 +14,6 @@ import net.minetake.mcinsight.api.RequestContext;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
 import net.minetake.mcinsight.compat.ViewerRegistry;
 import net.minetake.mcinsight.game.GameAccess;
-import net.minetake.mcinsight.platform.Services;
 import net.minetake.mcinsight.serial.JsonCodec;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.component.DataComponentMap;
@@ -228,9 +227,6 @@ public final class EntryInspector {
 
     /** Asks every active viewer, in registration order, what it knows about this id. */
     private static void attachViewerInformation(RequestContext ctx, ResourceLocation id, JsonObject out) throws Exception {
-        if (!Services.PLATFORM.isClientSide()) {
-            return;
-        }
         List<IRecipeViewerBridge> viewers = ViewerRegistry.active();
         if (viewers.isEmpty()) {
             return;

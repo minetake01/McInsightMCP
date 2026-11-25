@@ -10,7 +10,6 @@ import net.minetake.mcinsight.api.Params;
 import net.minetake.mcinsight.api.RequestContext;
 import net.minetake.mcinsight.cache.CacheGenerations;
 import net.minetake.mcinsight.cache.GenerationalCache;
-import net.minetake.mcinsight.client.ClientStateAccessor;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
 import net.minetake.mcinsight.compat.ViewerRegistry;
 import net.minetake.mcinsight.data.ServerSync;
@@ -40,7 +39,6 @@ public final class StatusHandler {
     /** The live state of the session, captured on the game thread in one hop. */
     private record Session(
         boolean serverActive,
-        boolean singleplayer,
         String dimension,
         String difficulty,
         long dayTime,
@@ -71,11 +69,8 @@ public final class StatusHandler {
         out.addProperty("configDir", Services.PLATFORM.getConfigDir().toAbsolutePath().toString());
 
         out.addProperty("serverActive", session.serverActive());
-        out.addProperty("isSingleplayer", session.singleplayer());
         out.addProperty("worldLoaded", session.worldLoaded());
-        if (Services.PLATFORM.isClientSide()) {
-            out.addProperty("languageCode", ClientStateAccessor.getLanguageCode());
-        }
+        out.addProperty("languageCode", GameAccess.clientLanguage(ctx.executor()));
         if (session.worldLoaded()) {
             out.addProperty("dimension", session.dimension());
             out.addProperty("difficulty", session.difficulty());
@@ -144,13 +139,11 @@ public final class StatusHandler {
             return ctx.executor().supplyOnGameThread(() -> {
                 Level level = GameAccess.getLevel(ctx.executor());
                 boolean serverActive = ctx.executor().getActiveServer() != null;
-                boolean singleplayer = Services.PLATFORM.isClientSide() && ClientStateAccessor.isLocalServerRunning();
                 if (level == null) {
-                    return new Session(serverActive, singleplayer, null, null, 0L, 0L, false, false);
+                    return new Session(serverActive, null, null, 0L, 0L, false, false);
                 }
                 return new Session(
                     serverActive,
-                    singleplayer,
                     level.dimension().location().toString(),
                     level.getDifficulty().getKey(),
                     level.getDayTime(),

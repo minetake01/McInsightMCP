@@ -5,7 +5,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import net.fabricmc.api.EnvType;
 import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.loader.api.ModContainer;
 import net.fabricmc.loader.api.metadata.ModOrigin;
@@ -71,11 +70,6 @@ public final class FabricPlatformHelper implements IPlatformHelper {
     @Override
     public Path getConfigDir() {
         return FabricLoader.getInstance().getConfigDir();
-    }
-
-    @Override
-    public boolean isClientSide() {
-        return FabricLoader.getInstance().getEnvironmentType() == EnvType.CLIENT;
     }
 
 

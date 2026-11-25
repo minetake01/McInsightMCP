@@ -5,9 +5,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import net.neoforged.api.distmarker.Dist;
 import net.neoforged.fml.ModList;
-import net.neoforged.fml.loading.FMLEnvironment;
 import net.neoforged.fml.loading.FMLPaths;
 import net.neoforged.neoforgespi.language.IModInfo;
 
@@ -74,11 +72,6 @@ public final class NeoForgePlatformHelper implements IPlatformHelper {
     @Override
     public Path getConfigDir() {
         return FMLPaths.CONFIGDIR.get();
-    }
-
-    @Override
-    public boolean isClientSide() {
-        return FMLEnvironment.dist == Dist.CLIENT;
     }
 
 

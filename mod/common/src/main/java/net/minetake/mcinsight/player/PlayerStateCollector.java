@@ -13,7 +13,6 @@ import net.minetake.mcinsight.api.Params;
 import net.minetake.mcinsight.api.RequestContext;
 import net.minetake.mcinsight.client.ClientStateAccessor;
 import net.minetake.mcinsight.game.GameAccess;
-import net.minetake.mcinsight.platform.Services;
 import net.minetake.mcinsight.registry.DisplayNames;
 import net.minetake.mcinsight.registry.RegistryIndex;
 import net.minetake.mcinsight.serial.JsonCodec;
@@ -282,9 +281,8 @@ public final class PlayerStateCollector {
             );
         }
 
-        ClientStateAccessor.ScreenSnapshot openScreen = Services.PLATFORM.isClientSide()
-            ? ClientStateAccessor.captureOpenScreenSnapshot()
-            : null;
+        // The open screen is drawn by the client this player sits at; it is not world state.
+        ClientStateAccessor.ScreenSnapshot openScreen = ClientStateAccessor.captureOpenScreenSnapshot();
 
         return new RawPlayerSnapshot(
             player.getGameProfile().getName(),
@@ -330,7 +328,7 @@ public final class PlayerStateCollector {
         if (player instanceof ServerPlayer serverPlayer) {
             return serverPlayer.gameMode.getGameModeForPlayer().getName();
         }
-        return Services.PLATFORM.isClientSide() ? ClientStateAccessor.getLocalGameMode() : null;
+        return ClientStateAccessor.getLocalGameMode();
     }
 
     private static double round2(double value) {

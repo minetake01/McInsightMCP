@@ -1,8 +1,6 @@
 package net.minetake.mcinsight.game;
 
-import net.minetake.mcinsight.client.ClientStateAccessor;
 import net.minetake.mcinsight.metrics.PerfMetrics;
-import net.minetake.mcinsight.platform.Services;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
@@ -10,6 +8,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.util.thread.BlockableEventLoop;
 
 /**
  * Hands work to whichever thread owns the game state, and measures how long the game thread spent
@@ -20,11 +19,22 @@ import net.minecraft.server.MinecraftServer;
  */
 public final class MainThreadExecutor {
 
-    private final AtomicReference<Executor> clientExecutor = new AtomicReference<>();
+    private final AtomicReference<BlockableEventLoop<?>> clientExecutor = new AtomicReference<>();
     private final AtomicReference<MinecraftServer> activeServer = new AtomicReference<>();
 
-    public void setClientExecutor(Executor executor) {
+    /** The client's event loop; only a physical client ever sets it. */
+    public void setClientExecutor(BlockableEventLoop<?> executor) {
         clientExecutor.set(executor);
+    }
+
+    /**
+     * Whether a client is attached to this runtime.
+     *
+     * <p>Client state (the local player, the open screen, the language) exists only then, so this is
+     * the question to ask before reading it, not which JVM side the mod was loaded on.
+     */
+    public boolean hasClient() {
+        return clientExecutor.get() != null;
     }
 
     public void setActiveServer(MinecraftServer server) {
@@ -36,11 +46,11 @@ public final class MainThreadExecutor {
     }
 
     public <T> T supplyOnClientThread(Supplier<T> supplier, long timeoutMs) throws Exception {
-        Executor exec = clientExecutor.get();
+        BlockableEventLoop<?> exec = clientExecutor.get();
         if (exec == null) {
             throw new IllegalStateException("Client executor is not initialized");
         }
-        if (Services.PLATFORM.isClientSide() && ClientStateAccessor.isOnRenderThread()) {
+        if (exec.isSameThread()) {
             return runMeasuredDirect(supplier);
         }
         return supplyOnExecutor(exec, supplier, timeoutMs);
@@ -65,11 +75,11 @@ public final class MainThreadExecutor {
             }
             return supplyOnExecutor(server, supplier, timeoutMs);
         }
-        Executor exec = clientExecutor.get();
+        BlockableEventLoop<?> exec = clientExecutor.get();
         if (exec == null) {
             throw new IllegalStateException("Neither server nor client game executor is available");
         }
-        if (Services.PLATFORM.isClientSide() && ClientStateAccessor.isOnRenderThread()) {
+        if (exec.isSameThread()) {
             return runMeasuredDirect(supplier);
         }
         return supplyOnExecutor(exec, supplier, timeoutMs);

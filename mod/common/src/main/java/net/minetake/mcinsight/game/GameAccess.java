@@ -1,7 +1,6 @@
 package net.minetake.mcinsight.game;
 
 import net.minetake.mcinsight.client.ClientStateAccessor;
-import net.minetake.mcinsight.platform.Services;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.resources.RegistryOps;
 import net.minecraft.server.MinecraftServer;
@@ -20,6 +19,9 @@ import com.google.gson.JsonElement;
  */
 public final class GameAccess {
 
+    /** Minecraft's own default language, the one every translation falls back to. */
+    public static final String DEFAULT_LANGUAGE = net.minecraft.locale.Language.DEFAULT;
+
     private GameAccess() {}
 
     public static Level getLevel(MainThreadExecutor executor) {
@@ -27,14 +29,11 @@ public final class GameAccess {
         if (server != null) {
             return server.overworld();
         }
-        return Services.PLATFORM.isClientSide() ? ClientStateAccessor.getLevel() : null;
+        return executor.hasClient() ? ClientStateAccessor.getLevel() : null;
     }
 
     public static Player getLocalPlayer(MainThreadExecutor executor) {
-        if (Services.PLATFORM.isClientSide()) {
-            return ClientStateAccessor.getPlayer();
-        }
-        return null;
+        return executor.hasClient() ? ClientStateAccessor.getPlayer() : null;
     }
 
     public static RecipeManager getRecipeManager(MainThreadExecutor executor) {
@@ -58,12 +57,26 @@ public final class GameAccess {
     }
 
     public static ResourceManager getAssetResourceManager(MainThreadExecutor executor) {
-        return Services.PLATFORM.isClientSide() ? ClientStateAccessor.getResourceManager() : null;
+        return executor.hasClient() ? ClientStateAccessor.getResourceManager() : null;
     }
 
     public static ResourceManager getDataResourceManager(MainThreadExecutor executor) {
         MinecraftServer server = executor.getActiveServer();
         return server != null ? server.getResourceManager() : null;
+    }
+
+    /**
+     * The language the player at this client reads, lowercase.
+     *
+     * <p>Display names and guide search follow it. Without a client there is no reader, and the
+     * game's own default language is what every translation falls back to.
+     */
+    public static String clientLanguage(MainThreadExecutor executor) {
+        if (!executor.hasClient()) {
+            return DEFAULT_LANGUAGE;
+        }
+        String code = ClientStateAccessor.getLanguageCode();
+        return code == null || code.isBlank() ? DEFAULT_LANGUAGE : code.trim().toLowerCase(java.util.Locale.ROOT);
     }
 
     public static boolean hasIntegratedServer(MainThreadExecutor executor) {

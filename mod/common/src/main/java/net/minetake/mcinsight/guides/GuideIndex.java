@@ -21,7 +21,6 @@ import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.api.RequestContext;
 import net.minetake.mcinsight.cache.CacheGenerations;
 import net.minetake.mcinsight.cache.GenerationalCache;
-import net.minetake.mcinsight.client.ClientStateAccessor;
 import net.minetake.mcinsight.game.GameAccess;
 import net.minetake.mcinsight.platform.Services;
 import net.minecraft.resources.ResourceLocation;
@@ -227,19 +226,11 @@ public final class GuideIndex {
             return ctx.executor().supplyOnGameThread(() -> new Session(
                 GameAccess.getAssetResourceManager(ctx.executor()),
                 GameAccess.getDataResourceManager(ctx.executor()),
-                currentLanguage()
+                GameAccess.clientLanguage(ctx.executor())
             ), MAIN_THREAD_TIMEOUT_MS);
         } catch (Exception e) {
             throw new InsightException(InsightError.DATA_UNAVAILABLE, "The game thread did not answer: " + e.getMessage());
         }
-    }
-
-    private static String currentLanguage() {
-        if (!Services.PLATFORM.isClientSide()) {
-            return "en_us";
-        }
-        String code = ClientStateAccessor.getLanguageCode();
-        return code == null || code.isBlank() ? "en_us" : code.trim().toLowerCase(Locale.ROOT);
     }
 
     private static void scanPrefix(

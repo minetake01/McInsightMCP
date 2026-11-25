@@ -1,13 +1,12 @@
 package net.minetake.mcinsight.registry;
 
 import java.util.LinkedHashMap;
-import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import net.minetake.mcinsight.cache.CacheGenerations;
 import net.minetake.mcinsight.cache.GenerationalCache;
-import net.minetake.mcinsight.client.ClientStateAccessor;
-import net.minetake.mcinsight.platform.Services;
+import net.minetake.mcinsight.McInsightCommon;
+import net.minetake.mcinsight.game.GameAccess;
 import net.minecraft.Util;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -29,8 +28,6 @@ import net.minecraft.world.level.material.Fluid;
  * instead of once per query.
  */
 public final class DisplayNames {
-
-    private static final String FALLBACK_LANGUAGE = "en_us";
 
     /**
      * The language the tables were built for. A language change makes Minecraft reload resources,
@@ -59,20 +56,9 @@ public final class DisplayNames {
             .get(() -> build(kind));
     }
 
-    /** The language names resolve in; a dedicated server has no client language to follow. */
+    /** The language names resolve in: the one the player at this client reads. */
     private static String language() {
-        return LANGUAGE.get(DisplayNames::detectLanguage);
-    }
-
-    private static String detectLanguage() {
-        if (!Services.PLATFORM.isClientSide()) {
-            return FALLBACK_LANGUAGE;
-        }
-        String code = ClientStateAccessor.getLanguageCode();
-        if (code == null || code.isBlank()) {
-            return FALLBACK_LANGUAGE;
-        }
-        return code.trim().toLowerCase(Locale.ROOT);
+        return LANGUAGE.get(() -> GameAccess.clientLanguage(McInsightCommon.getExecutor()));
     }
 
     private static Map<String, String> build(RegistryIndex.Kind kind) {

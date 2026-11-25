@@ -37,6 +37,4 @@ public interface IPlatformHelper {
 
     Path getConfigDir();
 
-    boolean isClientSide();
-
 }

@@ -364,8 +364,8 @@ read, not where the readable parts came from.
 ### 6.4 Per-endpoint answers
 
 **`status`** — `ok`, `modId`, `modVersion`, `minecraftVersion`, `loader`, `loaderVersion`, `port`,
-`gameDir`, `modsDir`, `configDir`, `serverActive`, `isSingleplayer`, `worldLoaded`, `languageCode`
-(client only), and when a world is loaded `dimension`, `difficulty`, `dayTime`, `gameTime`,
+`gameDir`, `modsDir`, `configDir`, `serverActive` (this client hosts the world), `worldLoaded`, `languageCode`
+(the language the player at this client reads), and when a world is loaded `dimension`, `difficulty`, `dayTime`, `gameTime`,
 `isRaining`, `isThundering`. `integrations` carries `recipeViewers` (every registered adapter mapped
 to whether it can answer now), `activeRecipeViewers`, `patchouliLoaded`, `guidemeLoaded`,
 `ftbQuestsLoaded`, `createLoaded`, `serverSyncAvailable`. `modCount` is always present; `mods` only

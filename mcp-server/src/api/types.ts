@@ -73,9 +73,8 @@ export interface McStatusResponse {
   configDir: string;
   /** Replaces the old `integratedOrDedicatedServerActive`; `side` no longer exists. */
   serverActive: boolean;
-  isSingleplayer: boolean;
   worldLoaded: boolean;
-  languageCode?: string;
+  languageCode: string;
   dimension?: string;
   difficulty?: string;
   dayTime?: number;

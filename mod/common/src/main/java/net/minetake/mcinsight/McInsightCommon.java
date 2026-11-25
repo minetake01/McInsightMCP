@@ -1,6 +1,5 @@
 package net.minetake.mcinsight;
 
-import java.util.concurrent.Executor;
 import net.minetake.mcinsight.cache.CacheGenerations;
 import net.minetake.mcinsight.config.McInsightConfig;
 import net.minetake.mcinsight.data.ServerSync;
@@ -9,6 +8,7 @@ import net.minetake.mcinsight.http.InsightHttpServer;
 import net.minetake.mcinsight.network.ServerPacketHandler;
 import net.minetake.mcinsight.platform.Services;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.util.thread.BlockableEventLoop;
 
 public final class McInsightCommon {
 
@@ -55,7 +55,7 @@ public final class McInsightCommon {
         );
     }
 
-    public static void attachClientExecutor(Executor clientExecutor) {
+    public static void attachClientExecutor(BlockableEventLoop<?> clientExecutor) {
         EXECUTOR.setClientExecutor(clientExecutor);
         CacheGenerations.invalidateAll();
     }

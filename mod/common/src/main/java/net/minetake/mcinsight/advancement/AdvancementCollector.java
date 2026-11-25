@@ -14,7 +14,6 @@ import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.api.Page;
 import net.minetake.mcinsight.api.Params;
 import net.minetake.mcinsight.api.RequestContext;
-import net.minetake.mcinsight.game.GameAccess;
 import net.minetake.mcinsight.serial.JsonCodec;
 import net.minecraft.advancements.Advancement;
 import net.minecraft.advancements.AdvancementHolder;
@@ -137,10 +136,11 @@ public final class AdvancementCollector {
     private static List<Sample> capture(RequestContext ctx) throws Exception {
         MinecraftServer server = ctx.executor().getActiveServer();
         try {
-            return ctx.executor().supplyOnServerThread(() -> {
-                ServerPlayer player = player(ctx, server);
-                return build(server.getAdvancements().getAllAdvancements(), player);
-            }, CAPTURE_TIMEOUT_MS);
+            ServerPlayer player = ctx.ownerPlayer(server);
+            return ctx.executor().supplyOnServerThread(
+                () -> build(server.getAdvancements().getAllAdvancements(), player),
+                CAPTURE_TIMEOUT_MS
+            );
         } catch (InsightException e) {
             throw e;
         } catch (java.util.concurrent.ExecutionException e) {
@@ -158,30 +158,7 @@ public final class AdvancementCollector {
             );
         }
     }
-    /**
-     * The player whose progress is reported.
-     *
-     * <p>A bridged request names its player. A local request names the player at this client, whose
-     * progress lives on the integrated server under the same UUID; resolving it that way keeps one
-     * definition of "this player" for both transports.
-     */
-    private static ServerPlayer player(RequestContext ctx, MinecraftServer server) {
-        if (ctx.requester() != null) {
-            return ctx.requester();
-        }
-        Player local = GameAccess.getLocalPlayer(ctx.executor());
-        if (local == null) {
-            throw new InsightException(InsightError.NO_WORLD, "No player is loaded in this session.");
-        }
-        ServerPlayer resolved = server.getPlayerList().getPlayer(local.getUUID());
-        if (resolved == null) {
-            throw new InsightException(
-                InsightError.NO_WORLD,
-                "The player at this client is not present in the integrated server."
-            );
-        }
-        return resolved;
-    }
+
 
     private static List<Sample> build(Collection<AdvancementHolder> all, ServerPlayer player) {
         PlayerAdvancements progress = player.getAdvancements();

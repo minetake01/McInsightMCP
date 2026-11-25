@@ -210,7 +210,7 @@ public final class AreaScanner {
     private static ScanCapture capture(RequestContext ctx, int radius, String filter) throws Exception {
         MinecraftServer server = ctx.executor().getActiveServer();
         if (server != null) {
-            ServerPlayer owner = ownerPlayer(ctx, server);
+            ServerPlayer owner = ctx.ownerPlayer(server);
             return WorldData.onServer(ctx.executor(), () -> capture(owner.level(), owner, radius, filter, true));
         }
         return WorldData.onClient(ctx.executor(), () -> {
@@ -219,34 +219,6 @@ public final class AreaScanner {
             // is serialized here; the contents arrive as a server part instead.
             return capture(player.level(), player, radius, filter, false);
         });
-    }
-
-    /**
-     * The server-side player whose surroundings are being scanned.
-     *
-     * <p>A bridged request names its player. A local request in a single-player world names the
-     * player at this client, and the integrated server holds the matching player entity; finding it
-     * by UUID keeps one definition of "the player" across transports.
-     */
-    private static ServerPlayer ownerPlayer(RequestContext ctx, MinecraftServer server) throws Exception {
-        if (ctx.requester() != null) {
-            return ctx.requester();
-        }
-        var localUuid = WorldData.onClient(ctx.executor(), () -> {
-            Player local = GameAccess.getLocalPlayer(ctx.executor());
-            return local == null ? null : local.getUUID();
-        });
-        if (localUuid == null) {
-            throw new InsightException(InsightError.NO_WORLD, "No player is loaded in this session.");
-        }
-        ServerPlayer resolved = server.getPlayerList().getPlayer(localUuid);
-        if (resolved == null) {
-            throw new InsightException(
-                InsightError.NO_WORLD,
-                "The player at this client is not present in the integrated server."
-            );
-        }
-        return resolved;
     }
 
     private static ScanCapture capture(

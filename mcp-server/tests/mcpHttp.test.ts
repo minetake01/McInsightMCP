@@ -82,9 +82,9 @@ const STATUS_BODY = {
   gameDir: os.tmpdir(),
   modsDir: os.tmpdir(),
   configDir: os.tmpdir(),
-  // `serverActive` replaces `integratedOrDedicatedServerActive`; `side` no longer exists.
+  // serverActive: this client hosts the world (singleplayer or LAN host).
   serverActive: true,
-  isSingleplayer: true,
+  languageCode: 'en_us',
   worldLoaded: true,
   integrations: {
     recipeViewers: { jei: true, emi: false },
@@ -665,7 +665,7 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
 
       if (url.pathname === '/api/v1/status') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ...STATUS_BODY, serverActive: false, isSingleplayer: false }));
+        res.end(JSON.stringify({ ...STATUS_BODY, serverActive: false }));
         return;
       }
       if (url.pathname === '/api/v1/mods') {
