@@ -1,7 +1,13 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
-import { McHttpClient } from '../client/mcClient.js';
-import { jsonText } from './helpers.js';
+import { limitBounds } from '../api/endpoints.js';
+import type { GuideSource } from '../api/types.js';
+import { listGuides, readGuidePage, searchGuides } from '../data/guides.js';
+import type { McHttpClient } from '../client/mcClient.js';
+import { ToolError } from '../api/result.js';
+import { toolResult } from './result.js';
+
+const GUIDE_LIMITS = limitBounds('guides_search');
 
 const GUIDES_SCHEMA = z.object({
   action: z
@@ -24,7 +30,7 @@ const GUIDES_SCHEMA = z.object({
     .optional()
     .default(false)
     .describe('Include all lang entries (including short names/labels) rather than guide-length text only'),
-  limit: z.number().int().min(1).max(50).optional().default(20),
+  limit: z.number().int().min(1).optional().default(GUIDE_LIMITS.defaultLimit),
   offset: z.number().int().min(0).optional().default(0),
 });
 
@@ -34,34 +40,35 @@ export function registerGuideTools(server: McpServer, mcClient: McHttpClient): v
     {
       title: 'Search, List & Read Mod Guides, Quests & Lang Docs',
       description:
-        'Access Patchouli books, GuideME pages, FTB Quests chapters, Create Ponder entries, Oracle Index books, and mod lang entries.',
+        'Access Patchouli books, GuideME pages, FTB Quests chapters, Create Ponder entries, Oracle Index books, and mod lang entries. All three actions page through the same shape, so search hits and list rows carry the same id/source/modId fields.',
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: GUIDES_SCHEMA,
     },
-    async ({ action, query, guideId, source, modId, lang, includeAllLang, limit, offset }) => {
+    async ({ action, query, guideId, source, modId, lang, includeAllLang, limit, offset }) => toolResult(async () => {
       if (action === 'list') {
-        return jsonText(await mcClient.get('/api/v1/guides/list', { source, mod: modId, limit, offset }));
+        return listGuides(mcClient, { source, mod: modId, limit, offset });
       }
       if (action === 'read') {
         if (!guideId || !guideId.trim()) {
-          throw new Error('guideId is required when action="read".');
+          throw new ToolError('INVALID_PARAMETER', 'guideId is required when action="read".');
         }
-        return jsonText(await mcClient.get('/api/v1/guides/page', { id: guideId }));
+        return readGuidePage(mcClient, guideId);
       }
       if (!query || !query.trim()) {
-        throw new Error('query is required when action="search".');
+        throw new ToolError('INVALID_PARAMETER', 'query is required when action="search".');
       }
-      return jsonText(
-        await mcClient.get('/api/v1/guides/search', {
-          q: query,
-          source,
-          mod: modId,
-          lang,
-          includeAllLang,
-          limit,
-          offset,
-        }),
-      );
-    },
+      return searchGuides(mcClient, {
+        q: query,
+        source: source as 'all' | GuideSource,
+        mod: modId,
+        lang,
+        includeAllLang,
+        limit,
+        offset,
+      });
+    }),
   );
 }
+
+
+

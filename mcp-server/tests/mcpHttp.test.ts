@@ -30,8 +30,6 @@ async function rpcCall(
   };
   if (body.method === 'tools/call' && typeof params.name === 'string') {
     headers['Mcp-Name'] = params.name;
-  } else if (body.method === 'resources/read' && typeof params.uri === 'string') {
-    headers['Mcp-Name'] = params.uri;
   }
 
   const res = await fetch(url, {
@@ -47,6 +45,72 @@ function unwrapToolPayload<T = Record<string, unknown>>(rawBody: string): T {
   const parsed = JSON.parse(rawBody) as { result: { content: Array<{ text: string }> } };
   return JSON.parse(parsed.result.content[0]!.text) as T;
 }
+
+/** The `Page` shape every paginated endpoint answers with. */
+function page<Key extends string>(arrayKey: Key, items: unknown[], total: number, offset = 0) {
+  return {
+    ok: true,
+    offset,
+    totalKnown: true,
+    total,
+    returned: items.length,
+    hasMore: offset + items.length < total,
+    [arrayKey]: items,
+  };
+}
+
+/** The `Page.uncounted` shape viewer scans answer with. */
+function uncountedPage<Key extends string>(arrayKey: Key, items: unknown[], hasMore = false, offset = 0) {
+  return {
+    ok: true,
+    offset,
+    totalKnown: false,
+    returned: items.length,
+    hasMore,
+    [arrayKey]: items,
+  };
+}
+
+const STATUS_BODY = {
+  ok: true,
+  modId: 'mcinsight',
+  modVersion: '1.0.0',
+  minecraftVersion: '1.21.1',
+  loader: 'neoforge',
+  loaderVersion: '21.1.267',
+  port: 0,
+  gameDir: os.tmpdir(),
+  modsDir: os.tmpdir(),
+  configDir: os.tmpdir(),
+  // `serverActive` replaces `integratedOrDedicatedServerActive`; `side` no longer exists.
+  serverActive: true,
+  isSingleplayer: true,
+  worldLoaded: true,
+  integrations: {
+    recipeViewers: { jei: true, emi: false },
+    activeRecipeViewers: ['jei'],
+    patchouliLoaded: true,
+    guidemeLoaded: false,
+    ftbQuestsLoaded: false,
+    createLoaded: true,
+    serverSyncAvailable: false,
+  },
+  modCount: 1,
+};
+
+/** A viewer recipe as `ViewerJson.recipe` shapes it: slot arrays, flat catalysts, stated granularity. */
+const VIEWER_RECIPE = {
+  viewer: 'emi',
+  categoryUid: 'create:pressing',
+  categoryTitle: 'Pressing',
+  modId: 'create',
+  recipeId: 'create:pressing/iron',
+  slotGranularity: 'slots',
+  inputs: [{ alternatives: [{ type: 'item', id: 'minecraft:iron_ingot', displayName: 'Iron Ingot' }] }],
+  outputs: [{ alternatives: [{ type: 'item', id: 'create:iron_sheet', displayName: 'Iron Sheet' }] }],
+  catalysts: [],
+  workstations: [],
+};
 
 describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
   const cleanups: Array<() => Promise<void>> = [];
@@ -64,26 +128,7 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
 
       if (url.pathname === '/api/v1/status') {
-        res.end(
-          JSON.stringify({
-            ok: true,
-            modId: 'mcinsight',
-            modVersion: '1.0.0',
-            minecraftVersion: '1.21.1',
-            loader: 'neoforge',
-            loaderVersion: '21.1.267',
-            port: 0,
-            side: 'client',
-            gameDir: os.tmpdir(),
-            modsDir: os.tmpdir(),
-            configDir: os.tmpdir(),
-            integratedOrDedicatedServerActive: true,
-            isSingleplayer: true,
-            worldLoaded: true,
-            integrations: { jeiLoaded: true, jeiRuntimeReady: true },
-            modCount: 1,
-          }),
-        );
+        res.end(JSON.stringify(STATUS_BODY));
         return;
       }
 
@@ -91,6 +136,8 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
         res.end(
           JSON.stringify({
             ok: true,
+            modsDir: os.tmpdir(),
+            count: 1,
             mods: [{ id: 'tofucraft', name: 'TofuCraftReload', version: '12.20.10.0' }],
           }),
         );
@@ -127,16 +174,25 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
       }
 
       if (url.pathname === '/api/v1/registry/search') {
-        res.end(JSON.stringify({ ok: true, kind: 'item', returned: 1, hasMore: false, results: [{ id: 'tofucraft:tofudried' }] }));
+        res.end(
+          JSON.stringify(page('results', [{ id: 'tofucraft:tofudried', modId: 'tofucraft', displayName: 'Dried Tofu' }], 1)),
+        );
         return;
       }
 
       if (url.pathname === '/api/v1/registry/inspect') {
+        const kind = url.searchParams.get('kind') ?? 'auto';
+        if (kind !== 'auto') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, code: 'INVALID_KIND', error: `Unknown kind: ${kind}` }));
+          return;
+        }
         res.end(
           JSON.stringify({
             ok: true,
             kind: 'item',
             id: 'tofucraft:blocktofumomen',
+            modId: 'tofucraft',
             displayName: '木綿豆腐ブロック',
             itemClass: 'net.minecraft.world.item.BlockItem',
             blockInfo: {
@@ -146,10 +202,10 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
               isRandomlyTicking: true,
               destroySpeed: 0.35,
             },
+            // Per-viewer descriptions; the old flattened `jeiInformation` no longer exists.
             viewerInformation: {
               jei: ['このブロックは、上と下に石を置くと時間経過でより硬くなります。'],
             },
-            jeiInformation: ['このブロックは、上と下に石を置くと時間経過でより硬くなります。'],
           }),
         );
         return;
@@ -158,20 +214,36 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
       if (url.pathname === '/api/v1/registry/tag') {
         res.end(
           JSON.stringify({
-            ok: true,
+            ...page('members', [{ id: 'minecraft:oak_log', modId: 'minecraft', displayName: 'Oak Log' }], 1),
             kind: 'block_tag',
             id: '#ars_nouveau:whirlisprig/greatly_likes',
-            totalMembers: 1,
-            returned: 1,
-            hasMore: false,
-            members: [{ id: 'minecraft:oak_log', modId: 'minecraft', displayName: 'Oak Log' }],
           }),
         );
         return;
       }
 
       if (url.pathname === '/api/v1/recipes/types') {
-        res.end(JSON.stringify({ ok: true, recipeTypes: [{ id: 'tofucraft:bittern', modId: 'tofucraft', count: 3 }] }));
+        res.end(
+          JSON.stringify({
+            ok: true,
+            recipeManagerAvailable: true,
+            recipeTypes: [{ id: 'tofucraft:bittern', modId: 'tofucraft', count: 3 }],
+            activeViewers: ['emi'],
+            viewers: {
+              emi: {
+                count: 1,
+                categories: [
+                  {
+                    uid: 'create:pressing',
+                    modId: 'create',
+                    title: 'Pressing',
+                    workstations: [{ type: 'item', id: 'create:mechanical_press' }],
+                  },
+                ],
+              },
+            },
+          }),
+        );
         return;
       }
 
@@ -179,14 +251,16 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
         res.end(
           JSON.stringify({
             ok: true,
-            vanilla: {
-              returned: 3,
-              hasMore: false,
-              recipes: [
+            activeViewers: ['emi'],
+            // Vanilla bucket: a counted page of manager recipes.
+            vanilla: page(
+              'recipes',
+              [
                 {
                   recipeId: 'minecraft:iron_ingot_from_smelting_raw_iron',
                   recipeType: 'minecraft:smelting',
                   modId: 'minecraft',
+                  recipeClass: 'net.minecraft.world.item.crafting.SmeltingRecipe',
                   rawJson: {
                     type: 'minecraft:smelting',
                     ingredient: { item: 'minecraft:raw_iron' },
@@ -199,6 +273,7 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
                   recipeId: 'tofucraft:bittern_to_kinu',
                   recipeType: 'tofucraft:bittern',
                   modId: 'tofucraft',
+                  recipeClass: 'baguchan.tofucraft.recipe.BitternRecipe',
                   rawJson: {
                     type: 'tofucraft:bittern',
                     process: { id: 'tofucraft:soymilk', amount: 1000 },
@@ -210,6 +285,7 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
                   recipeId: 'custommod:arcane_iron',
                   recipeType: 'custommod:arcane_fusion',
                   modId: 'custommod',
+                  recipeClass: 'custommod.ArcaneFusionRecipe',
                   rawJson: {
                     type: 'custommod:arcane_fusion',
                     catalyst: 'custommod:orb',
@@ -218,7 +294,10 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
                   },
                 },
               ],
-            },
+              3,
+            ),
+            // A viewer bucket: uncounted, slot-based.
+            emi: uncountedPage('recipes', [VIEWER_RECIPE]),
           }),
         );
         return;
@@ -227,22 +306,22 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
       if (url.pathname === '/api/v1/loot/query') {
         res.end(
           JSON.stringify({
-            ok: true,
-            source: 'server_registry',
-            offset: 0,
-            total: 1,
-            returned: 1,
-            hasMore: false,
-            entries: [
-              {
-                id: 'tofucraft:injections/tofustick',
-                modId: 'tofucraft',
-                source: 'server_registry',
-                rawJson: {
-                  pools: [{ rolls: 1, entries: [{ type: 'minecraft:item', name: 'tofucraft:tofustick', weight: 1 }] }],
+            ...page(
+              'entries',
+              [
+                {
+                  id: 'tofucraft:injections/tofustick',
+                  modId: 'tofucraft',
+                  rawJson: {
+                    pools: [
+                      { rolls: 1, entries: [{ type: 'minecraft:item', name: 'tofucraft:tofustick', weight: 1 }] },
+                    ],
+                  },
                 },
-              },
-            ],
+              ],
+              1,
+            ),
+            totalModifiers: 1,
             lootModifiers: [
               {
                 id: 'tofucraft:tofustick_ship',
@@ -252,7 +331,9 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
                 targetTables: ['minecraft:chests/shipwreck_treasure'],
                 rawJson: {
                   type: 'neoforge:add_table',
-                  conditions: [{ condition: 'neoforge:loot_table_id', loot_table_id: 'minecraft:chests/shipwreck_treasure' }],
+                  conditions: [
+                    { condition: 'neoforge:loot_table_id', loot_table_id: 'minecraft:chests/shipwreck_treasure' },
+                  ],
                   table: 'tofucraft:injections/tofustick',
                 },
               },
@@ -267,46 +348,42 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
         if (kind === 'biome') {
           res.end(
             JSON.stringify({
-              ok: true,
-              kind: 'biome',
-              source: 'dynamic_registry',
-              offset: 0,
-              total: 1,
-              returned: 1,
-              hasMore: false,
-              entries: [
-                {
-                  id: 'minecraft:snowy_plains',
-                  modId: 'minecraft',
-                  kind: 'biome',
-                  rawJson: { temperature: 0, downfall: 0.5, has_precipitation: true },
-                },
-              ],
+              ...page(
+                'entries',
+                [
+                  {
+                    id: 'minecraft:snowy_plains',
+                    modId: 'minecraft',
+                    kind: 'biome',
+                    rawJson: { temperature: 0, downfall: 0.5, has_precipitation: true },
+                  },
+                ],
+                1,
+              ),
+              kind,
             }),
           );
           return;
         }
         res.end(
           JSON.stringify({
-            ok: true,
-            kind,
-            source: 'resource_manager',
-            offset: 0,
-            total: 1,
-            returned: 1,
-            hasMore: false,
-            entries: [
-              {
-                id: 'ars_nouveau:whirlisprig_spawn',
-                modId: 'ars_nouveau',
-                kind: 'biome_modifier',
-                rawJson: {
-                  type: 'neoforge:add_spawns',
-                  biomes: '#minecraft:is_forest',
-                  spawners: { type: 'ars_nouveau:whirlisprig', weight: 15 },
+            ...page(
+              'entries',
+              [
+                {
+                  id: 'ars_nouveau:whirlisprig_spawn',
+                  modId: 'ars_nouveau',
+                  kind: 'biome_modifier',
+                  rawJson: {
+                    type: 'neoforge:add_spawns',
+                    biomes: '#minecraft:is_forest',
+                    spawners: { type: 'ars_nouveau:whirlisprig', weight: 15 },
+                  },
                 },
-              },
-            ],
+              ],
+              1,
+            ),
+            kind,
           }),
         );
         return;
@@ -314,50 +391,71 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
 
       if (url.pathname === '/api/v1/datamaps/query') {
         res.end(
-          JSON.stringify({
-            ok: true,
-            offset: 0,
-            total: 1,
-            returned: 1,
-            hasMore: false,
-            entries: [{ id: 'neoforge:item/furnace_fuels', modId: 'neoforge', registry: 'item', totalValueCount: 10 }],
-          }),
+          JSON.stringify(
+            page(
+              'entries',
+              [
+                {
+                  id: 'neoforge:item/furnace_fuels',
+                  modId: 'neoforge',
+                  registry: 'item',
+                  totalValueCount: 10,
+                },
+              ],
+              1,
+            ),
+          ),
         );
         return;
       }
 
       if (url.pathname === '/api/v1/trades/query') {
-        res.end(
-          JSON.stringify({
-            ok: true,
-            returned: 1,
-            hasMore: false,
-            trades: [{ profession: 'tofucraft:tofu_craftsman', level: 1 }],
-          }),
-        );
+        res.end(JSON.stringify(page('trades', [{ profession: 'tofucraft:tofu_craftsman', level: 1 }], 1)));
         return;
       }
 
       if (url.pathname === '/api/v1/advancements/query') {
         res.end(
           JSON.stringify({
-            ok: true,
-            hasPlayerProgress: true,
-            returned: 1,
-            hasMore: false,
-            advancements: [{ id: 'tofucraft:tofustick', modId: 'tofucraft', progress: { done: false, percent: 0 } }],
+            ...page(
+              'advancements',
+              [
+                {
+                  id: 'tofucraft:tofustick',
+                  modId: 'tofucraft',
+                  criteria: ['has_stick'],
+                  progress: { done: false, percent: 0, completedCriteria: [], remainingCriteria: ['has_stick'] },
+                },
+              ],
+              1,
+            ),
+            progressUnavailable: false,
           }),
         );
         return;
       }
 
       if (url.pathname === '/api/v1/guides/search') {
-        res.end(JSON.stringify({ ok: true, query: 'tofu', count: 0, hits: [] }));
+        res.end(
+          JSON.stringify({
+            ...page('hits', [], 0),
+            query: 'tofu',
+            lang: 'en_us',
+          }),
+        );
         return;
       }
 
       if (url.pathname === '/api/v1/introspect/class') {
-        res.end(JSON.stringify({ ok: true, name: 'baguchan.tofucraft.block.TofuBlock', fields: [], methods: [] }));
+        res.end(
+          JSON.stringify({
+            ok: true,
+            name: 'baguchan.tofucraft.block.TofuBlock',
+            interfaces: [],
+            declaredFields: [],
+            declaredMethods: [],
+          }),
+        );
         return;
       }
 
@@ -377,7 +475,7 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
     );
     cleanups.push(() => handle.close());
 
-    // 1. Health & server/discover
+    // 1. Health & discover
     const health = await fetch(`http://127.0.0.1:${handle.port}/health`);
     expect(health.status).toBe(200);
 
@@ -388,6 +486,12 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
       params: {},
     });
     expect(discoverRes.status).toBe(200);
+    const discoverBody = JSON.parse(discoverRes.body) as {
+      result: { capabilities: Record<string, unknown>; _meta: Record<string, { version: string }> };
+    };
+    // Version comes from package.json rather than a hardcoded copy.
+    const pkg = await import('../package.json', { with: { type: 'json' } });
+    expect(discoverBody.result._meta['io.modelcontextprotocol/serverInfo']?.version).toBe(pkg.default.version);
 
     // 2. Verify exactly 11 semantic tools are registered
     const listRes = await rpcCall(handle.url, {
@@ -414,15 +518,22 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
       'mc_status',
     ]);
 
-    // 3. mc_query_recipes parses vanilla + modParsers and omits rawJson by default
+    // 3. mc_query_recipes keeps the vanilla bucket counted and the viewer bucket uncounted,
+    //    parses vanilla + mod payloads, and omits rawJson when the parse explained everything.
     const recRes = await rpcCall(handle.url, {
       jsonrpc: '2.0',
       id: 2,
       method: 'tools/call',
-      params: { name: 'mc_query_recipes', arguments: { item: 'iron' } },
+      params: { name: 'mc_query_recipes', arguments: { item: 'minecraft:raw_iron' } },
     });
     const recData = unwrapToolPayload<{
+      ok: boolean;
       vanilla: {
+        offset: number;
+        totalKnown: boolean;
+        total?: number;
+        returned: number;
+        hasMore: boolean;
         recipes: Array<{
           recipeType: string;
           nativeParsed?: { mechanism: string };
@@ -430,13 +541,27 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
           rawJson?: unknown;
         }>;
       };
+      emi: { totalKnown: boolean; returned: number; recipes: Array<Record<string, unknown>> };
     }>(recRes.body);
-    expect(recData.vanilla.recipes.find((r) => r.recipeType === 'minecraft:smelting')?.nativeParsed?.mechanism).toBe('Vanilla Furnace');
+    expect(recData.ok).toBe(true);
+    expect(recData.vanilla.totalKnown).toBe(true);
+    expect(recData.vanilla.total).toBe(3);
+    expect(recData.vanilla.returned).toBe(3);
+    expect(recData.vanilla.hasMore).toBe(false);
+    expect(recData.vanilla.recipes.find((r) => r.recipeType === 'minecraft:smelting')?.nativeParsed?.mechanism).toBe(
+      'Vanilla Furnace',
+    );
     expect(recData.vanilla.recipes.find((r) => r.recipeType === 'minecraft:smelting')?.rawJson).toBeUndefined();
-    expect(recData.vanilla.recipes.find((r) => r.recipeType === 'tofucraft:bittern')?.modParsed?.parserId).toBe('builtin_tofucraft_12');
+    expect(recData.vanilla.recipes.find((r) => r.recipeType === 'tofucraft:bittern')?.modParsed?.parserId).toBe(
+      'builtin_tofucraft_12',
+    );
     expect(recData.vanilla.recipes.find((r) => r.recipeType === 'custommod:arcane_fusion')?.rawJson).toBeDefined();
+    // Viewer bucket is slot-based and uncounted.
+    expect(recData.emi.totalKnown).toBe(false);
+    expect(recData.emi.total).toBeUndefined();
+    expect(recData.emi.recipes[0]?.slotGranularity).toBe('slots');
 
-    // 4. mc_query_item_flow aggregates recipes, loot, trades, datamaps, and itemMeta/JEI info
+    // 4. mc_query_item_flow aggregates the data kinds and reports item metadata under viewerInformation
     const flowRes = await rpcCall(handle.url, {
       jsonrpc: '2.0',
       id: 3,
@@ -445,19 +570,22 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
     });
     const flowData = unwrapToolPayload<{
       ok: boolean;
+      partial?: boolean;
       itemMeta?: {
         blockInfo?: { isRandomlyTicking?: boolean };
         viewerInformation?: Record<string, string[]>;
         jeiInformation?: string[];
       };
-      loot?: { entries: Array<{ nativeParsed?: unknown; rawJson?: unknown }> };
-      trades?: { trades: unknown[] };
-      datamaps?: { entries: unknown[] };
+      loot?: { totalKnown: boolean; entries: Array<{ nativeParsed?: unknown; rawJson?: unknown }> };
+      trades?: { returned: number; trades: unknown[] };
+      datamaps?: { returned: number; entries: unknown[] };
     }>(flowRes.body);
     expect(flowData.ok).toBe(true);
+    expect(flowData.partial).toBeUndefined();
     expect(flowData.itemMeta?.blockInfo?.isRandomlyTicking).toBe(true);
     expect(flowData.itemMeta?.viewerInformation?.jei?.[0]).toContain('時間経過');
-    expect(flowData.itemMeta?.jeiInformation?.[0]).toContain('時間経過');
+    expect(flowData.itemMeta?.jeiInformation).toBeUndefined();
+    expect(flowData.loot?.totalKnown).toBe(true);
     expect(flowData.loot?.entries[0]?.nativeParsed).toBeDefined();
     expect(flowData.loot?.entries[0]?.rawJson).toBeUndefined();
 
@@ -469,8 +597,13 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
       params: { name: 'mc_query_world_data', arguments: { kind: 'biome', maxTemp: 0.149 } },
     });
     const biomeCompact = unwrapToolPayload<{
+      ok: boolean;
+      kind: string;
+      totalKnown: boolean;
       entries: Array<{ nativeParsed?: { temperature?: number }; rawJson?: unknown }>;
     }>(biomeCompactRes.body);
+    expect(biomeCompact.kind).toBe('biome');
+    expect(biomeCompact.totalKnown).toBe(true);
     expect(biomeCompact.entries[0]?.nativeParsed?.temperature).toBe(0);
     expect(biomeCompact.entries[0]?.rawJson).toBeUndefined();
 
@@ -483,7 +616,7 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
     const biomeRaw = unwrapToolPayload<{ entries: Array<{ rawJson?: unknown }> }>(biomeRawRes.body);
     expect(biomeRaw.entries[0]?.rawJson).toBeDefined();
 
-    // 6. Smoke-check remaining tools
+    // 6. Smoke-check remaining tools; every result carries ok
     for (const [id, name, args] of [
       [6, 'mc_status', {}],
       [7, 'mc_player_state', {}],
@@ -505,39 +638,69 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
       expect(r.status).toBe(200);
       expect(unwrapToolPayload<{ ok: boolean }>(r.body).ok).toBe(true);
     }
+
+    // 7. recipes/types reports the viewer map the mod declares, and the tool does not invent viewers.
+    const typesRes = await rpcCall(handle.url, {
+      jsonrpc: '2.0',
+      id: 16,
+      method: 'tools/call',
+      params: { name: 'mc_query_recipes', arguments: { listTypes: true, modId: 'create' } },
+    });
+    const typesData = unwrapToolPayload<{
+      recipeManagerAvailable: boolean;
+      activeViewers: string[];
+      viewers: Record<string, { count: number; categories: Array<Record<string, unknown>> }>;
+      builtinModParsers: Array<{ modId: string }>;
+    }>(typesRes.body);
+    expect(typesData.recipeManagerAvailable).toBe(true);
+    expect(typesData.activeViewers).toEqual(['emi']);
+    expect(Object.keys(typesData.viewers)).toEqual(['emi']);
+    expect(typesData.viewers.emi?.categories[0]?.uid).toBe('create:pressing');
+    expect(typesData.builtinModParsers.some((parser) => parser.modId === 'create')).toBe(true);
   });
 
-  it('surfaces partial failures via Promise.allSettled in mc_query_item_flow, supports multi-viewer recipes, and guards HTTP errors', async () => {
+  it('reports failed sub-queries as partial/missing with the mod code, keeps multi-viewer recipes, and surfaces INVALID_PARAMETER instead of clamping', async () => {
     const mcSrv = createServer((req, res) => {
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+      const limit = Number(url.searchParams.get('limit') ?? '0');
+      const requestedLimit = url.searchParams.has('limit') ? limit : undefined;
+
       if (url.pathname === '/api/v1/status') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(
-          JSON.stringify({
-            ok: true,
-            modId: 'mcinsight',
-            modVersion: '0.1.0-beta.1',
-            minecraftVersion: '1.21.1',
-            loader: 'neoforge',
-            loaderVersion: '21.1.267',
-            port: 0,
-            side: 'client',
-            gameDir: process.cwd(),
-            modsDir: process.cwd(),
-            configDir: process.cwd(),
-            integratedOrDedicatedServerActive: false,
-            isSingleplayer: false,
-            worldLoaded: true,
-            integrations: { jeiLoaded: true, emiLoaded: true, reiLoaded: true, activeRecipeViewers: ['jei', 'emi', 'rei'] },
-            modCount: 1,
-          }),
-        );
+        res.end(JSON.stringify({ ...STATUS_BODY, serverActive: false, isSingleplayer: false }));
         return;
       }
       if (url.pathname === '/api/v1/mods') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, mods: [] }));
+        res.end(JSON.stringify({ ok: true, modsDir: process.cwd(), count: 0, mods: [] }));
         return;
+      }
+      // `recipes_query` declares max limit 100; a larger request is rejected, never shortened.
+      if (url.pathname === '/api/v1/recipes/query' && requestedLimit !== undefined && requestedLimit > 100) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            ok: false,
+            code: 'INVALID_PARAMETER',
+            error: "Parameter 'limit' must be in 1..100, got: " + requestedLimit + '.',
+          }),
+        );
+        return;
+      }
+      // `item=` is an exact ResourceLocation (or #tag); a display name / substring is INVALID_ID.
+      if (url.pathname === '/api/v1/recipes/query') {
+        const item = url.searchParams.get('item');
+        if (item !== null && !item.startsWith('#') && !item.includes(':')) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              ok: false,
+              code: 'INVALID_ID',
+              error: `Parameter 'item' must be a full ID such as 'minecraft:stone' or a tag such as '#minecraft:planks', got: ${item}. Use mc_search_registry to resolve a display name first.`,
+            }),
+          );
+          return;
+        }
       }
       if (url.pathname === '/api/v1/recipes/query') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -545,55 +708,52 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
           JSON.stringify({
             ok: true,
             activeViewers: ['emi', 'rei'],
-            emi: {
-              returned: 1,
-              hasMore: false,
-              recipes: [
-                {
-                  categoryUid: 'create:pressing',
-                  categoryTitle: 'Pressing',
-                  modId: 'create',
-                  recipeId: 'create:pressing/iron',
-                  inputs: [{ id: 'minecraft:iron_ingot' }],
-                  outputs: [{ id: 'create:iron_sheet' }],
-                },
-              ],
-            },
-            rei: { returned: 0, hasMore: false, recipes: [] },
+            emi: uncountedPage('recipes', [VIEWER_RECIPE]),
+            rei: uncountedPage('recipes', []),
           }),
         );
         return;
       }
       if (url.pathname === '/api/v1/loot/query') {
+        // 503 with the mod's own code: a missing server-side part, not an empty page.
         res.writeHead(503, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, code: 'SERVER_DATA_UNAVAILABLE', error: 'Remote server lacks McInsight sync.' }));
+        res.end(
+          JSON.stringify({
+            ok: false,
+            code: 'DATA_UNAVAILABLE',
+            error: 'Loot tables are unavailable in this session.',
+          }),
+        );
         return;
       }
       if (url.pathname === '/api/v1/trades/query') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(
-          JSON.stringify({
-            ok: true,
-            trades: [
-              { result: { id: 'minecraft:iron_ingot' }, costA: { id: 'minecraft:emerald' } },
-              { costA: { id: 'minecraft:iron_ingot' }, result: { id: 'minecraft:emerald' } },
-            ],
-          }),
+          JSON.stringify(
+            page(
+              'trades',
+              [
+                { profession: 'minecraft:weaponsmith', level: 1, result: { id: 'minecraft:iron_ingot' } },
+                { profession: 'minecraft:weaponsmith', level: 1, result: { id: 'minecraft:emerald' } },
+              ],
+              2,
+            ),
+          ),
         );
         return;
       }
       if (url.pathname === '/api/v1/datamaps/query') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, returned: 0, hasMore: false, entries: [] }));
+        res.end(JSON.stringify(page('entries', [], 0)));
         return;
       }
       if (url.pathname === '/api/v1/registry/inspect') {
         res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, code: 'NOT_FOUND', error: 'Not found' }));
+        res.end(JSON.stringify({ ok: false, code: 'NOT_FOUND', error: 'No item is named minecraft:iron_ingot.' }));
         return;
       }
       res.writeHead(404, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: false, code: 'NOT_FOUND', error: 'Not found' }));
+      res.end(JSON.stringify({ ok: false, code: 'UNSUPPORTED_ENDPOINT', error: 'Unknown endpoint' }));
     });
     await new Promise<void>((r) => mcSrv.listen(0, '127.0.0.1', r));
     cleanups.push(() => new Promise<void>((r) => mcSrv.close(() => r())));
@@ -608,7 +768,7 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
     );
     cleanups.push(() => handle.close());
 
-    // Partial failure in loot must not fail recipes/trades, and obtain trade filter keeps only trades producing iron_ingot
+    // A failing loot part must not fail recipes/trades, and must be named in `missing`.
     const flowRes = await rpcCall(handle.url, {
       jsonrpc: '2.0',
       id: 1,
@@ -617,25 +777,51 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
     });
     const flowPayload = unwrapToolPayload<{
       ok: boolean;
-      recipes?: { emi?: { recipes: Array<{ origin: string; viewerIngredients?: unknown }> } };
-      trades?: { trades: Array<{ result?: { id: string } }> };
-      errors?: Record<string, { code?: string; message: string }>;
+      partial?: boolean;
+      missing?: Array<{ part: string; code: string; error: string }>;
+      recipes?: { emi?: { recipes: Array<{ viewer: string; inputs: unknown[] }>; totalKnown: boolean } };
+      trades?: { trades: Array<{ result?: { id: string }; roleUnverified?: true }> };
     }>(flowRes.body);
     expect(flowPayload.ok).toBe(true);
-    expect(flowPayload.recipes?.emi?.recipes[0]?.origin).toBe('emi');
-    expect(flowPayload.recipes?.emi?.recipes[0]?.viewerIngredients).toBeDefined();
+    expect(flowPayload.partial).toBe(true);
+    // Viewer recipes keep their slot-based shapes and the viewer name they came from.
+    expect(flowPayload.recipes?.emi?.totalKnown).toBe(false);
+    expect(flowPayload.recipes?.emi?.recipes[0]?.viewer).toBe('emi');
+    expect(flowPayload.recipes?.emi?.recipes[0]?.inputs).toBeDefined();
+    // The obtain filter keeps only trades producing the item, by exact id.
     expect(flowPayload.trades?.trades).toHaveLength(1);
     expect(flowPayload.trades?.trades[0]?.result?.id).toBe('minecraft:iron_ingot');
-    expect(flowPayload.errors?.loot?.code).toBe('SERVER_DATA_UNAVAILABLE');
-    expect(flowPayload.errors?.viewer_info).toBeUndefined();
+    // Failures are named with the mod's code, and the registry miss is surfaced rather than swallowed.
+    const missingByPart = new Map((flowPayload.missing ?? []).map((entry) => [entry.part, entry]));
+    expect(missingByPart.get('loot')?.code).toBe('DATA_UNAVAILABLE');
+    expect(missingByPart.get('viewer_info')?.code).toBe('NOT_FOUND');
+    expect(missingByPart.get('recipes')).toBeUndefined();
 
-    // Verify removed resources/prompts are no longer advertised or listed
-    const discover = await rpcCall(handle.url, { jsonrpc: '2.0', id: 2, method: 'server/discover', params: {} });
-    const capabilities = (discover.body.result as { capabilities?: Record<string, unknown> } | undefined)?.capabilities ?? {};
-    expect(capabilities.resources).toBeUndefined();
-    expect(capabilities.prompts).toBeUndefined();
+    // A limit above `recipes_query`'s declared max reaches the mod and surfaces as its error.
+    const overLimitRes = await rpcCall(handle.url, {
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: { name: 'mc_query_recipes', arguments: { item: 'minecraft:iron_ingot', limit: 500 } },
+    });
+    const overLimit = unwrapToolPayload<{ ok: boolean; code?: string; error?: string }>(overLimitRes.body);
+    expect(overLimit.ok).toBe(false);
+    expect(overLimit.code).toBe('INVALID_PARAMETER');
+    expect(overLimit.error).toContain('1..100');
 
-    // HTTP transport returns clean HTTP 400/405/406 error instead of dropping socket on unsupported methods
+    // A non-ID `item=` is rejected by the mod with INVALID_ID, not silently substring-matched.
+    const badItemRes = await rpcCall(handle.url, {
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'tools/call',
+      params: { name: 'mc_query_recipes', arguments: { item: 'iron ingot' } },
+    });
+    const badItem = unwrapToolPayload<{ ok: boolean; code?: string; error?: string }>(badItemRes.body);
+    expect(badItem.ok).toBe(false);
+    expect(badItem.code).toBe('INVALID_ID');
+    expect(badItem.error).toContain('mc_search_registry');
+
+    // HTTP transport answers unsupported methods with a clean HTTP error instead of dropping the socket.
     const badRes = await fetch(handle.url, { method: 'DELETE' });
     expect(badRes.status).toBeGreaterThanOrEqual(400);
   });

@@ -1,3 +1,6 @@
+import { ENDPOINTS } from '../api/endpoints.js';
+import type { McModsResponse, McStatusResponse } from '../api/types.js';
+
 export class McConnectionError extends Error {
   constructor(message: string) {
     super(message);
@@ -14,44 +17,6 @@ export class McApiError extends Error {
     super(message);
     this.name = 'McApiError';
   }
-}
-
-export interface McModInfo {
-  id: string;
-  name: string;
-  version: string;
-  description?: string;
-  jarPath?: string;
-}
-
-export interface McStatusResponse {
-  ok: boolean;
-  modId: string;
-  modVersion: string;
-  minecraftVersion: string;
-  loader: string;
-  loaderVersion: string;
-  port: number;
-  side: string;
-  gameDir: string;
-  modsDir: string;
-  configDir: string;
-  integratedOrDedicatedServerActive: boolean;
-  isSingleplayer: boolean;
-  worldLoaded: boolean;
-  dimension?: string;
-  difficulty?: string;
-  dayTime?: number;
-  gameTime?: number;
-  isRaining?: boolean;
-  isThundering?: boolean;
-  languageCode?: string;
-  serverSyncAvailable?: boolean;
-  remoteServerModVersion?: string;
-  integrations?: Record<string, boolean | string[]>;
-  modCount: number;
-  filteredModCount?: number;
-  mods?: McModInfo[];
 }
 
 export interface McClientOptions {
@@ -259,11 +224,20 @@ export class McHttpClient {
     }
 
     const body = parsed as Record<string, unknown>;
+    // Failures arrive as a non-200 status carrying the mod's InsightError code; the status is
+    // diagnostic, the code is what callers branch on.
     if (!res.ok || body.ok === false) {
       throw new McApiError(
         res.status,
         String(body.code ?? 'HTTP_ERROR'),
         String(body.error ?? `HTTP ${res.status} from ${endpoint}`),
+      );
+    }
+    if (body.ok !== true) {
+      throw new McApiError(
+        res.status,
+        'INVALID_RESPONSE',
+        `McInsight response from ${endpoint} did not declare ok:true (got HTTP ${res.status}).`,
       );
     }
     return body as T;
@@ -283,7 +257,7 @@ export class McHttpClient {
 
     const promise = (async () => {
       try {
-        const status = await this.get<McStatusResponse>('/api/v1/status');
+        const status = await this.get<McStatusResponse>(ENDPOINTS.status.path);
         const entry = {
           expiresAt: Date.now() + this.metadataTtlMs,
           modsDir: status.modsDir,
@@ -334,7 +308,7 @@ export class McHttpClient {
 
     const promise = (async () => {
       try {
-        const res = await this.get<{ mods: McModInfo[] }>('/api/v1/mods');
+        const res = await this.get<McModsResponse>(ENDPOINTS.mods.path);
         const map = new Map<string, string>();
         for (const m of res.mods ?? []) {
           map.set(m.id, m.version);

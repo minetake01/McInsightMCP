@@ -1,25 +1,5 @@
 import { McHttpClient } from '../client/mcClient.js';
-import { parseWithBuiltinModParser } from '../parsers/modParsers/index.js';
-import { LoadedModsVersionMap } from '../parsers/modVersion.js';
-import { parseNativeRecipe } from '../parsers/nativeParsers.js';
-
-export interface RawRecipeRecord {
-  recipeId?: string;
-  sourceRecipeIds?: string[];
-  recipeType?: string;
-  categoryUid?: string;
-  categoryTitle?: string;
-  modId?: string;
-  recipeClass?: string;
-  serializer?: string;
-  rawJson?: unknown;
-  pojoSnapshot?: unknown;
-  description?: string[];
-  vanillaResultPreview?: unknown;
-  inputs?: unknown[];
-  outputs?: unknown[];
-  catalysts?: unknown[];
-}
+import { ToolError } from '../api/result.js';
 
 export interface ToolPathDeps {
   mcClient: McHttpClient;
@@ -27,71 +7,17 @@ export interface ToolPathDeps {
   defaultGameDir?: string;
 }
 
+/**
+ * The text payload of a tool result.
+ *
+ * <p>Every tool answers JSON in one text block; structured content is a transport concern and the
+ * mod's own shapes are already JSON, so re-encoding them as MCP resources would only add a second
+ * representation to keep in sync.
+ */
 export function jsonText(data: unknown) {
   return {
     content: [{ type: 'text' as const, text: JSON.stringify(data) }],
   };
-}
-
-export type RecipeOrigin = 'recipe_manager' | 'jei' | 'rei' | 'emi';
-
-export function enrichRecipeList(
-  list: RawRecipeRecord[] | undefined,
-  origin: RecipeOrigin,
-  versions: LoadedModsVersionMap | undefined,
-  includeRaw: boolean,
-) {
-  if (!list) return [];
-  return list.map((rec) => {
-    const rType = rec.recipeType ?? rec.categoryUid ?? 'unknown';
-    const rawType =
-      typeof rec.rawJson === 'object' &&
-      rec.rawJson !== null &&
-      !Array.isArray(rec.rawJson) &&
-      typeof (rec.rawJson as Record<string, unknown>).type === 'string'
-        ? ((rec.rawJson as Record<string, unknown>).type as string)
-        : undefined;
-    const effectiveType = rawType ?? rec.serializer ?? rType;
-
-    const nativeParsed = rec.rawJson !== undefined ? parseNativeRecipe(effectiveType, rec.rawJson) : null;
-    const builtinModResult =
-      !nativeParsed && rec.rawJson !== undefined
-        ? parseWithBuiltinModParser(effectiveType, rec.rawJson, versions)
-        : {};
-
-    const hasViewerDescription = Array.isArray(rec.description) && rec.description.length > 0;
-    const hasUnparsed = Boolean(
-      nativeParsed?.hasUnparsedFields || builtinModResult.parsed?.hasUnparsedFields,
-    );
-    const parsedCleanly = Boolean(
-      ((nativeParsed && !nativeParsed.hasUnparsedFields) ||
-        (builtinModResult.parsed && !builtinModResult.parsed.hasUnparsedFields) ||
-        hasViewerDescription),
-    );
-
-    return {
-      origin,
-      recipeId: rec.recipeId,
-      sourceRecipeIds: rec.sourceRecipeIds,
-      recipeType: rType,
-      effectiveFormatType: effectiveType !== rType ? effectiveType : undefined,
-      categoryTitle: rec.categoryTitle,
-      modId: rec.modId,
-      recipeClass: rec.recipeClass,
-      serializer: rec.serializer,
-      nativeParsed: nativeParsed ?? undefined,
-      modParsed: builtinModResult.parsed ?? undefined,
-      parserVersionMismatch: builtinModResult.versionMismatch ?? undefined,
-      description: hasViewerDescription ? rec.description : undefined,
-      rawJson: !parsedCleanly || hasUnparsed || includeRaw ? rec.rawJson : undefined,
-      pojoSnapshot: rec.pojoSnapshot,
-      viewerIngredients:
-        origin !== 'recipe_manager'
-          ? { inputs: rec.inputs, outputs: rec.outputs, catalysts: rec.catalysts }
-          : undefined,
-      vanillaResultPreview: parsedCleanly ? undefined : rec.vanillaResultPreview,
-    };
-  });
 }
 
 export async function resolveModsDir(deps: ToolPathDeps, override?: string): Promise<string> {
@@ -102,7 +28,10 @@ export async function resolveModsDir(deps: ToolPathDeps, override?: string): Pro
     if (live) return live;
   }
   if (deps.defaultModsDir) return deps.defaultModsDir;
-  throw new Error('Could not determine mods directory. Either start Minecraft with McInsight or pass --mods-dir / modsDir.');
+  throw new ToolError(
+    'DATA_UNAVAILABLE',
+    'Could not determine the mods directory: the mod is not reachable and no --mods-dir was given.',
+  );
 }
 
 export async function resolveGameDir(deps: ToolPathDeps, override?: string): Promise<string> {
@@ -113,7 +42,10 @@ export async function resolveGameDir(deps: ToolPathDeps, override?: string): Pro
     if (live) return live;
   }
   if (deps.defaultGameDir) return deps.defaultGameDir;
-  throw new Error('Could not determine game directory. Pass --game-dir or start Minecraft with McInsight.');
+  throw new ToolError(
+    'DATA_UNAVAILABLE',
+    'Could not determine the game directory: the mod is not reachable and no --game-dir was given.',
+  );
 }
 
 export async function tryResolveGameDir(deps: ToolPathDeps, override?: string): Promise<string | undefined> {
@@ -125,3 +57,5 @@ export async function tryResolveGameDir(deps: ToolPathDeps, override?: string): 
   }
   return deps.defaultGameDir;
 }
+
+

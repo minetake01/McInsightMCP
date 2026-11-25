@@ -1,7 +1,10 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
+import { ToolError } from '../api/result.js';
 import { JarInspector } from '../decompiler/jarInspector.js';
-import { ToolPathDeps, jsonText, resolveGameDir, resolveModsDir, tryResolveGameDir } from './helpers.js';
+import { fetchClassIntrospection } from '../data/worldState.js';
+import { ToolPathDeps, resolveGameDir, resolveModsDir, tryResolveGameDir } from './helpers.js';
+import { toolResult } from './result.js';
 
 export interface CodeToolDeps extends ToolPathDeps {
   jarInspector: JarInspector;
@@ -66,7 +69,7 @@ export function registerCodeTools(server: McpServer, deps: CodeToolDeps): void {
       limit,
       modsDir,
       gameDir,
-    }) => {
+    }) => toolResult(async () => {
       const cleanQuery = nonEmpty(query);
       const cleanClass = nonEmpty(className);
       const cleanModOrJar = nonEmpty(modIdOrJar);
@@ -76,35 +79,33 @@ export function registerCodeTools(server: McpServer, deps: CodeToolDeps): void {
 
       if (action === 'reflect') {
         if (!cleanClass) {
-          throw new Error('className is required when action="reflect".');
+          throw new ToolError('INVALID_PARAMETER', 'className is required when action="reflect".');
         }
-        return jsonText(await deps.mcClient.get('/api/v1/introspect/class', { name: cleanClass }));
+        return fetchClassIntrospection(deps.mcClient, cleanClass);
       }
 
       if (action === 'decompile') {
         if (!cleanClass) {
-          throw new Error('className is required when action="decompile".');
+          throw new ToolError('INVALID_PARAMETER', 'className is required when action="decompile".');
         }
         const resolvedMods = await resolveModsDir(deps, modsDir);
-        return jsonText(
-          await deps.jarInspector.decompileClass(resolvedMods, cleanClass, decompileMode, cleanModOrJar),
-        );
+        return deps.jarInspector.decompileClass(resolvedMods, cleanClass, decompileMode, cleanModOrJar);
       }
 
       if (action === 'read_resource') {
         if (!cleanModOrJar) {
-          throw new Error('modIdOrJar is required when action="read_resource".');
+          throw new ToolError('INVALID_PARAMETER', 'modIdOrJar is required when action="read_resource".');
         }
         const resolvedMods = await resolveModsDir(deps, modsDir);
         if (cleanInternalPath) {
-          return jsonText(await deps.jarInspector.readJarResource(resolvedMods, cleanModOrJar, cleanInternalPath));
+          return deps.jarInspector.readJarResource(resolvedMods, cleanModOrJar, cleanInternalPath);
         }
-        return jsonText(await deps.jarInspector.listJarEntries(resolvedMods, cleanModOrJar, cleanPrefix, limit));
+        return deps.jarInspector.listJarEntries(resolvedMods, cleanModOrJar, cleanPrefix, limit);
       }
 
       if (action === 'trace_id') {
         if (!cleanQuery) {
-          throw new Error('query is required when action="trace_id".');
+          throw new ToolError('INVALID_PARAMETER', 'query is required when action="trace_id".');
         }
         const resolvedMods = await resolveModsDir(deps, modsDir);
         const resolvedGame = await tryResolveGameDir(deps, gameDir);
@@ -114,14 +115,14 @@ export function registerCodeTools(server: McpServer, deps: CodeToolDeps): void {
           gameDir: resolvedGame,
           limit,
         });
-        return jsonText({ ok: true, modsDir: resolvedMods, gameDir: resolvedGame, ...traced });
+        return { modsDir: resolvedMods, gameDir: resolvedGame, ...traced };
       }
 
       // action === 'search'
       if (!cleanQuery) {
-        throw new Error('query is required when action="search".');
+        throw new ToolError('INVALID_PARAMETER', 'query is required when action="search".');
       }
-      const out: Record<string, unknown> = { ok: true, query: cleanQuery, searchMode };
+      const out: Record<string, unknown> = { query: cleanQuery, searchMode };
       const tasks: Array<Promise<void>> = [];
       if (scope === 'jars' || scope === 'both') {
         tasks.push(
@@ -159,7 +160,7 @@ export function registerCodeTools(server: McpServer, deps: CodeToolDeps): void {
               if (!resolvedGame) {
                 out.packScripts = {
                   available: false,
-                  reason: 'Could not determine game directory. Pass --game-dir or gameDir to search pack scripts.',
+                  reason: 'Could not determine the game directory: the mod is not reachable and no gameDir was given.',
                 };
               } else {
                 out.gameDir = resolvedGame;
@@ -170,7 +171,10 @@ export function registerCodeTools(server: McpServer, deps: CodeToolDeps): void {
         );
       }
       await Promise.all(tasks);
-      return jsonText(out);
-    },
+      return out;
+    }),
   );
 }
+
+
+

@@ -1,7 +1,8 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
-import { McHttpClient, McStatusResponse } from '../client/mcClient.js';
-import { jsonText } from './helpers.js';
+import type { McHttpClient } from '../client/mcClient.js';
+import { fetchLookingAt, fetchPlayer, fetchScan, fetchStatus, filterMods } from '../data/worldState.js';
+import { toolResult } from './result.js';
 
 const EMPTY_SCHEMA = z.object({});
 
@@ -28,23 +29,14 @@ export function registerWorldStateTools(server: McpServer, mcClient: McHttpClien
     {
       title: 'Minecraft Runtime Status',
       description:
-        'Check connection to the running McInsight mod (NeoForge/Fabric), active world state, recipe viewer (JEI/EMI/REI) & guide integrations, and loaded mod list.',
+        'Check connection to the running McInsight mod (NeoForge/Fabric), active world state, recipe viewer availability and guide integrations, and loaded mod list. reports serverActive (whether a world owner is present) and the per-viewer availability map.',
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: STATUS_SCHEMA,
     },
-    async ({ includeMods, modFilter }) => {
-      const status = await mcClient.get<McStatusResponse>('/api/v1/status', {
-        includeMods: includeMods || Boolean(modFilter),
-      });
-      if (modFilter && status.mods) {
-        const needle = modFilter.toLowerCase();
-        status.mods = status.mods.filter(
-          (m) => m.id.toLowerCase().includes(needle) || m.name.toLowerCase().includes(needle),
-        );
-        status.filteredModCount = status.mods.length;
-      }
-      return jsonText(status);
-    },
+    async ({ includeMods, modFilter }) => toolResult(async () => {
+      const status = await fetchStatus(mcClient, includeMods || Boolean(modFilter));
+      return filterMods(status, modFilter);
+    }),
   );
 
   server.registerTool(
@@ -56,9 +48,7 @@ export function registerWorldStateTools(server: McpServer, mcClient: McHttpClien
       annotations: { readOnlyHint: true },
       inputSchema: EMPTY_SCHEMA,
     },
-    async () => {
-      return jsonText(await mcClient.get('/api/v1/player'));
-    },
+    async () => toolResult(async () => fetchPlayer(mcClient)),
   );
 
   server.registerTool(
@@ -70,11 +60,11 @@ export function registerWorldStateTools(server: McpServer, mcClient: McHttpClien
       annotations: { readOnlyHint: true },
       inputSchema: OBSERVE_WORLD_SCHEMA,
     },
-    async ({ mode, maxDistance, includeFluids, radius, filter }) => {
+    async ({ mode, maxDistance, includeFluids, radius, filter }) => toolResult(async () => {
       if (mode === 'area') {
-        return jsonText(await mcClient.get('/api/v1/scan', { radius, filter }));
+        return fetchScan(mcClient, { radius, filter });
       }
-      return jsonText(await mcClient.get('/api/v1/looking-at', { maxDistance, includeFluids }));
-    },
+      return fetchLookingAt(mcClient, { maxDistance, includeFluids });
+    }),
   );
 }
