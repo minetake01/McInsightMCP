@@ -1,8 +1,6 @@
 package net.minetake.mcinsight.compat.emi;
 
-import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
 import com.mojang.serialization.DataResult;
 import com.mojang.serialization.JsonOps;
 import dev.emi.emi.api.EmiApi;
@@ -12,36 +10,40 @@ import dev.emi.emi.api.recipe.EmiRecipeCategory;
 import dev.emi.emi.api.recipe.EmiRecipeManager;
 import dev.emi.emi.api.stack.EmiIngredient;
 import dev.emi.emi.api.stack.EmiStack;
-import net.minetake.mcinsight.client.ClientStateAccessor;
-import net.minetake.mcinsight.compat.IRecipeViewerBridge;
-import net.minetake.mcinsight.server.JsonUtil;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import net.minecraft.core.HolderLookup;
+import net.minetake.mcinsight.api.InsightError;
+import net.minetake.mcinsight.api.InsightException;
+import net.minetake.mcinsight.client.ClientStateAccessor;
+import net.minetake.mcinsight.compat.IRecipeViewerBridge;
+import net.minetake.mcinsight.compat.ViewerModel;
+import net.minetake.mcinsight.serial.JsonCodec;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.RegistryOps;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.Recipe;
 import net.minecraft.world.item.crafting.RecipeHolder;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.material.Fluid;
 
 public final class EmiBridgeImpl implements IRecipeViewerBridge {
 
-    private static volatile Field infoTextField;
-    private static volatile boolean infoTextFieldChecked;
+    private static volatile List<Field> infoTextFields;
 
-    private volatile JsonObject cachedCategories;
-    private final ConcurrentHashMap<ResourceLocation, List<JsonObject>> cachedWorkstations = new ConcurrentHashMap<>();
+    private volatile List<ViewerModel.Category> cachedCategories;
+    private final ConcurrentHashMap<String, EmiRecipeCategory> categoriesByUid = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, List<ViewerModel.Ingredient>> cachedWorkstations =
+        new ConcurrentHashMap<>();
 
     @Override
-    public String getViewerName() {
+    public String viewerName() {
         return "emi";
     }
 
@@ -57,288 +59,365 @@ public final class EmiBridgeImpl implements IRecipeViewerBridge {
     @Override
     public void invalidateCache() {
         cachedCategories = null;
+        categoriesByUid.clear();
         cachedWorkstations.clear();
     }
 
     @Override
-    public JsonObject listCategories() {
-        JsonObject existing = cachedCategories;
+    public List<ViewerModel.Category> listCategories() {
+        List<ViewerModel.Category> existing = cachedCategories;
         if (existing != null) {
             return existing;
         }
-        EmiRecipeManager rm = EmiApi.getRecipeManager();
-        if (rm == null) {
-            return JsonUtil.errorObject("VIEWER_UNAVAILABLE", "EMI recipe manager is not ready.");
-        }
-        RegistryOps<JsonElement> jsonOps = currentJsonOps();
-        JsonArray categories = new JsonArray();
-        for (EmiRecipeCategory cat : rm.getCategories()) {
+        EmiRecipeManager recipeManager = requireManager();
+        List<ViewerModel.Category> out = new ArrayList<>();
+        for (EmiRecipeCategory category : recipeManager.getCategories()) {
             try {
-                JsonObject obj = new JsonObject();
-                ResourceLocation uid = cat.getId();
-                obj.addProperty("uid", uid.toString());
-                obj.addProperty("modId", uid.getNamespace());
-                Component name = cat.getName();
-                obj.addProperty("title", name != null ? name.getString() : uid.toString());
-
-                JsonArray catalysts = new JsonArray();
-                for (EmiIngredient ws : rm.getWorkstations(cat)) {
-                    catalysts.add(serializeIngredient(ws, jsonOps));
-                }
-                obj.add("catalysts", catalysts);
-                categories.add(obj);
-            } catch (Exception ignored) {}
+                ResourceLocation uid = category.getId();
+                out.add(new ViewerModel.Category(
+                    uid.toString(),
+                    uid.getNamespace(),
+                    title(category),
+                    workstations(category)
+                ));
+                categoriesByUid.put(uid.toString(), category);
+            } catch (Exception ignored) {
+                // A third-party category that cannot describe itself must not hide the others.
+            }
         }
-
-        JsonObject out = new JsonObject();
-        out.addProperty("viewer", "emi");
-        out.addProperty("count", categories.size());
-        out.add("categories", categories);
-        cachedCategories = out;
-        return out;
+        List<ViewerModel.Category> frozen = List.copyOf(out);
+        cachedCategories = frozen;
+        return frozen;
     }
 
     @Override
-    public List<String> getIngredientInfo(String itemId) {
-        if (itemId == null || itemId.isBlank()) {
-            return List.of();
+    public List<ViewerModel.Recipe> recipesOf(ViewerModel.Category category) {
+        EmiRecipeManager recipeManager = requireManager();
+        EmiRecipeCategory resolved = categoriesByUid.get(category.uid());
+        if (resolved == null) {
+            resolved = resolveCategory(recipeManager, category.uid());
         }
-        EmiRecipeManager rm = EmiApi.getRecipeManager();
-        if (rm == null) {
-            return List.of();
+        if (resolved == null) {
+            throw new InsightException(InsightError.NOT_FOUND, "Unknown EMI category: " + category.uid());
         }
-        String norm = itemId.trim().toLowerCase(Locale.ROOT);
-        Set<String> lines = new LinkedHashSet<>();
+        List<ViewerModel.Ingredient> workstations = category.workstations() != null
+            ? category.workstations()
+            : workstations(resolved);
+        RegistryOps<JsonElement> ops = jsonOps();
+        List<ViewerModel.Recipe> out = new ArrayList<>();
+        for (EmiRecipe recipe : recipeManager.getRecipes(resolved)) {
+            try {
+                out.add(translate(resolved, recipe, workstations, ops));
+            } catch (Exception ignored) {
+                // One unreadable recipe must not remove the rest of the category.
+            }
+        }
+        return List.copyOf(out);
+    }
 
-        for (EmiRecipe recipe : rm.getRecipes()) {
-            if (!(recipe instanceof EmiInfoRecipe info)) {
+    @Override
+    public List<String> getIngredientInfo(String ingredientId) {
+        if (ingredientId == null || ingredientId.isBlank()) {
+            return List.of();
+        }
+        ResourceLocation target = ResourceLocation.tryParse(ingredientId.trim());
+        if (target == null) {
+            return List.of();
+        }
+        EmiRecipeManager recipeManager = EmiApi.getRecipeManager();
+        if (recipeManager == null) {
+            return List.of();
+        }
+        Set<String> lines = new LinkedHashSet<>();
+        for (EmiRecipe recipe : recipeManager.getRecipes()) {
+            if (!(recipe instanceof EmiInfoRecipe info) || !mentionsIngredient(info, target)) {
                 continue;
             }
-            if (!matchesIngredientList(info.getInputs(), norm)) {
-                continue;
-            }
-            for (String line : extractInfoTexts(info)) {
+            for (String line : infoTexts(info)) {
                 if (!line.isBlank()) {
                     lines.add(line);
                 }
             }
         }
-        return new ArrayList<>(lines);
+        return List.copyOf(lines);
     }
 
-    @Override
-    public JsonObject queryRecipes(
-        String itemQuery,
-        String role,
-        String categoryUid,
-        String modId,
-        int limit,
-        int offset,
-        HolderLookup.Provider registries
-    ) {
-        EmiRecipeManager rm = EmiApi.getRecipeManager();
-        if (rm == null) {
-            return JsonUtil.errorObject("VIEWER_UNAVAILABLE", "EMI recipe manager is not ready.");
+    private static EmiRecipeManager requireManager() {
+        EmiRecipeManager recipeManager = EmiApi.getRecipeManager();
+        if (recipeManager == null) {
+            throw new InsightException(InsightError.VIEWER_UNAVAILABLE, "EMI recipe manager is not ready.");
         }
-        RegistryOps<JsonElement> jsonOps = registries != null
-            ? registries.createSerializationContext(JsonOps.INSTANCE)
-            : currentJsonOps();
+        return recipeManager;
+    }
 
-        String normCat = categoryUid == null ? "" : categoryUid.trim().toLowerCase(Locale.ROOT);
-        String normMod = modId == null ? "" : modId.trim().toLowerCase(Locale.ROOT);
-        String normItem = itemQuery == null ? "" : itemQuery.trim().toLowerCase(Locale.ROOT);
-        String normRole = role == null ? "any" : role.trim().toLowerCase(Locale.ROOT);
-
-        List<EmiRecipeCategory> categories = new ArrayList<>();
-        for (EmiRecipeCategory cat : rm.getCategories()) {
-            ResourceLocation uid = cat.getId();
-            if (!normCat.isEmpty() && !uid.toString().toLowerCase(Locale.ROOT).equals(normCat)) {
-                continue;
+    private static EmiRecipeCategory resolveCategory(EmiRecipeManager recipeManager, String categoryUid) {
+        ResourceLocation uid = ResourceLocation.tryParse(categoryUid);
+        if (uid == null) {
+            return null;
+        }
+        for (EmiRecipeCategory category : recipeManager.getCategories()) {
+            if (uid.equals(category.getId())) {
+                return category;
             }
-            if (!normMod.isEmpty() && !uid.getNamespace().toLowerCase(Locale.ROOT).equals(normMod)) {
-                boolean hasModRecipe = false;
-                for (EmiRecipe r : rm.getRecipes(cat)) {
-                    ResourceLocation rId = r.getId();
-                    if (rId != null && rId.getNamespace().toLowerCase(Locale.ROOT).equals(normMod)) {
-                        hasModRecipe = true;
-                        break;
-                    }
-                }
-                if (!hasModRecipe) {
+        }
+        return null;
+    }
+
+    private static String title(EmiRecipeCategory category) {
+        Component name = category.getName();
+        return name != null ? name.getString() : category.getId().toString();
+    }
+
+    private List<ViewerModel.Ingredient> workstations(EmiRecipeCategory category) {
+        return cachedWorkstations.computeIfAbsent(category.getId().toString(), ignored -> {
+            try {
+                return List.copyOf(ingredients(requireManager().getWorkstations(category), jsonOps()));
+            } catch (Exception e) {
+                return List.of();
+            }
+        });
+    }
+
+    private static ViewerModel.Recipe translate(
+        EmiRecipeCategory category,
+        EmiRecipe recipe,
+        List<ViewerModel.Ingredient> workstations,
+        RegistryOps<JsonElement> ops
+    ) {
+        ResourceLocation categoryUid = category.getId();
+        ResourceLocation recipeId = recipeId(recipe);
+        RecipeHolder<?> backing = backingRecipe(recipe);
+        List<String> description = recipe instanceof EmiInfoRecipe info ? infoTexts(info) : List.of();
+        JsonElement rawJson = backing != null ? rawJson(backing.value(), ops) : null;
+
+        return new ViewerModel.Recipe(
+            categoryUid.toString(),
+            title(category),
+            recipeId != null ? recipeId.getNamespace() : categoryUid.getNamespace(),
+            recipeId != null ? recipeId.toString() : null,
+            List.of(),
+            recipe.getClass().getName(),
+            slots(recipe.getInputs(), ops),
+            outputSlots(recipe.getOutputs(), ops),
+            ingredients(recipe.getCatalysts(), ops),
+            workstations,
+            rawJson,
+            rawJson == null ? JsonCodec.snapshotObject(recipe, 3, ops) : null,
+            description,
+            ViewerModel.SlotGranularity.SLOTS
+        );
+    }
+
+    private static ResourceLocation recipeId(EmiRecipe recipe) {
+        ResourceLocation id = recipe.getId();
+        if (id != null) {
+            return id;
+        }
+        RecipeHolder<?> backing = backingRecipe(recipe);
+        return backing != null ? backing.id() : null;
+    }
+
+    private static RecipeHolder<?> backingRecipe(EmiRecipe recipe) {
+        try {
+            return recipe.getBackingRecipe();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static List<String> infoTexts(EmiInfoRecipe info) {
+        List<String> lines = new ArrayList<>();
+        for (Field field : infoTextFields()) {
+            try {
+                Object value = field.get(info);
+                if (!(value instanceof List<?> list)) {
                     continue;
                 }
-            }
-            categories.add(cat);
-        }
-
-        JsonArray items = new JsonArray();
-        int matched = 0;
-        boolean hasMore = false;
-
-        for (EmiRecipeCategory cat : categories) {
-            if (hasMore) {
-                break;
-            }
-            List<JsonObject> workstations = cachedWorkstations.computeIfAbsent(cat.getId(), ignored -> {
-                List<JsonObject> list = new ArrayList<>();
-                try {
-                    for (EmiIngredient ws : rm.getWorkstations(cat)) {
-                        list.add(serializeIngredient(ws, jsonOps));
+                for (Object element : list) {
+                    if (element instanceof Component component) {
+                        lines.add(component.getString());
+                    } else if (element instanceof FormattedCharSequence sequence) {
+                        lines.add(flatten(sequence));
                     }
-                } catch (Exception ignored2) {}
-                return List.copyOf(list);
-            });
-
-            List<EmiRecipe> recipes;
-            try {
-                recipes = rm.getRecipes(cat);
+                }
             } catch (Exception ignored) {
+                // A field that refuses access simply contributes nothing.
+            }
+        }
+        return List.copyOf(lines);
+    }
+
+    /**
+     * EMI keeps the info text in a private list and offers no accessor for it, so the fields able to
+     * hold text are resolved once and read reflectively.
+     */
+    private static List<Field> infoTextFields() {
+        List<Field> existing = infoTextFields;
+        if (existing != null) {
+            return existing;
+        }
+        List<Field> found = new ArrayList<>();
+        for (Field field : EmiInfoRecipe.class.getDeclaredFields()) {
+            if (!List.class.isAssignableFrom(field.getType())) {
                 continue;
             }
-
-            for (EmiRecipe recipe : recipes) {
-                try {
-                    ResourceLocation recId = recipe.getId();
-                    if (!normMod.isEmpty()) {
-                        boolean catMatch = cat.getId().getNamespace().toLowerCase(Locale.ROOT).equals(normMod);
-                        boolean recMatch = recId != null && recId.getNamespace().toLowerCase(Locale.ROOT).equals(normMod);
-                        if (!catMatch && !recMatch) {
-                            continue;
-                        }
-                    }
-
-                    List<EmiIngredient> inputs = recipe.getInputs();
-                    List<EmiStack> outputs = recipe.getOutputs();
-                    List<EmiIngredient> catalysts = recipe.getCatalysts();
-
-                    if (!normItem.isEmpty() && !matchesRecipeFilter(inputs, outputs, catalysts, normItem, normRole)) {
-                        continue;
-                    }
-
-                    if (matched < offset) {
-                        matched++;
-                        continue;
-                    }
-                    if (items.size() >= limit) {
-                        hasMore = true;
-                        break;
-                    }
-
-                    items.add(serializeEmiRecipe(cat, recipe, inputs, outputs, catalysts, workstations, jsonOps));
-                    matched++;
-                } catch (Exception ignored) {}
+            if (field.trySetAccessible()) {
+                found.add(field);
             }
         }
-
-        JsonObject out = new JsonObject();
-        out.addProperty("viewer", "emi");
-        out.addProperty("returned", items.size());
-        out.addProperty("hasMore", hasMore);
-        out.add("recipes", items);
-        return out;
+        List<Field> frozen = List.copyOf(found);
+        infoTextFields = frozen;
+        return frozen;
     }
 
-    private JsonObject serializeEmiRecipe(
-        EmiRecipeCategory cat,
-        EmiRecipe recipe,
-        List<EmiIngredient> inputs,
-        List<EmiStack> outputs,
-        List<EmiIngredient> recipeCatalysts,
-        List<JsonObject> categoryWorkstations,
-        RegistryOps<JsonElement> jsonOps
-    ) {
-        JsonObject obj = new JsonObject();
-        ResourceLocation catUid = cat.getId();
-        obj.addProperty("categoryUid", catUid.toString());
-        Component catName = cat.getName();
-        obj.addProperty("categoryTitle", catName != null ? catName.getString() : catUid.toString());
-        obj.addProperty("modId", catUid.getNamespace());
-        obj.addProperty("recipeClass", recipe.getClass().getName());
+    private static String flatten(FormattedCharSequence sequence) {
+        StringBuilder builder = new StringBuilder();
+        sequence.accept((index, style, codePoint) -> {
+            builder.appendCodePoint(codePoint);
+            return true;
+        });
+        return builder.toString();
+    }
 
-        ResourceLocation recId = recipe.getId();
-        RecipeHolder<?> backing = null;
+    private static JsonElement rawJson(Recipe<?> recipe, RegistryOps<JsonElement> ops) {
+        if (recipe == null || ops == null) {
+            return null;
+        }
         try {
-            backing = recipe.getBackingRecipe();
-        } catch (Exception ignored) {}
-        if (recId == null && backing != null) {
-            recId = backing.id();
+            DataResult<JsonElement> encoded = Recipe.CODEC.encodeStart(ops, recipe);
+            return encoded.result().orElse(null);
+        } catch (Exception e) {
+            return null;
         }
-        if (recId != null) {
-            obj.addProperty("recipeId", recId.toString());
-        }
+    }
 
-        JsonArray inArr = new JsonArray();
-        for (EmiIngredient ing : inputs) {
-            inArr.add(serializeIngredient(ing, jsonOps));
+    private static List<ViewerModel.Slot> slots(List<EmiIngredient> ingredients, RegistryOps<JsonElement> ops) {
+        if (ingredients == null) {
+            return List.of();
         }
-        obj.add("inputs", inArr);
+        List<ViewerModel.Slot> slots = new ArrayList<>(ingredients.size());
+        for (EmiIngredient ingredient : ingredients) {
+            slots.add(new ViewerModel.Slot(alternatives(ingredient, ops)));
+        }
+        return List.copyOf(slots);
+    }
 
-        JsonArray outArr = new JsonArray();
-        for (EmiStack st : outputs) {
-            outArr.add(serializeStack(st, st.getAmount(), jsonOps));
+    private static List<ViewerModel.Slot> outputSlots(List<EmiStack> stacks, RegistryOps<JsonElement> ops) {
+        if (stacks == null) {
+            return List.of();
         }
-        obj.add("outputs", outArr);
+        List<ViewerModel.Slot> slots = new ArrayList<>(stacks.size());
+        for (EmiStack stack : stacks) {
+            slots.add(new ViewerModel.Slot(alternatives(stack, ops)));
+        }
+        return List.copyOf(slots);
+    }
 
-        JsonArray catArr = new JsonArray();
-        for (EmiIngredient ing : recipeCatalysts) {
-            catArr.add(serializeIngredient(ing, jsonOps));
+    private static List<ViewerModel.Ingredient> alternatives(EmiIngredient ingredient, RegistryOps<JsonElement> ops) {
+        if (ingredient == null) {
+            return List.of();
         }
-        for (JsonObject ws : categoryWorkstations) {
-            catArr.add(ws);
-        }
-        obj.add("catalysts", catArr);
-
-        boolean encodedRaw = false;
-        if (backing != null && jsonOps != null) {
+        List<EmiStack> stacks = ingredient.getEmiStacks();
+        List<ViewerModel.Ingredient> out = new ArrayList<>();
+        long amount = ingredient.getAmount();
+        for (EmiStack stack : stacks) {
+            if (stack == null || stack.isEmpty()) {
+                continue;
+            }
             try {
-                Recipe<?> mcRecipe = backing.value();
-                DataResult<JsonElement> encoded = Recipe.CODEC.encodeStart(jsonOps, mcRecipe);
-                Optional<JsonElement> res = encoded.result();
-                if (res.isPresent()) {
-                    obj.add("rawJson", res.get());
-                    encodedRaw = true;
-                }
-            } catch (Exception ignored) {}
-        }
-        if (!encodedRaw && recipe instanceof EmiInfoRecipe info) {
-            JsonArray descArr = new JsonArray();
-            for (String line : extractInfoTexts(info)) {
-                if (!line.isBlank()) {
-                    descArr.add(line);
-                }
+                out.add(ingredientOf(stack, amount, ops));
+            } catch (Exception ignored) {
+                // A stack that cannot describe itself is not an alternative.
             }
-            obj.add("description", descArr);
-        } else if (!encodedRaw) {
-            obj.add("pojoSnapshot", JsonUtil.snapshotObject(recipe, 3, jsonOps));
         }
-        return obj;
+        return List.copyOf(out);
     }
 
-    private static boolean matchesRecipeFilter(
-        List<EmiIngredient> inputs,
-        List<EmiStack> outputs,
-        List<EmiIngredient> catalysts,
-        String normItem,
-        String normRole
+    private static List<ViewerModel.Ingredient> ingredients(
+        List<EmiIngredient> ingredients,
+        RegistryOps<JsonElement> ops
     ) {
-        boolean checkIn = "any".equals(normRole) || "input".equals(normRole);
-        boolean checkOut = "any".equals(normRole) || "output".equals(normRole);
-        boolean checkCat = "any".equals(normRole) || "catalyst".equals(normRole);
-
-        if (checkIn && matchesIngredientList(inputs, normItem)) return true;
-        if (checkOut) {
-            for (EmiStack st : outputs) {
-                if (stackMatches(st, normItem)) return true;
-            }
+        if (ingredients == null) {
+            return List.of();
         }
-        if (checkCat && matchesIngredientList(catalysts, normItem)) return true;
-        return false;
+        List<ViewerModel.Ingredient> out = new ArrayList<>();
+        for (EmiIngredient ingredient : ingredients) {
+            out.addAll(alternatives(ingredient, ops));
+        }
+        return List.copyOf(out);
     }
 
-    private static boolean matchesIngredientList(List<EmiIngredient> list, String normItem) {
-        for (EmiIngredient ing : list) {
-            for (EmiStack st : ing.getEmiStacks()) {
-                if (stackMatches(st, normItem)) {
+    private static ViewerModel.Ingredient ingredientOf(EmiStack stack, long amount, RegistryOps<JsonElement> ops) {
+        ItemStack itemStack = stack.getItemStack();
+        Fluid fluid = fluidOf(stack);
+        ResourceLocation id = stack.getId();
+        long effectiveAmount = amount > 0 ? amount : stack.getAmount();
+        return new ViewerModel.Ingredient(
+            typeName(stack, itemStack, fluid),
+            id != null ? id.toString() : null,
+            displayName(stack),
+            effectiveAmount > 0 ? effectiveAmount : null,
+            id != null ? id.getNamespace() : null,
+            tagsOf(itemStack, fluid),
+            componentsOf(itemStack, ops)
+        );
+    }
+
+    private static Fluid fluidOf(EmiStack stack) {
+        try {
+            return stack.getKeyOfType(Fluid.class);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static String typeName(EmiStack stack, ItemStack itemStack, Fluid fluid) {
+        if (!itemStack.isEmpty()) {
+            return "item";
+        }
+        if (fluid != null) {
+            return "fluid";
+        }
+        Object key = stack.getKey();
+        Class<?> marker = key != null ? key.getClass() : stack.getClass();
+        return "custom:" + marker.getSimpleName();
+    }
+
+    private static String displayName(EmiStack stack) {
+        try {
+            Component name = stack.getName();
+            return name != null ? name.getString() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static List<String> tagsOf(ItemStack itemStack, Fluid fluid) {
+        if (!itemStack.isEmpty()) {
+            return itemStack.getTags().map(tag -> tag.location().toString()).sorted().toList();
+        }
+        if (fluid != null) {
+            return BuiltInRegistries.FLUID.wrapAsHolder(fluid)
+                .tags()
+                .map(tag -> tag.location().toString())
+                .sorted()
+                .toList();
+        }
+        return List.of();
+    }
+
+    private static JsonElement componentsOf(ItemStack itemStack, RegistryOps<JsonElement> ops) {
+        if (itemStack.isEmpty()) {
+            return null;
+        }
+        var serialized = JsonCodec.serializeItemStack(itemStack, ops);
+        return serialized.has("components") ? serialized.get("components") : null;
+    }
+
+    private static boolean mentionsIngredient(EmiInfoRecipe info, ResourceLocation target) {
+        for (EmiIngredient ingredient : info.getInputs()) {
+            for (EmiStack stack : ingredient.getEmiStacks()) {
+                if (stack != null && target.equals(stack.getId())) {
                     return true;
                 }
             }
@@ -346,152 +425,8 @@ public final class EmiBridgeImpl implements IRecipeViewerBridge {
         return false;
     }
 
-    private static boolean stackMatches(EmiStack st, String normItem) {
-        if (st == null || st.isEmpty()) {
-            return false;
-        }
-        if (normItem.startsWith("#")) {
-            String tagNeedle = normItem.substring(1);
-            ItemStack item = st.getItemStack();
-            if (!item.isEmpty() && item.getTags().anyMatch(tk -> matchesTagNeedle(tk.location(), tagNeedle))) {
-                return true;
-            }
-            Fluid fluid = st.getKeyOfType(Fluid.class);
-            if (fluid != null && fluid.builtInRegistryHolder().tags().anyMatch(tk -> matchesTagNeedle(tk.location(), tagNeedle))) {
-                return true;
-            }
-            return false;
-        }
-        ResourceLocation id = st.getId();
-        if (id != null && id.toString().toLowerCase(Locale.ROOT).contains(normItem)) {
-            return true;
-        }
-        Component name = st.getName();
-        return name != null && name.getString().toLowerCase(Locale.ROOT).contains(normItem);
-    }
-
-    private static boolean matchesTagNeedle(ResourceLocation tagRl, String tagNeedle) {
-        String s = tagRl.toString().toLowerCase(Locale.ROOT);
-        return tagNeedle.contains(":") ? s.equals(tagNeedle) : s.contains(tagNeedle);
-    }
-
-    private static JsonObject serializeIngredient(EmiIngredient ing, RegistryOps<JsonElement> jsonOps) {
-        List<EmiStack> stacks = ing.getEmiStacks();
-        if (stacks.isEmpty()) {
-            return serializeStack(EmiStack.EMPTY, ing.getAmount(), jsonOps);
-        }
-        EmiStack first = stacks.get(0);
-        long amt = ing.getAmount() > 0 ? ing.getAmount() : first.getAmount();
-        JsonObject obj = serializeStack(first, amt, jsonOps);
-        if (ing.getChance() > 0f && ing.getChance() < 1f) {
-            obj.addProperty("chance", ing.getChance());
-        }
-        if (stacks.size() > 1) {
-            JsonArray alts = new JsonArray();
-            int count = Math.min(stacks.size(), 16);
-            for (int i = 0; i < count; i++) {
-                ResourceLocation altId = stacks.get(i).getId();
-                if (altId != null) {
-                    alts.add(altId.toString());
-                }
-            }
-            if (!alts.isEmpty()) {
-                obj.add("alternatives", alts);
-                obj.addProperty("alternativeCount", stacks.size());
-            }
-        }
-        return obj;
-    }
-
-    private static JsonObject serializeStack(EmiStack st, long amount, RegistryOps<JsonElement> jsonOps) {
-        JsonObject obj = new JsonObject();
-        if (st == null || st.isEmpty()) {
-            obj.addProperty("ingredientType", "emi:empty");
-            obj.addProperty("id", "minecraft:air");
-            obj.addProperty("amount", 0);
-            return obj;
-        }
-        ItemStack mcItem = st.getItemStack();
-        Fluid mcFluid = st.getKeyOfType(Fluid.class);
-        String ingType;
-        if (!mcItem.isEmpty()) {
-            ingType = "minecraft:item";
-        } else if (mcFluid != null) {
-            ingType = "minecraft:fluid";
-        } else {
-            Object key = st.getKey();
-            ingType = "emi:" + (key != null ? key.getClass().getSimpleName().toLowerCase(Locale.ROOT) : "custom");
-        }
-        obj.addProperty("ingredientType", ingType);
-
-        ResourceLocation rl = st.getId();
-        obj.addProperty("id", rl != null ? rl.toString() : "unknown:unknown");
-        if (rl != null) {
-            obj.addProperty("modId", rl.getNamespace());
-        }
-        try {
-            Component name = st.getName();
-            if (name != null) {
-                obj.addProperty("displayName", name.getString());
-            }
-        } catch (Exception ignored) {}
-        obj.addProperty("amount", amount);
-        if (st.getChance() > 0f && st.getChance() < 1f) {
-            obj.addProperty("chance", st.getChance());
-        }
-
-        if (!mcItem.isEmpty()) {
-            JsonObject itemJson = JsonUtil.serializeItemStack(mcItem, jsonOps);
-            if (itemJson.has("tags")) {
-                obj.add("tags", itemJson.get("tags"));
-            }
-            if (itemJson.has("components")) {
-                obj.add("components", itemJson.get("components"));
-            }
-        } else if (mcFluid != null) {
-            JsonArray tags = new JsonArray();
-            mcFluid.builtInRegistryHolder().tags().map(tk -> tk.location().toString()).sorted().forEach(tags::add);
-            if (!tags.isEmpty()) {
-                obj.add("tags", tags);
-            }
-        }
-        return obj;
-    }
-
-    private static List<String> extractInfoTexts(EmiInfoRecipe info) {
-        if (!infoTextFieldChecked) {
-            for (Field f : EmiInfoRecipe.class.getDeclaredFields()) {
-                if (List.class.isAssignableFrom(f.getType())) {
-                    f.setAccessible(true);
-                    infoTextField = f;
-                    break;
-                }
-            }
-            infoTextFieldChecked = true;
-        }
-        Field f = infoTextField;
-        if (f == null) {
-            return List.of();
-        }
-        try {
-            Object val = f.get(info);
-            if (val instanceof List<?> rawList) {
-                List<String> out = new ArrayList<>();
-                for (Object item : rawList) {
-                    if (item instanceof Component comp) {
-                        out.add(comp.getString());
-                    }
-                }
-                return out;
-            }
-        } catch (Exception ignored) {}
-        return List.of();
-    }
-
-    private static RegistryOps<JsonElement> currentJsonOps() {
-        var level = ClientStateAccessor.getLevel();
-        return level != null
-            ? level.registryAccess().createSerializationContext(JsonOps.INSTANCE)
-            : null;
+    private static RegistryOps<JsonElement> jsonOps() {
+        Level level = ClientStateAccessor.getLevel();
+        return level != null ? level.registryAccess().createSerializationContext(JsonOps.INSTANCE) : null;
     }
 }

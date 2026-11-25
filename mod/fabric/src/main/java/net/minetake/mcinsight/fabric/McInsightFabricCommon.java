@@ -2,10 +2,10 @@ package net.minetake.mcinsight.fabric;
 
 import net.minetake.mcinsight.McInsightCommon;
 import net.minetake.mcinsight.network.InsightHelloPayload;
+import net.minetake.mcinsight.network.InsightNetworking;
 import net.minetake.mcinsight.network.InsightRequestPayload;
 import net.minetake.mcinsight.network.InsightResponsePayload;
 import net.minetake.mcinsight.network.ServerPacketHandler;
-import net.minetake.mcinsight.platform.Services;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
@@ -13,8 +13,8 @@ import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 
 /**
- * Shared Fabric entrypoint that registers custom packet codecs and server-side packet/lifecycle hooks
- * once across both integrated (client) and dedicated server environments.
+ * Shared Fabric entrypoint: registers the payload codecs and the server-side lifecycle hooks once,
+ * for both the integrated and the dedicated environment.
  */
 public final class McInsightFabricCommon implements ModInitializer {
 
@@ -26,22 +26,12 @@ public final class McInsightFabricCommon implements ModInitializer {
 
         ServerPlayNetworking.registerGlobalReceiver(
             InsightRequestPayload.TYPE,
-            (payload, context) -> ServerPacketHandler.handleRequest(
-                context.player(),
-                payload,
-                McInsightCommon.getExecutor()
-            )
+            (payload, context) -> InsightNetworking.onRequest(context.player(), payload)
         );
 
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
             if (ServerPlayNetworking.canSend(handler.getPlayer(), InsightHelloPayload.TYPE)) {
-                sender.sendPacket(
-                    new InsightHelloPayload(
-                        InsightHelloPayload.PROTOCOL_VERSION,
-                        Services.PLATFORM.getLoaderName(),
-                        "worldgen,loot,datamaps,advancements,scan_block_entities,looking_at_block_entity"
-                    )
-                );
+                sender.sendPacket(InsightNetworking.hello());
             }
         });
 

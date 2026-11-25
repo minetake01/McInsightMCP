@@ -4,7 +4,7 @@ import dev.emi.emi.api.EmiEntrypoint;
 import dev.emi.emi.api.EmiPlugin;
 import dev.emi.emi.api.EmiRegistry;
 import net.minetake.mcinsight.McInsightConstants;
-import net.minetake.mcinsight.compat.IntegrationRegistry;
+import net.minetake.mcinsight.compat.ViewerRegistry;
 
 @EmiEntrypoint
 public final class EmiPluginEntrypoint implements EmiPlugin {
@@ -14,7 +14,7 @@ public final class EmiPluginEntrypoint implements EmiPlugin {
     @Override
     public void register(EmiRegistry registry) {
         BRIDGE.invalidateCache();
-        IntegrationRegistry.registerRecipeViewerBridge(BRIDGE);
+        ViewerRegistry.register(BRIDGE);
         McInsightConstants.LOG.info("McInsight EMI integration registered.");
     }
 }

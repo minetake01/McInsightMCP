@@ -1,19 +1,23 @@
 package net.minetake.mcinsight;
 
+import java.util.concurrent.Executor;
+import net.minetake.mcinsight.cache.CacheGenerations;
 import net.minetake.mcinsight.config.McInsightConfig;
-import net.minetake.mcinsight.introspect.InsightCacheManager;
-import net.minetake.mcinsight.network.RemoteServerBridge;
+import net.minetake.mcinsight.data.ServerSync;
+import net.minetake.mcinsight.game.MainThreadExecutor;
+import net.minetake.mcinsight.http.InsightHttpServer;
 import net.minetake.mcinsight.network.ServerPacketHandler;
 import net.minetake.mcinsight.platform.Services;
-import net.minetake.mcinsight.server.InsightHttpServer;
-import net.minetake.mcinsight.server.MainThreadExecutor;
-import java.util.concurrent.Executor;
 import net.minecraft.server.MinecraftServer;
 
 public final class McInsightCommon {
 
     private static final MainThreadExecutor EXECUTOR = new MainThreadExecutor();
     private static InsightHttpServer httpServer;
+
+    static {
+        InsightHandlers.registerAll();
+    }
 
     private McInsightCommon() {}
 
@@ -36,10 +40,14 @@ public final class McInsightCommon {
         );
     }
 
+    /**
+     * The dedicated server only answers sync requests; it never opens the loopback HTTP port.
+     * The configuration is still written so a pack author can place it once.
+     */
     public static synchronized void initServer() {
         McInsightConfig.loadOrCreate();
         McInsightConstants.LOG.info(
-            "Initialized {} v{} dedicated server packet handler on {} ({}; HTTP API disabled on dedicated server)",
+            "Initialized {} v{} dedicated server sync on {} ({})",
             McInsightConstants.MOD_NAME,
             McInsightConstants.MOD_VERSION,
             Services.PLATFORM.getLoaderName(),
@@ -49,41 +57,41 @@ public final class McInsightCommon {
 
     public static void attachClientExecutor(Executor clientExecutor) {
         EXECUTOR.setClientExecutor(clientExecutor);
-        InsightCacheManager.invalidateAll();
+        CacheGenerations.invalidateAll();
     }
 
     public static void attachServer(MinecraftServer server) {
         EXECUTOR.setActiveServer(server);
-        InsightCacheManager.invalidateAll();
+        CacheGenerations.invalidateAll();
     }
 
     public static void detachServer(MinecraftServer server) {
         if (EXECUTOR.getActiveServer() == server) {
             EXECUTOR.setActiveServer(null);
             ServerPacketHandler.clearRateLimits();
-            InsightCacheManager.invalidateAll();
+            CacheGenerations.invalidateAll();
         }
     }
 
     public static void onClientDisconnect() {
-        RemoteServerBridge.reset();
-        InsightCacheManager.invalidateDataCaches();
+        ServerSync.reset();
+        CacheGenerations.invalidateData();
     }
 
     public static void invalidateDataCaches() {
-        InsightCacheManager.invalidateDataCaches();
+        CacheGenerations.invalidateData();
     }
 
     public static void invalidateResourceCaches() {
-        InsightCacheManager.invalidateResourceCaches();
+        CacheGenerations.invalidateResource();
     }
 
     public static synchronized void shutdown() {
         EXECUTOR.setClientExecutor(null);
         EXECUTOR.setActiveServer(null);
-        RemoteServerBridge.reset();
+        ServerSync.reset();
         ServerPacketHandler.clearRateLimits();
-        InsightCacheManager.invalidateAll();
+        CacheGenerations.invalidateAll();
         if (httpServer != null) {
             httpServer.stop();
             httpServer = null;

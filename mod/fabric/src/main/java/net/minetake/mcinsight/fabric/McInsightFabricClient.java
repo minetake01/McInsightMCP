@@ -3,8 +3,8 @@ package net.minetake.mcinsight.fabric;
 import net.minetake.mcinsight.McInsightCommon;
 import net.minetake.mcinsight.McInsightConstants;
 import net.minetake.mcinsight.network.InsightHelloPayload;
+import net.minetake.mcinsight.network.InsightNetworking;
 import net.minetake.mcinsight.network.InsightResponsePayload;
-import net.minetake.mcinsight.network.RemoteServerBridge;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
@@ -31,11 +31,11 @@ public final class McInsightFabricClient implements ClientModInitializer {
 
         ClientPlayNetworking.registerGlobalReceiver(
             InsightHelloPayload.TYPE,
-            (payload, context) -> RemoteServerBridge.onHello(payload)
+            (payload, context) -> InsightNetworking.onHello(payload)
         );
         ClientPlayNetworking.registerGlobalReceiver(
             InsightResponsePayload.TYPE,
-            (payload, context) -> RemoteServerBridge.onResponseChunk(payload)
+            (payload, context) -> InsightNetworking.onResponseChunk(payload)
         );
 
         ClientLifecycleEvents.CLIENT_STARTED.register(McInsightCommon::attachClientExecutor);

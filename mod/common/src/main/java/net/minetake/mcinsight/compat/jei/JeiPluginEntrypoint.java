@@ -1,10 +1,10 @@
 package net.minetake.mcinsight.compat.jei;
 
-import net.minetake.mcinsight.McInsightConstants;
-import net.minetake.mcinsight.compat.IntegrationRegistry;
 import mezz.jei.api.IModPlugin;
 import mezz.jei.api.JeiPlugin;
 import mezz.jei.api.runtime.IJeiRuntime;
+import net.minetake.mcinsight.McInsightConstants;
+import net.minetake.mcinsight.compat.ViewerRegistry;
 import net.minecraft.resources.ResourceLocation;
 
 @JeiPlugin
@@ -15,6 +15,8 @@ public final class JeiPluginEntrypoint implements IModPlugin {
         "jei_bridge"
     );
 
+    private static final String VIEWER_NAME = "jei";
+
     @Override
     public ResourceLocation getPluginUid() {
         return UID;
@@ -22,13 +24,13 @@ public final class JeiPluginEntrypoint implements IModPlugin {
 
     @Override
     public void onRuntimeAvailable(IJeiRuntime jeiRuntime) {
-        IntegrationRegistry.registerRecipeViewerBridge(new JeiBridgeImpl(jeiRuntime));
+        ViewerRegistry.register(new JeiBridgeImpl(jeiRuntime));
         McInsightConstants.LOG.info("JEI runtime bridge attached.");
     }
 
     @Override
     public void onRuntimeUnavailable() {
-        IntegrationRegistry.unregisterRecipeViewerBridge("jei");
+        ViewerRegistry.unregister(VIEWER_NAME);
         McInsightConstants.LOG.info("JEI runtime bridge detached.");
     }
 }

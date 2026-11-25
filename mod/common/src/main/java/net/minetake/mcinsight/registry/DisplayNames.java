@@ -1,0 +1,129 @@
+package net.minetake.mcinsight.registry;
+
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import net.minetake.mcinsight.cache.CacheGenerations;
+import net.minetake.mcinsight.cache.GenerationalCache;
+import net.minetake.mcinsight.client.ClientStateAccessor;
+import net.minetake.mcinsight.platform.Services;
+import net.minecraft.Util;
+import net.minecraft.core.Registry;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.material.Fluid;
+
+/**
+ * The one translation from a registry object to the name a player would read.
+ *
+ * <p>Every handler that shows a name asks this class; nothing else calls {@code getName()} or
+ * {@code getDescription()} to answer "what is this called". An item, a block, a fluid (through the
+ * block it places, then through its translation keys), and an entity therefore always resolve the
+ * same way, and each kind's table is rebuilt exactly once per language and resource generation
+ * instead of once per query.
+ */
+public final class DisplayNames {
+
+    private static final String FALLBACK_LANGUAGE = "en_us";
+
+    /**
+     * The language the tables were built for. A language change makes Minecraft reload resources,
+     * so the resource generation is also the language's invalidation signal and the code is read
+     * once per reload rather than once per lookup.
+     */
+    private static final GenerationalCache<String> LANGUAGE = new GenerationalCache<>(CacheGenerations::resource);
+
+    /** One table per kind and language, so a search over items does not name every fluid too. */
+    private static final Map<String, GenerationalCache<Map<String, String>>> TABLES = new ConcurrentHashMap<>();
+
+    private DisplayNames() {}
+
+    /** The display name of a registry entry, or {@code null} when the entry does not exist. */
+    public static String of(RegistryIndex.Kind kind, ResourceLocation id) {
+        if (id == null) {
+            return null;
+        }
+        return table(kind).get(id.toString());
+    }
+
+    private static Map<String, String> table(RegistryIndex.Kind kind) {
+        String key = kind.id() + ":" + language();
+        return TABLES
+            .computeIfAbsent(key, ignored -> new GenerationalCache<>(CacheGenerations::resource))
+            .get(() -> build(kind));
+    }
+
+    /** The language names resolve in; a dedicated server has no client language to follow. */
+    private static String language() {
+        return LANGUAGE.get(DisplayNames::detectLanguage);
+    }
+
+    private static String detectLanguage() {
+        if (!Services.PLATFORM.isClientSide()) {
+            return FALLBACK_LANGUAGE;
+        }
+        String code = ClientStateAccessor.getLanguageCode();
+        if (code == null || code.isBlank()) {
+            return FALLBACK_LANGUAGE;
+        }
+        return code.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static Map<String, String> build(RegistryIndex.Kind kind) {
+        Registry<?> registry = RegistryIndex.registry(kind);
+        Map<String, String> names = new LinkedHashMap<>(registry.size() * 2);
+        for (ResourceLocation id : registry.keySet()) {
+            String name = resolve(kind, id);
+            names.put(id.toString(), name != null && !name.isBlank() ? name : id.toString());
+        }
+        return Map.copyOf(names);
+    }
+
+    private static String resolve(RegistryIndex.Kind kind, ResourceLocation id) {
+        return switch (kind) {
+            case ITEM -> itemName(BuiltInRegistries.ITEM.get(id));
+            case BLOCK -> blockName(BuiltInRegistries.BLOCK.get(id));
+            case FLUID -> fluidName(BuiltInRegistries.FLUID.get(id), id);
+            case ENTITY -> entityName(BuiltInRegistries.ENTITY_TYPE.get(id));
+        };
+    }
+
+    private static String itemName(Item item) {
+        return item != null ? item.getDescription().getString() : null;
+    }
+
+    private static String blockName(Block block) {
+        return block != null ? block.getName().getString() : null;
+    }
+
+    private static String entityName(EntityType<?> type) {
+        return type != null ? type.getDescription().getString() : null;
+    }
+
+    private static String fluidName(Fluid fluid, ResourceLocation id) {
+        if (fluid == null) {
+            return null;
+        }
+        Block legacyBlock = fluid.defaultFluidState().createLegacyBlock().getBlock();
+        if (legacyBlock != Blocks.AIR) {
+            return blockName(legacyBlock);
+        }
+        String blockKey = Util.makeDescriptionId("block", id);
+        String translatedBlock = Component.translatable(blockKey).getString();
+        if (!translatedBlock.equals(blockKey)) {
+            return translatedBlock;
+        }
+        String fluidKey = Util.makeDescriptionId("fluid", id);
+        String translatedFluid = Component.translatable(fluidKey).getString();
+        if (!translatedFluid.equals(fluidKey)) {
+            return translatedFluid;
+        }
+        return null;
+    }
+}

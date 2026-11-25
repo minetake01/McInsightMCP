@@ -1,45 +1,47 @@
 package net.minetake.mcinsight.compat.rei;
 
-import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
 import com.mojang.serialization.DataResult;
 import com.mojang.serialization.JsonOps;
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import me.shedaniel.rei.api.client.registry.category.CategoryRegistry;
 import me.shedaniel.rei.api.client.registry.display.DisplayRegistry;
 import me.shedaniel.rei.api.common.category.CategoryIdentifier;
 import me.shedaniel.rei.api.common.display.Display;
 import me.shedaniel.rei.api.common.entry.EntryIngredient;
 import me.shedaniel.rei.api.common.entry.EntryStack;
+import me.shedaniel.rei.api.common.entry.type.VanillaEntryTypes;
 import me.shedaniel.rei.plugin.common.BuiltinPlugin;
 import me.shedaniel.rei.plugin.common.displays.DefaultInformationDisplay;
+import net.minetake.mcinsight.api.InsightError;
+import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.client.ClientStateAccessor;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
-import net.minetake.mcinsight.server.JsonUtil;
-import java.lang.reflect.Method;
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import net.minecraft.core.HolderLookup;
+import net.minetake.mcinsight.compat.ViewerModel;
+import net.minetake.mcinsight.serial.JsonCodec;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.RegistryOps;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.Recipe;
 import net.minecraft.world.item.crafting.RecipeHolder;
+import net.minecraft.world.level.Level;
 
 public final class ReiBridgeImpl implements IRecipeViewerBridge {
 
-    private volatile JsonObject cachedCategories;
-    private final ConcurrentHashMap<ResourceLocation, List<JsonObject>> cachedWorkstations = new ConcurrentHashMap<>();
+    private volatile List<ViewerModel.Category> cachedCategories;
+    private final ConcurrentHashMap<String, CategoryRegistry.CategoryConfiguration<?>> categoriesByUid =
+        new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, List<ViewerModel.Ingredient>> cachedWorkstations =
+        new ConcurrentHashMap<>();
 
     @Override
-    public String getViewerName() {
+    public String viewerName() {
         return "rei";
     }
 
@@ -55,419 +57,388 @@ public final class ReiBridgeImpl implements IRecipeViewerBridge {
     @Override
     public void invalidateCache() {
         cachedCategories = null;
+        categoriesByUid.clear();
         cachedWorkstations.clear();
     }
 
     @Override
-    public JsonObject listCategories() {
-        JsonObject existing = cachedCategories;
+    public List<ViewerModel.Category> listCategories() {
+        List<ViewerModel.Category> existing = cachedCategories;
         if (existing != null) {
             return existing;
         }
-        CategoryRegistry catReg;
-        try {
-            catReg = CategoryRegistry.getInstance();
-        } catch (Throwable t) {
-            return JsonUtil.errorObject("VIEWER_UNAVAILABLE", "REI category registry is not ready.");
-        }
-        if (catReg == null) {
-            return JsonUtil.errorObject("VIEWER_UNAVAILABLE", "REI category registry is not ready.");
-        }
-
-        RegistryOps<JsonElement> jsonOps = currentJsonOps();
-        JsonArray categories = new JsonArray();
-        for (CategoryRegistry.CategoryConfiguration<?> cfg : catReg) {
+        CategoryRegistry categoryRegistry = requireCategoryRegistry();
+        List<ViewerModel.Category> out = new ArrayList<>();
+        for (CategoryRegistry.CategoryConfiguration<?> configuration : categoryRegistry) {
             try {
-                JsonObject obj = new JsonObject();
-                ResourceLocation uid = cfg.getCategoryIdentifier().getIdentifier();
-                obj.addProperty("uid", uid.toString());
-                obj.addProperty("modId", uid.getNamespace());
-                Component title = cfg.getCategory().getTitle();
-                obj.addProperty("title", title != null ? title.getString() : uid.toString());
-
-                JsonArray catalysts = new JsonArray();
-                for (EntryIngredient ws : cfg.getWorkstations()) {
-                    catalysts.add(serializeIngredient(ws, jsonOps));
-                }
-                obj.add("catalysts", catalysts);
-                categories.add(obj);
-            } catch (Exception ignored) {}
+                ResourceLocation uid = configuration.getCategoryIdentifier().getIdentifier();
+                out.add(new ViewerModel.Category(
+                    uid.toString(),
+                    uid.getNamespace(),
+                    title(configuration),
+                    workstations(configuration)
+                ));
+                categoriesByUid.put(uid.toString(), configuration);
+            } catch (Exception ignored) {
+                // A category that cannot describe itself must not hide the others.
+            }
         }
-
-        JsonObject out = new JsonObject();
-        out.addProperty("viewer", "rei");
-        out.addProperty("count", categories.size());
-        out.add("categories", categories);
-        cachedCategories = out;
-        return out;
+        List<ViewerModel.Category> frozen = List.copyOf(out);
+        cachedCategories = frozen;
+        return frozen;
     }
 
     @Override
-    public List<String> getIngredientInfo(String itemId) {
-        if (itemId == null || itemId.isBlank()) {
+    public List<ViewerModel.Recipe> recipesOf(ViewerModel.Category category) {
+        DisplayRegistry displayRegistry = requireDisplayRegistry();
+        CategoryRegistry.CategoryConfiguration<?> configuration = categoriesByUid.get(category.uid());
+        if (configuration == null) {
+            configuration = resolveCategory(requireCategoryRegistry(), category.uid());
+        }
+        if (configuration == null) {
+            throw new InsightException(InsightError.NOT_FOUND, "Unknown REI category: " + category.uid());
+        }
+        CategoryIdentifier<?> identifier = configuration.getCategoryIdentifier();
+        ResourceLocation uid = identifier.getIdentifier();
+        List<Display> displays = displayRegistry.getAll().get(identifier);
+        if (displays == null || displays.isEmpty()) {
             return List.of();
         }
-        DisplayRegistry dispReg;
+        List<ViewerModel.Ingredient> workstations = category.workstations() != null
+            ? category.workstations()
+            : workstations(configuration);
+        RegistryOps<JsonElement> ops = jsonOps();
+        String categoryTitle = title(configuration);
+        List<ViewerModel.Recipe> out = new ArrayList<>();
+        for (Display display : displays) {
+            try {
+                out.add(translate(displayRegistry, uid, categoryTitle, display, workstations, ops));
+            } catch (Exception ignored) {
+                // One unreadable display must not remove the rest of the category.
+            }
+        }
+        return List.copyOf(out);
+    }
+
+    @Override
+    public List<String> getIngredientInfo(String ingredientId) {
+        if (ingredientId == null || ingredientId.isBlank()) {
+            return List.of();
+        }
+        ResourceLocation target = ResourceLocation.tryParse(ingredientId.trim());
+        if (target == null) {
+            return List.of();
+        }
+        DisplayRegistry displayRegistry;
         try {
-            dispReg = DisplayRegistry.getInstance();
+            displayRegistry = DisplayRegistry.getInstance();
         } catch (Throwable ignored) {
             return List.of();
         }
-        if (dispReg == null) {
+        if (displayRegistry == null) {
             return List.of();
         }
-
-        String norm = itemId.trim().toLowerCase(Locale.ROOT);
+        List<DefaultInformationDisplay> infoDisplays = displayRegistry.get(BuiltinPlugin.INFO);
+        if (infoDisplays == null) {
+            return List.of();
+        }
         Set<String> lines = new LinkedHashSet<>();
-
-        List<DefaultInformationDisplay> infos = dispReg.get(BuiltinPlugin.INFO);
-        if (infos != null) {
-            for (DefaultInformationDisplay info : infos) {
-                if (!ingredientMatches(info.getEntryStacks(), norm)) {
-                    continue;
-                }
-                for (Component comp : info.getTexts()) {
-                    String s = comp.getString();
-                    if (s != null && !s.isBlank()) {
-                        lines.add(s);
-                    }
+        for (DefaultInformationDisplay display : infoDisplays) {
+            if (!mentionsIngredient(display.getEntryStacks(), target)) {
+                continue;
+            }
+            for (Component text : display.getTexts()) {
+                String line = text.getString();
+                if (line != null && !line.isBlank()) {
+                    lines.add(line);
                 }
             }
         }
-        return new ArrayList<>(lines);
+        return List.copyOf(lines);
     }
 
-    @Override
-    public JsonObject queryRecipes(
-        String itemQuery,
-        String role,
-        String categoryUid,
-        String modId,
-        int limit,
-        int offset,
-        HolderLookup.Provider registries
-    ) {
-        CategoryRegistry catReg;
-        DisplayRegistry dispReg;
+    private static CategoryRegistry requireCategoryRegistry() {
+        CategoryRegistry registry;
         try {
-            catReg = CategoryRegistry.getInstance();
-            dispReg = DisplayRegistry.getInstance();
+            registry = CategoryRegistry.getInstance();
         } catch (Throwable t) {
-            return JsonUtil.errorObject("VIEWER_UNAVAILABLE", "REI registries are not ready.");
+            registry = null;
         }
-        if (catReg == null || dispReg == null) {
-            return JsonUtil.errorObject("VIEWER_UNAVAILABLE", "REI registries are not ready.");
+        if (registry == null) {
+            throw new InsightException(InsightError.VIEWER_UNAVAILABLE, "REI category registry is not ready.");
         }
-
-        RegistryOps<JsonElement> jsonOps = registries != null
-            ? registries.createSerializationContext(JsonOps.INSTANCE)
-            : currentJsonOps();
-
-        String normCat = categoryUid == null ? "" : categoryUid.trim().toLowerCase(Locale.ROOT);
-        String normMod = modId == null ? "" : modId.trim().toLowerCase(Locale.ROOT);
-        String normItem = itemQuery == null ? "" : itemQuery.trim().toLowerCase(Locale.ROOT);
-        String normRole = role == null ? "any" : role.trim().toLowerCase(Locale.ROOT);
-
-        Map<CategoryIdentifier<?>, List<Display>> allDisplays = dispReg.getAll();
-        JsonArray items = new JsonArray();
-        int matched = 0;
-        boolean hasMore = false;
-
-        for (CategoryRegistry.CategoryConfiguration<?> cfg : catReg) {
-            if (hasMore) {
-                break;
-            }
-            CategoryIdentifier<?> catId = cfg.getCategoryIdentifier();
-            ResourceLocation uid = catId.getIdentifier();
-            if (!normCat.isEmpty() && !uid.toString().toLowerCase(Locale.ROOT).equals(normCat)) {
-                continue;
-            }
-
-            List<Display> displays = allDisplays.get(catId);
-            if (displays == null || displays.isEmpty()) {
-                continue;
-            }
-
-            List<JsonObject> workstations = cachedWorkstations.computeIfAbsent(uid, ignored -> {
-                List<JsonObject> list = new ArrayList<>();
-                try {
-                    for (EntryIngredient ws : cfg.getWorkstations()) {
-                        list.add(serializeIngredient(ws, jsonOps));
-                    }
-                } catch (Exception ignored2) {}
-                return List.copyOf(list);
-            });
-
-            List<EntryIngredient> workstationIngredients = cfg.getWorkstations();
-            Component catTitleComp = cfg.getCategory().getTitle();
-            String catTitle = catTitleComp != null ? catTitleComp.getString() : uid.toString();
-
-            for (Display display : displays) {
-                try {
-                    ResourceLocation dispLoc = display.getDisplayLocation().orElse(null);
-                    if (!normMod.isEmpty()) {
-                        boolean catMatch = uid.getNamespace().toLowerCase(Locale.ROOT).equals(normMod);
-                        boolean dispMatch = dispLoc != null && dispLoc.getNamespace().toLowerCase(Locale.ROOT).equals(normMod);
-                        if (!catMatch && !dispMatch) {
-                            continue;
-                        }
-                    }
-
-                    List<EntryIngredient> inputs = display.getInputEntries();
-                    List<EntryIngredient> outputs = display.getOutputEntries();
-
-                    if (!normItem.isEmpty() && !matchesDisplayFilter(inputs, outputs, workstationIngredients, normItem, normRole)) {
-                        continue;
-                    }
-
-                    if (matched < offset) {
-                        matched++;
-                        continue;
-                    }
-                    if (items.size() >= limit) {
-                        hasMore = true;
-                        break;
-                    }
-
-                    items.add(serializeReiDisplay(uid, catTitle, display, dispReg, inputs, outputs, workstations, jsonOps));
-                    matched++;
-                } catch (Exception ignored) {}
-            }
-        }
-
-        JsonObject out = new JsonObject();
-        out.addProperty("viewer", "rei");
-        out.addProperty("returned", items.size());
-        out.addProperty("hasMore", hasMore);
-        out.add("recipes", items);
-        return out;
+        return registry;
     }
 
-    private JsonObject serializeReiDisplay(
-        ResourceLocation catUid,
-        String catTitle,
-        Display display,
-        DisplayRegistry dispReg,
-        List<EntryIngredient> inputs,
-        List<EntryIngredient> outputs,
-        List<JsonObject> workstations,
-        RegistryOps<JsonElement> jsonOps
-    ) {
-        JsonObject obj = new JsonObject();
-        obj.addProperty("categoryUid", catUid.toString());
-        obj.addProperty("categoryTitle", catTitle);
-        obj.addProperty("modId", catUid.getNamespace());
-        obj.addProperty("recipeClass", display.getClass().getName());
-
-        ResourceLocation dispLoc = display.getDisplayLocation().orElse(null);
-        Object origin = null;
+    private static DisplayRegistry requireDisplayRegistry() {
+        DisplayRegistry registry;
         try {
-            origin = dispReg.getDisplayOrigin(display);
-        } catch (Exception ignored) {}
-
-        Recipe<?> mcRecipe = null;
-        if (origin instanceof RecipeHolder<?> holder) {
-            mcRecipe = holder.value();
-            if (dispLoc == null) {
-                dispLoc = holder.id();
-            }
-        } else if (origin instanceof Recipe<?> r) {
-            mcRecipe = r;
+            registry = DisplayRegistry.getInstance();
+        } catch (Throwable t) {
+            registry = null;
         }
-        if (dispLoc != null) {
-            obj.addProperty("recipeId", dispLoc.toString());
+        if (registry == null) {
+            throw new InsightException(InsightError.VIEWER_UNAVAILABLE, "REI display registry is not ready.");
         }
-
-        JsonArray inArr = new JsonArray();
-        for (EntryIngredient ing : inputs) {
-            inArr.add(serializeIngredient(ing, jsonOps));
-        }
-        obj.add("inputs", inArr);
-
-        JsonArray outArr = new JsonArray();
-        for (EntryIngredient ing : outputs) {
-            outArr.add(serializeIngredient(ing, jsonOps));
-        }
-        obj.add("outputs", outArr);
-
-        JsonArray catArr = new JsonArray();
-        for (JsonObject ws : workstations) {
-            catArr.add(ws);
-        }
-        obj.add("catalysts", catArr);
-
-        boolean encodedRaw = false;
-        if (mcRecipe != null && jsonOps != null) {
-            try {
-                DataResult<JsonElement> encoded = Recipe.CODEC.encodeStart(jsonOps, mcRecipe);
-                Optional<JsonElement> res = encoded.result();
-                if (res.isPresent()) {
-                    obj.add("rawJson", res.get());
-                    encodedRaw = true;
-                }
-            } catch (Exception ignored) {}
-        }
-        if (!encodedRaw && display instanceof DefaultInformationDisplay info) {
-            JsonArray descArr = new JsonArray();
-            if (info.getName() != null && !info.getName().getString().isBlank()) {
-                descArr.add(info.getName().getString());
-            }
-            for (Component comp : info.getTexts()) {
-                String text = comp.getString();
-                if (text != null && !text.isBlank()) {
-                    descArr.add(text);
-                }
-            }
-            obj.add("description", descArr);
-        } else if (!encodedRaw) {
-            obj.add("pojoSnapshot", JsonUtil.snapshotObject(display, 3, jsonOps));
-        }
-        return obj;
+        return registry;
     }
 
-    private static boolean matchesDisplayFilter(
-        List<EntryIngredient> inputs,
-        List<EntryIngredient> outputs,
-        List<EntryIngredient> workstations,
-        String normItem,
-        String normRole
+    private static CategoryRegistry.CategoryConfiguration<?> resolveCategory(CategoryRegistry registry, String uid) {
+        ResourceLocation target = ResourceLocation.tryParse(uid);
+        if (target == null) {
+            return null;
+        }
+        for (CategoryRegistry.CategoryConfiguration<?> configuration : registry) {
+            if (target.equals(configuration.getCategoryIdentifier().getIdentifier())) {
+                return configuration;
+            }
+        }
+        return null;
+    }
+
+    private static String title(CategoryRegistry.CategoryConfiguration<?> configuration) {
+        Component title = configuration.getCategory().getTitle();
+        return title != null ? title.getString() : configuration.getCategoryIdentifier().getIdentifier().toString();
+    }
+
+    private List<ViewerModel.Ingredient> workstations(CategoryRegistry.CategoryConfiguration<?> configuration) {
+        String uid = configuration.getCategoryIdentifier().getIdentifier().toString();
+        return cachedWorkstations.computeIfAbsent(uid, ignored -> {
+            RegistryOps<JsonElement> ops = jsonOps();
+            List<ViewerModel.Ingredient> out = new ArrayList<>();
+            for (EntryIngredient workstation : configuration.getWorkstations()) {
+                out.addAll(alternatives(workstation, ops));
+            }
+            return List.copyOf(out);
+        });
+    }
+
+    private static ViewerModel.Recipe translate(
+        DisplayRegistry displayRegistry,
+        ResourceLocation categoryUid,
+        String categoryTitle,
+        Display display,
+        List<ViewerModel.Ingredient> workstations,
+        RegistryOps<JsonElement> ops
     ) {
-        boolean checkIn = "any".equals(normRole) || "input".equals(normRole);
-        boolean checkOut = "any".equals(normRole) || "output".equals(normRole);
-        boolean checkCat = "any".equals(normRole) || "catalyst".equals(normRole);
+        ResourceLocation displayLocation = display.getDisplayLocation().orElse(null);
+        Object origin = originOf(displayRegistry, display);
+        Recipe<?> vanilla = vanillaRecipe(origin);
+        ResourceLocation recipeId = displayLocation;
+        if (recipeId == null && origin instanceof RecipeHolder<?> holder) {
+            recipeId = holder.id();
+        }
+        List<String> description = description(display);
+        JsonElement rawJson = rawJson(vanilla, ops);
 
-        if (checkIn && ingredientListMatches(inputs, normItem)) return true;
-        if (checkOut && ingredientListMatches(outputs, normItem)) return true;
-        if (checkCat && ingredientListMatches(workstations, normItem)) return true;
-        return false;
+        return new ViewerModel.Recipe(
+            categoryUid.toString(),
+            categoryTitle,
+            recipeId != null ? recipeId.getNamespace() : categoryUid.getNamespace(),
+            recipeId != null ? recipeId.toString() : null,
+            sourceRecipeIds(display),
+            display.getClass().getName(),
+            slots(display.getInputEntries(), ops),
+            slots(display.getOutputEntries(), ops),
+            List.of(),
+            workstations,
+            rawJson,
+            rawJson == null ? JsonCodec.snapshotObject(display, 3, ops) : null,
+            description,
+            ViewerModel.SlotGranularity.SLOTS
+        );
     }
 
-    private static boolean ingredientListMatches(List<EntryIngredient> list, String normItem) {
-        for (EntryIngredient ing : list) {
-            if (ingredientMatches(ing, normItem)) {
-                return true;
+    private static Object originOf(DisplayRegistry displayRegistry, Display display) {
+        try {
+            return displayRegistry.getDisplayOrigin(display);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static Recipe<?> vanillaRecipe(Object origin) {
+        if (origin instanceof RecipeHolder<?> holder) {
+            return holder.value();
+        }
+        return origin instanceof Recipe<?> recipe ? recipe : null;
+    }
+
+    private static List<String> sourceRecipeIds(Display display) {
+        try {
+            var ids = display.provideInternalDisplayIds();
+            if (ids == null || ids.isEmpty()) {
+                return List.of();
+            }
+            List<String> out = new ArrayList<>(ids.size());
+            for (ResourceLocation id : ids) {
+                out.add(id.toString());
+            }
+            return List.copyOf(out);
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    private static List<String> description(Display display) {
+        if (!(display instanceof DefaultInformationDisplay info)) {
+            return List.of();
+        }
+        List<String> lines = new ArrayList<>();
+        Component name = info.getName();
+        if (name != null && !name.getString().isBlank()) {
+            lines.add(name.getString());
+        }
+        for (Component text : info.getTexts()) {
+            String line = text.getString();
+            if (line != null && !line.isBlank()) {
+                lines.add(line);
             }
         }
-        return false;
+        return List.copyOf(lines);
     }
 
-    private static boolean ingredientMatches(EntryIngredient ing, String normItem) {
-        for (EntryStack<?> st : ing) {
-            if (stackMatches(st, normItem)) {
-                return true;
+    private static JsonElement rawJson(Recipe<?> recipe, RegistryOps<JsonElement> ops) {
+        if (recipe == null || ops == null) {
+            return null;
+        }
+        try {
+            DataResult<JsonElement> encoded = Recipe.CODEC.encodeStart(ops, recipe);
+            return encoded.result().orElse(null);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static List<ViewerModel.Slot> slots(List<EntryIngredient> entries, RegistryOps<JsonElement> ops) {
+        List<ViewerModel.Slot> slots = new ArrayList<>(entries.size());
+        for (EntryIngredient entry : entries) {
+            slots.add(new ViewerModel.Slot(alternatives(entry, ops)));
+        }
+        return List.copyOf(slots);
+    }
+
+    private static List<ViewerModel.Ingredient> alternatives(EntryIngredient entry, RegistryOps<JsonElement> ops) {
+        if (entry == null || entry.isEmpty()) {
+            return List.of();
+        }
+        List<ViewerModel.Ingredient> out = new ArrayList<>(entry.size());
+        for (EntryStack<?> stack : entry) {
+            if (stack == null || stack.isEmpty()) {
+                continue;
+            }
+            try {
+                out.add(ingredientOf(stack, ops));
+            } catch (Exception ignored) {
+                // A stack that cannot describe itself is not an alternative.
             }
         }
-        return false;
+        return List.copyOf(out);
     }
 
-    private static boolean stackMatches(EntryStack<?> st, String normItem) {
-        if (st == null || st.isEmpty()) {
+    private static ViewerModel.Ingredient ingredientOf(EntryStack<?> stack, RegistryOps<JsonElement> ops) {
+        ResourceLocation id = stack.getIdentifier();
+        ItemStack itemStack = itemStackOf(stack);
+        JsonElement components = null;
+        Long amount = null;
+        List<String> tags;
+        if (!itemStack.isEmpty()) {
+            amount = (long) itemStack.getCount();
+            tags = itemStack.getTags().map(tag -> tag.location().toString()).sorted().toList();
+            var serialized = JsonCodec.serializeItemStack(itemStack, ops);
+            components = serialized.has("components") ? serialized.get("components") : null;
+        } else {
+            long reflectiveAmount = reflectiveAmount(stack.getValue());
+            amount = reflectiveAmount >= 0 ? reflectiveAmount : null;
+            tags = tagsOf(stack);
+        }
+        return new ViewerModel.Ingredient(
+            typeName(stack),
+            id != null ? id.toString() : null,
+            displayName(stack),
+            amount,
+            namespaceOf(stack, id),
+            tags,
+            components
+        );
+    }
+
+    private static String typeName(EntryStack<?> stack) {
+        ResourceLocation typeId = stack.getType() != null ? stack.getType().getId() : null;
+        if (typeId != null) {
+            if (typeId.equals(VanillaEntryTypes.ITEM.getId())) {
+                return "item";
+            }
+            if (typeId.equals(VanillaEntryTypes.FLUID.getId())) {
+                return "fluid";
+            }
+        }
+        Object value = stack.getValue();
+        Class<?> marker = value != null ? value.getClass() : stack.getValueType();
+        return "custom:" + marker.getSimpleName();
+    }
+
+    private static String displayName(EntryStack<?> stack) {
+        try {
+            Component text = stack.asFormattedText();
+            return text != null ? text.getString() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static String namespaceOf(EntryStack<?> stack, ResourceLocation id) {
+        String containing = stack.getContainingNamespace();
+        if (containing != null && !containing.isBlank()) {
+            return containing;
+        }
+        return id != null ? id.getNamespace() : null;
+    }
+
+    private static ItemStack itemStackOf(EntryStack<?> stack) {
+        Object value = stack.getValue();
+        return value instanceof ItemStack itemStack ? itemStack : ItemStack.EMPTY;
+    }
+
+    private static List<String> tagsOf(EntryStack<?> stack) {
+        try {
+            return stack.getTagsFor().map(tag -> tag.location().toString()).sorted().toList();
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    /**
+     * Non-item entries expose their amount only through their value type, and only some of those
+     * types have one, so the accessor is probed once per value class.
+     */
+    private static long reflectiveAmount(Object value) {
+        if (value == null) {
+            return -1L;
+        }
+        try {
+            Method amount = value.getClass().getMethod("getAmount");
+            Object result = amount.invoke(value);
+            return result instanceof Number number ? number.longValue() : -1L;
+        } catch (Exception e) {
+            return -1L;
+        }
+    }
+
+    private static boolean mentionsIngredient(EntryIngredient entries, ResourceLocation target) {
+        if (entries == null) {
             return false;
         }
-        if (normItem.startsWith("#")) {
-            String tagNeedle = normItem.substring(1);
-            return st.getTagsFor().anyMatch(tk -> {
-                String s = tk.location().toString().toLowerCase(Locale.ROOT);
-                return tagNeedle.contains(":") ? s.equals(tagNeedle) : s.contains(tagNeedle);
-            });
+        for (EntryStack<?> stack : entries) {
+            if (stack != null && target.equals(stack.getIdentifier())) {
+                return true;
+            }
         }
-        ResourceLocation id = st.getIdentifier();
-        if (id != null && id.toString().toLowerCase(Locale.ROOT).contains(normItem)) {
-            return true;
-        }
-        Component formatted = st.asFormattedText();
-        return formatted != null && formatted.getString().toLowerCase(Locale.ROOT).contains(normItem);
+        return false;
     }
 
-    private static JsonObject serializeIngredient(EntryIngredient ing, RegistryOps<JsonElement> jsonOps) {
-        if (ing == null || ing.isEmpty()) {
-            JsonObject empty = new JsonObject();
-            empty.addProperty("ingredientType", "rei:empty");
-            empty.addProperty("id", "minecraft:air");
-            empty.addProperty("amount", 0);
-            return empty;
-        }
-        EntryStack<?> first = ing.get(0);
-        JsonObject obj = serializeEntryStack(first, jsonOps);
-        if (ing.size() > 1) {
-            JsonArray alts = new JsonArray();
-            int count = Math.min(ing.size(), 16);
-            for (int i = 0; i < count; i++) {
-                ResourceLocation altId = ing.get(i).getIdentifier();
-                if (altId != null) {
-                    alts.add(altId.toString());
-                }
-            }
-            if (!alts.isEmpty()) {
-                obj.add("alternatives", alts);
-                obj.addProperty("alternativeCount", ing.size());
-            }
-        }
-        return obj;
-    }
-
-    private static JsonObject serializeEntryStack(EntryStack<?> st, RegistryOps<JsonElement> jsonOps) {
-        JsonObject obj = new JsonObject();
-        ResourceLocation typeId = st.getType().getId();
-        obj.addProperty("ingredientType", typeId != null ? typeId.toString() : "rei:unknown");
-
-        ResourceLocation rl = st.getIdentifier();
-        obj.addProperty("id", rl != null ? rl.toString() : "unknown:unknown");
-        try {
-            Component text = st.asFormattedText();
-            if (text != null) {
-                obj.addProperty("displayName", text.getString());
-            }
-        } catch (Exception ignored) {}
-        String modNs = st.getContainingNamespace();
-        if (modNs != null && !modNs.isBlank()) {
-            obj.addProperty("modId", modNs);
-        } else if (rl != null) {
-            obj.addProperty("modId", rl.getNamespace());
-        }
-
-        Object value = st.getValue();
-        if (value instanceof ItemStack mcItem && !mcItem.isEmpty()) {
-            obj.addProperty("amount", mcItem.getCount());
-            JsonObject itemJson = JsonUtil.serializeItemStack(mcItem, jsonOps);
-            if (itemJson.has("tags")) {
-                obj.add("tags", itemJson.get("tags"));
-            }
-            if (itemJson.has("components")) {
-                obj.add("components", itemJson.get("components"));
-            }
-        } else {
-            long amt = extractReflectiveAmount(value);
-            if (amt >= 0) {
-                obj.addProperty("amount", amt);
-            }
-            try {
-                JsonArray tags = new JsonArray();
-                st.getTagsFor().map(tk -> tk.location().toString()).sorted().forEach(tags::add);
-                if (!tags.isEmpty()) {
-                    obj.add("tags", tags);
-                }
-            } catch (Exception ignored) {}
-        }
-        return obj;
-    }
-
-    private static long extractReflectiveAmount(Object value) {
-        if (value == null) return -1;
-        try {
-            Method m = value.getClass().getMethod("getAmount");
-            Object res = m.invoke(value);
-            if (res instanceof Number n) {
-                return n.longValue();
-            }
-        } catch (Exception ignored) {}
-        return -1;
-    }
-
-    private static RegistryOps<JsonElement> currentJsonOps() {
-        var level = ClientStateAccessor.getLevel();
-        return level != null
-            ? level.registryAccess().createSerializationContext(JsonOps.INSTANCE)
-            : null;
+    private static RegistryOps<JsonElement> jsonOps() {
+        Level level = ClientStateAccessor.getLevel();
+        return level != null ? level.registryAccess().createSerializationContext(JsonOps.INSTANCE) : null;
     }
 }

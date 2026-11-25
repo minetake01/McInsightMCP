@@ -3,10 +3,9 @@ package net.minetake.mcinsight.neoforge;
 import net.minetake.mcinsight.McInsightCommon;
 import net.minetake.mcinsight.McInsightConstants;
 import net.minetake.mcinsight.network.InsightHelloPayload;
+import net.minetake.mcinsight.network.InsightNetworking;
 import net.minetake.mcinsight.network.InsightRequestPayload;
 import net.minetake.mcinsight.network.InsightResponsePayload;
-import net.minetake.mcinsight.network.RemoteServerBridge;
-import net.minetake.mcinsight.network.ServerPacketHandler;
 import net.minetake.mcinsight.platform.Services;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
@@ -17,7 +16,6 @@ import net.neoforged.fml.loading.FMLEnvironment;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.AddReloadListenerEvent;
 import net.neoforged.neoforge.event.GameShuttingDownEvent;
-import net.neoforged.neoforge.event.OnDatapackSyncEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
@@ -37,7 +35,6 @@ public final class McInsightNeoForge {
 
         modEventBus.addListener(McInsightNeoForge::onRegisterPayloads);
         NeoForge.EVENT_BUS.addListener(McInsightNeoForge::onAddReloadListeners);
-        NeoForge.EVENT_BUS.addListener(McInsightNeoForge::onDatapackSync);
         NeoForge.EVENT_BUS.addListener(McInsightNeoForge::onPlayerLoggedIn);
         NeoForge.EVENT_BUS.addListener(McInsightNeoForge::onServerStarted);
         NeoForge.EVENT_BUS.addListener(McInsightNeoForge::onServerStopping);
@@ -49,19 +46,19 @@ public final class McInsightNeoForge {
         registrar.playToClient(
             InsightHelloPayload.TYPE,
             InsightHelloPayload.STREAM_CODEC,
-            (payload, context) -> RemoteServerBridge.onHello(payload)
+            (payload, context) -> InsightNetworking.onHello(payload)
         );
         registrar.playToClient(
             InsightResponsePayload.TYPE,
             InsightResponsePayload.STREAM_CODEC,
-            (payload, context) -> RemoteServerBridge.onResponseChunk(payload)
+            (payload, context) -> InsightNetworking.onResponseChunk(payload)
         );
         registrar.playToServer(
             InsightRequestPayload.TYPE,
             InsightRequestPayload.STREAM_CODEC,
             (payload, context) -> {
                 if (context.player() instanceof ServerPlayer sp) {
-                    ServerPacketHandler.handleRequest(sp, payload, McInsightCommon.getExecutor());
+                    InsightNetworking.onRequest(sp, payload);
                 }
             }
         );
@@ -70,14 +67,7 @@ public final class McInsightNeoForge {
     private static void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
         if (event.getEntity() instanceof ServerPlayer sp
             && Services.PLATFORM.canSendToPlayer(sp, InsightHelloPayload.TYPE)) {
-            Services.PLATFORM.sendToPlayer(
-                sp,
-                new InsightHelloPayload(
-                    InsightHelloPayload.PROTOCOL_VERSION,
-                    Services.PLATFORM.getLoaderName(),
-                    "worldgen,loot,datamaps,advancements,scan_block_entities,looking_at_block_entity"
-                )
-            );
+            Services.PLATFORM.sendToPlayer(sp, InsightNetworking.hello());
         }
     }
 
@@ -86,10 +76,6 @@ public final class McInsightNeoForge {
             McInsightCommon.invalidateDataCaches();
             McInsightCommon.invalidateResourceCaches();
         });
-    }
-
-    private static void onDatapackSync(OnDatapackSyncEvent event) {
-        McInsightCommon.invalidateDataCaches();
     }
 
     private static void onServerStarted(ServerStartedEvent event) {
