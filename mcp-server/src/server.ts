@@ -6,6 +6,7 @@ import { registerGuideTools } from './tools/guideTools.js';
 import { registerMechanicsTools } from './tools/mechanicsTools.js';
 import { registerRegistryTools } from './tools/registryTools.js';
 import { registerWorldStateTools } from './tools/worldStateTools.js';
+import { readPackageVersion } from './version.js';
 
 export interface ServerDeps {
   mcClient: McHttpClient;
@@ -17,7 +18,7 @@ export interface ServerDeps {
 export function createMcInsightServer(deps: ServerDeps): McpServer {
   const server = new McpServer({
     name: 'mcinsight',
-    version: '0.1.0-beta.2',
+    version: readPackageVersion(),
   });
 
   registerWorldStateTools(server, deps.mcClient);
