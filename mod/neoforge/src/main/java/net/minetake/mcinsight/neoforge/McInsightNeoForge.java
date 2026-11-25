@@ -8,12 +8,19 @@ import net.minetake.mcinsight.network.InsightRequestPayload;
 import net.minetake.mcinsight.network.InsightResponsePayload;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
+//? if >=26.1 {
+/*import net.minecraft.resources.ResourceLocation;
+*///? }
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.loading.FMLEnvironment;
 import net.neoforged.neoforge.common.NeoForge;
+//? if >=26.1 {
+/*import net.neoforged.neoforge.event.AddServerReloadListenersEvent;
+*///? } else {
 import net.neoforged.neoforge.event.AddReloadListenerEvent;
+//? }
 import net.neoforged.neoforge.event.GameShuttingDownEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
@@ -25,7 +32,11 @@ import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 public final class McInsightNeoForge {
 
     public McInsightNeoForge(IEventBus modEventBus) {
+        //? if >=26.1 {
+        /*if (FMLEnvironment.getDist() == Dist.CLIENT) {
+        *///? } else {
         if (FMLEnvironment.dist == Dist.CLIENT) {
+        //? }
             InsightNetworking.bind(new NeoForgeTransport(McInsightNeoForgeClient::sendToServer));
             McInsightCommon.initClient();
             McInsightNeoForgeClient.register(modEventBus);
@@ -35,7 +46,11 @@ public final class McInsightNeoForge {
         }
 
         modEventBus.addListener(McInsightNeoForge::onRegisterPayloads);
+        //? if >=26.1 {
+        /*NeoForge.EVENT_BUS.addListener(McInsightNeoForge::onAddServerReloadListeners);
+        *///? } else {
         NeoForge.EVENT_BUS.addListener(McInsightNeoForge::onAddReloadListeners);
+        //? }
         NeoForge.EVENT_BUS.addListener(McInsightNeoForge::onPlayerLoggedIn);
         NeoForge.EVENT_BUS.addListener(McInsightNeoForge::onServerStarted);
         NeoForge.EVENT_BUS.addListener(McInsightNeoForge::onServerStopping);
@@ -71,12 +86,30 @@ public final class McInsightNeoForge {
         }
     }
 
+    /**
+     * Registers the cache-invalidating listener on the data reload.
+     *
+     * <p>26.x names the event after the reload it belongs to and makes listeners addressable by id,
+     * because a reload can now reorder them by dependency.
+     */
+    //? if >=26.1 {
+    /*private static void onAddServerReloadListeners(AddServerReloadListenersEvent event) {
+        event.addListener(
+            ResourceLocation.fromNamespaceAndPath(McInsightConstants.MOD_ID, "cache_invalidation"),
+            (ResourceManagerReloadListener) rm -> {
+                McInsightCommon.invalidateDataCaches();
+                McInsightCommon.invalidateResourceCaches();
+            }
+        );
+    }
+    *///? } else {
     private static void onAddReloadListeners(AddReloadListenerEvent event) {
         event.addListener((ResourceManagerReloadListener) rm -> {
             McInsightCommon.invalidateDataCaches();
             McInsightCommon.invalidateResourceCaches();
         });
     }
+    //? }
 
     private static void onServerStarted(ServerStartedEvent event) {
         McInsightCommon.attachServer(event.getServer());

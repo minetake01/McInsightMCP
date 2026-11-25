@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -42,7 +43,7 @@ public final class E2eHarness {
         if (!(event.getEntity() instanceof ServerPlayer player)) {
             return;
         }
-        MinecraftServer server = player.getServer();
+        MinecraftServer server = player.level().getServer();
         Path setup = server.getServerDirectory().resolve(SETUP_FILE);
         if (Files.isRegularFile(setup)) {
             List<String> commands;
@@ -51,7 +52,7 @@ public final class E2eHarness {
             } catch (IOException e) {
                 throw new IllegalStateException("Could not read " + setup, e);
             }
-            var source = player.createCommandSourceStack().withPermission(4).withSuppressedOutput();
+            CommandSourceStack source = privilegedSource(player);
             for (String line : commands) {
                 String command = line.strip();
                 if (command.isEmpty() || command.startsWith("#")) {
@@ -60,6 +61,31 @@ public final class E2eHarness {
                 server.getCommands().performPrefixedCommand(source, command);
             }
         }
-        LOG.info("[E2E] player ready name={}", player.getGameProfile().getName());
+        LOG.info("[E2E] player ready name={}", playerName(player));
+    }
+
+    /**
+     * The player's command source, raised to server-operator level so setup commands run as an
+     * operator would see them.
+     *
+     * <p>1.21.1 grants a numeric level; 26.x replaced the level with a permission set whose
+     * {@code ALL_PERMISSIONS} is what level 4 meant.
+     */
+    private static CommandSourceStack privilegedSource(ServerPlayer player) {
+        //? if >=26.1 {
+        /*return player.createCommandSourceStack()
+            .withPermission(net.minecraft.server.permissions.PermissionSet.ALL_PERMISSIONS)
+            .withSuppressedOutput();
+        *///? } else {
+        return player.createCommandSourceStack().withPermission(4).withSuppressedOutput();
+        //? }
+    }
+
+    private static String playerName(ServerPlayer player) {
+        //? if >=26.1 {
+        /*return player.getGameProfile().name();
+        *///? } else {
+        return player.getGameProfile().getName();
+        //? }
     }
 }

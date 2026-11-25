@@ -150,3 +150,4 @@ export function launch({ name, spec, gameDir, withMod = true, jvmArgs = [], extr
   });
   return new GameProcess(name, child, path.join(logDir, `${name}.log`));
 }
+

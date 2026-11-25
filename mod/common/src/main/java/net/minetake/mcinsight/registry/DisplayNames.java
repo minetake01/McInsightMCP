@@ -7,6 +7,7 @@ import net.minetake.mcinsight.cache.CacheGenerations;
 import net.minetake.mcinsight.cache.GenerationalCache;
 import net.minetake.mcinsight.McInsightCommon;
 import net.minetake.mcinsight.game.GameAccess;
+import net.minetake.mcinsight.game.Versioned;
 import net.minecraft.Util;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -22,7 +23,7 @@ import net.minecraft.world.level.material.Fluid;
  * The one translation from a registry object to the name a player would read.
  *
  * <p>Every handler that shows a name asks this class; nothing else calls {@code getName()} or
- * {@code getDescription()} to answer "what is this called". An item, a block, a fluid (through the
+ * {@code getDescriptionId()} to answer "what is this called". An item, a block, a fluid (through the
  * block it places, then through its translation keys), and an entity therefore always resolve the
  * same way, and each kind's table is rebuilt exactly once per language and resource generation
  * instead of once per query.
@@ -73,15 +74,21 @@ public final class DisplayNames {
 
     private static String resolve(RegistryIndex.Kind kind, ResourceLocation id) {
         return switch (kind) {
-            case ITEM -> itemName(BuiltInRegistries.ITEM.get(id));
-            case BLOCK -> blockName(BuiltInRegistries.BLOCK.get(id));
-            case FLUID -> fluidName(BuiltInRegistries.FLUID.get(id), id);
-            case ENTITY -> entityName(BuiltInRegistries.ENTITY_TYPE.get(id));
+            case ITEM -> itemName(Versioned.byId(BuiltInRegistries.ITEM, id));
+            case BLOCK -> blockName(Versioned.byId(BuiltInRegistries.BLOCK, id));
+            case FLUID -> fluidName(Versioned.byId(BuiltInRegistries.FLUID, id), id);
+            case ENTITY -> entityName(Versioned.byId(BuiltInRegistries.ENTITY_TYPE, id));
         };
     }
 
+    /**
+     * The item's own name, not a stack's.
+     *
+     * <p>{@code Item#getDescription()} was the unnamed variant of the name; vanishing in 26.x, it is
+     * the translation of the item's description id, which is all it ever was.
+     */
     private static String itemName(Item item) {
-        return item != null ? item.getDescription().getString() : null;
+        return item != null ? Component.translatable(item.getDescriptionId()).getString() : null;
     }
 
     private static String blockName(Block block) {

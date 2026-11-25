@@ -3,14 +3,13 @@ package net.minetake.mcinsight.trade;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import org.apache.commons.lang3.tuple.Pair;
+import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import net.minetake.mcinsight.api.InsightEndpoint;
 import net.minetake.mcinsight.api.InsightError;
 import net.minetake.mcinsight.api.InsightException;
@@ -23,39 +22,76 @@ import net.minetake.mcinsight.cache.CacheGenerations;
 import net.minetake.mcinsight.cache.GenerationalCache;
 import net.minetake.mcinsight.game.GameAccess;
 import net.minetake.mcinsight.game.MainThreadExecutor;
+import net.minetake.mcinsight.game.Versioned;
 import net.minetake.mcinsight.serial.JsonCodec;
+import net.minecraft.core.Holder;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.RegistryOps;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.npc.Villager;
-import net.minecraft.world.entity.npc.VillagerProfession;
-import net.minecraft.world.entity.npc.VillagerTrades;
 import net.minecraft.world.entity.npc.VillagerType;
-import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.trading.MerchantOffer;
 import net.minecraft.world.level.Level;
+//? if >=26.3 {
+/*import net.minecraft.core.HolderSet;
+import net.minecraft.world.entity.EntityTypes;
+import net.minecraft.world.entity.npc.villager.VillagerProfession;
+import net.minecraft.world.item.trading.TradeSet;
+import net.minecraft.world.item.trading.VillagerTrade;
+import net.minecraft.world.level.storage.loot.LootContext;
+import net.minecraft.world.level.storage.loot.LootParams;
+import net.minecraft.world.level.storage.loot.parameters.LootContextParamSets;
+import net.minecraft.world.level.storage.loot.parameters.LootContextParams;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.util.Unit;
+*///? } else if >=26.1 {
+/*import net.minecraft.core.HolderSet;
+import net.minecraft.world.entity.npc.villager.VillagerProfession;
+import net.minecraft.world.item.trading.TradeSet;
+import net.minecraft.world.item.trading.VillagerTrade;
+import net.minecraft.world.level.storage.loot.LootContext;
+import net.minecraft.world.level.storage.loot.LootParams;
+import net.minecraft.world.level.storage.loot.parameters.LootContextParamSets;
+import net.minecraft.world.level.storage.loot.parameters.LootContextParams;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.util.Unit;
+*///? } else {
+import net.minecraft.world.entity.npc.VillagerProfession;
+import net.minecraft.world.entity.npc.VillagerTrades;
+import org.apache.commons.lang3.tuple.Pair;
+//? }
 
 /**
  * Answers {@code trades_query}: every registered villager and wandering-trader offer.
  *
- * <p>The offers are produced by the game's own {@code ItemListing} implementations, not by reading
- * their fields: those implementations are the definition of what a trade is, including which
- * variant a villager type gets and how price and enchantment randomness land. A listing that
- * declares its offer so abstractly that it cannot be materialized is reported by its declaration
- * through {@link JsonCodec#snapshotObject} instead, which is the same converter the rest of the mod
- * uses.
+ * <p>How a trade is reported is the same in every version; where trades come from is not. Up to
+ * 1.21.1 each profession holds a table of {@code ItemListing} objects that roll an offer against an
+ * entity; from 26.1 the trades are named registry entries grouped into a trade set per profession
+ * and level, rolled against a loot context. That is a replaced subsystem rather than a renamed one,
+ * so {@link #readTrades} asks the same question of the two systems and only the matching answer is
+ * compiled; everything that reports a trade is shared.
  *
- * <p>Materializing offers reads registries and, for the listings that need it, the world, so it
- * happens on the game thread and exactly once per data generation.
+ * <p>Either way the offer is produced by the game, not by reading its fields: those listings and
+ * registry entries are the definition of what a trade is, including which variant a villager type
+ * gets and how price and enchantment randomness land. A trade that declares its offer so abstractly
+ * that it cannot be rolled is reported by its declaration through {@link JsonCodec#snapshotObject},
+ * which is the same converter the rest of the mod uses.
+ *
+ * <p>Reading touches registries and, for a listing that names a structure, the world, so it happens
+ * on the game thread and exactly once per data generation.
  */
 public final class TradeCollector {
 
+    private static final long BUILD_TIMEOUT_MS = 10_000L;
     private static final int SNAPSHOT_DEPTH = 3;
     private static final long SAMPLE_SEED_A = 42L;
     private static final long SAMPLE_SEED_B = 4242L;
-    private static final long BUILD_TIMEOUT_MS = 10_000L;
+    private static final String WANDERING_TRADER_ID = "minecraft:wandering_trader";
 
     private static final GenerationalCache<TradeIndex> INDEX = new GenerationalCache<>(CacheGenerations::data);
 
@@ -99,20 +135,6 @@ public final class TradeCollector {
     }
 
     private record TradeIndex(List<Trade> trades) {}
-
-    /** A stack as it is reported: identity and count, no component payload. */
-    private record StackRef(String id, String displayName, int count, Set<String> tagsLower) {}
-
-    private record Offer(
-        StackRef costA,
-        StackRef costB,
-        StackRef result,
-        int maxUses,
-        int xp,
-        float priceMultiplier,
-        boolean sampled,
-        String villagerType
-    ) {}
 
     public static JsonObject query(RequestContext ctx, Params p) throws Exception {
         int limit = InsightEndpoint.TRADES_QUERY.limit(p);
@@ -159,7 +181,7 @@ public final class TradeCollector {
      * Whether the queried item is on the requested side of a trade.
      *
      * <p>Each stack is matched with its own tags, so a cost tagged {@code #c:gems} does not make the
-     * result count as a gem. A listing that could only be described, not rolled, has no stacks and
+     * result count as a gem. A trade that could only be described, not rolled, has no stacks and
      * never matches an item; it stays reachable through {@code q}.
      */
     private static boolean tradeMatchesItem(Trade trade, ItemFilter item, Side side) {
@@ -197,194 +219,81 @@ public final class TradeCollector {
 
     private static TradeIndex buildOnGameThread(MainThreadExecutor executor) {
         Level level = GameAccess.getLevel(executor);
-        Entity context = level != null ? villagerOf(level, VillagerType.PLAINS) : null;
-        RegistryOps<JsonElement> ops = GameAccess.jsonOps(GameAccess.getRegistryAccess(executor));
-
-        List<Trade> trades = new ArrayList<>();
-        for (Map.Entry<VillagerProfession, Int2ObjectMap<VillagerTrades.ItemListing[]>> entry
-            : VillagerTrades.TRADES.entrySet()) {
-            collect(entry.getKey(), entry.getValue(), false, context, ops, trades);
+        HolderLookup.Provider registries = GameAccess.getRegistryAccess(executor);
+        RegistryOps<JsonElement> ops = GameAccess.jsonOps(registries);
+        List<TradeOffer> offers = readTrades(level, registries, ops);
+        List<Trade> trades = new ArrayList<>(offers.size());
+        for (TradeOffer offer : offers) {
+            trades.add(tradeOf(offer));
         }
-        for (Map.Entry<VillagerProfession, Int2ObjectMap<VillagerTrades.ItemListing[]>> entry
-            : VillagerTrades.EXPERIMENTAL_TRADES.entrySet()) {
-            collect(entry.getKey(), entry.getValue(), true, context, ops, trades);
-        }
-        collectWanderingTrades(VillagerTrades.WANDERING_TRADER_TRADES, false, context, ops, trades);
-        collectExperimentalWanderingTrades(context, ops, trades);
         return new TradeIndex(List.copyOf(trades));
     }
 
-    private static void collect(
-        VillagerProfession profession,
-        Int2ObjectMap<VillagerTrades.ItemListing[]> byLevel,
-        boolean experimental,
-        Entity context,
-        RegistryOps<JsonElement> ops,
-        List<Trade> out
-    ) {
-        ResourceLocation professionId = BuiltInRegistries.VILLAGER_PROFESSION.getKey(profession);
-        String id = professionId != null ? professionId.toString() : profession.toString();
-        for (Int2ObjectMap.Entry<VillagerTrades.ItemListing[]> entry
-            : byLevel.int2ObjectEntrySet()) {
-            appendAll(id, entry.getIntKey(), experimental, entry.getValue(), context, ops, out);
-        }
+    /** Every trade the running game knows about, as offers. */
+    private static List<TradeOffer> readTrades(Level level, HolderLookup.Provider registries, RegistryOps<JsonElement> ops) {
+        //? if >=26.1 {
+        /*return readRegistryTrades(level, registries, ops);
+        *///? } else {
+        return readListingTrades(level, ops);
+        //? }
     }
 
-    private static void collectWanderingTrades(
-        Int2ObjectMap<VillagerTrades.ItemListing[]> byLevel,
-        boolean experimental,
-        Entity context,
-        RegistryOps<JsonElement> ops,
-        List<Trade> out
-    ) {
-        if (byLevel == null) {
-            return;
+    private static Trade tradeOf(TradeOffer offer) {
+        String professionId = offer.professionId();
+        JsonObject json = new JsonObject();
+        json.addProperty("profession", professionId);
+        if (offer.level() != null) {
+            json.addProperty("level", offer.level());
         }
-        for (Int2ObjectMap.Entry<VillagerTrades.ItemListing[]> entry
-            : byLevel.int2ObjectEntrySet()) {
-            appendAll(WANDERING_TRADER_ID, entry.getIntKey(), experimental, entry.getValue(), context, ops, out);
+        if (offer.experimental()) {
+            json.addProperty("experimental", true);
         }
-    }
-
-    private static void collectExperimentalWanderingTrades(
-        Entity context,
-        RegistryOps<JsonElement> ops,
-        List<Trade> out
-    ) {
-        for (Pair<VillagerTrades.ItemListing[], Integer> entry
-            : VillagerTrades.EXPERIMENTAL_WANDERING_TRADER_TRADES) {
-            Integer level = entry.getRight();
-            appendAll(WANDERING_TRADER_ID, level != null ? level : 1, true, entry.getLeft(), context, ops, out);
+        json.addProperty("listingClass", offer.listingClass());
+        if (offer.tradeId() != null) {
+            json.addProperty("tradeId", offer.tradeId());
         }
-    }
-
-    private static final String WANDERING_TRADER_ID = "minecraft:wandering_trader";
-
-    private static void appendAll(
-        String professionId,
-        int level,
-        boolean experimental,
-        VillagerTrades.ItemListing[] listings,
-        Entity context,
-        RegistryOps<JsonElement> ops,
-        List<Trade> out
-    ) {
-        if (listings == null) {
-            return;
-        }
-        for (VillagerTrades.ItemListing listing : listings) {
-            if (listing == null) {
-                continue;
-            }
-            append(professionId, level, experimental, listing, context, ops, out);
-        }
-    }
-
-    private static void append(
-        String professionId,
-        int level,
-        boolean experimental,
-        VillagerTrades.ItemListing listing,
-        Entity context,
-        RegistryOps<JsonElement> ops,
-        List<Trade> out
-    ) {
-        for (Variant variant : variantsOf(listing, context)) {
-            Offer offer = variant.trader() != null ? materialize(variant) : null;
-            if (offer == null) {
-                out.add(declarationOf(professionId, level, experimental, variant, ops));
-            } else {
-                out.add(offerOf(professionId, level, experimental, variant.listing(), offer));
-            }
-        }
-    }
-
-    /** A listing that could not be turned into an offer, reported by what it declares. */
-    private static Trade declarationOf(
-        String professionId,
-        int level,
-        boolean experimental,
-        Variant variant,
-        RegistryOps<JsonElement> ops
-    ) {
-        JsonObject json = baseEntry(professionId, level, experimental, variant.listing());
-        if (variant.villagerType() != null) {
-            json.addProperty("villagerType", variant.villagerType());
-        }
-        JsonElement declaration = JsonCodec.snapshotObject(variant.listing(), SNAPSHOT_DEPTH, ops);
-        if (declaration != null && declaration.isJsonObject()) {
-            json.add("listing", declaration);
-        }
-        String search = professionId + ' ' + variant.listing().getClass().getName()
-            + (variant.villagerType() != null ? ' ' + variant.villagerType() : "");
-        return tradeOf(professionId, json, Set.of(), List.of(), List.of(), search);
-    }
-
-    private static Trade offerOf(
-        String professionId,
-        int level,
-        boolean experimental,
-        VillagerTrades.ItemListing listing,
-        Offer offer
-    ) {
-        JsonObject json = baseEntry(professionId, level, experimental, listing);
         if (offer.villagerType() != null) {
             json.addProperty("villagerType", offer.villagerType());
         }
-        json.add("costA", stackJson(offer.costA()));
-        if (offer.costB() != null) {
-            json.add("costB", stackJson(offer.costB()));
-        }
-        json.add("result", stackJson(offer.result()));
-        json.addProperty("maxUses", offer.maxUses());
-        json.addProperty("xp", offer.xp());
-        json.addProperty("priceMultiplier", offer.priceMultiplier());
-        if (offer.sampled()) {
-            json.addProperty("sampled", true);
-        }
 
-        Set<String> namespaces = new LinkedHashSet<>();
         StringBuilder search = new StringBuilder()
             .append(professionId).append(' ')
-            .append(listing.getClass().getName()).append(' ');
-        List<StackRef> costs = new ArrayList<>(2);
-        for (StackRef cost : new StackRef[] {offer.costA(), offer.costB()}) {
-            if (cost != null) {
-                costs.add(cost);
-                describeStack(cost, namespaces, search);
-            }
-        }
-        List<StackRef> results = offer.result() != null ? List.of(offer.result()) : List.of();
-        results.forEach(r -> describeStack(r, namespaces, search));
+            .append(offer.listingClass()).append(' ');
         if (offer.villagerType() != null) {
             search.append(offer.villagerType()).append(' ');
         }
-        return tradeOf(professionId, json, namespaces, costs, results, search);
-    }
-    private static JsonObject baseEntry(
-        String professionId,
-        int level,
-        boolean experimental,
-        VillagerTrades.ItemListing listing
-    ) {
-        JsonObject json = new JsonObject();
-        json.addProperty("profession", professionId);
-        json.addProperty("level", level);
-        if (experimental) {
-            json.addProperty("experimental", true);
+        if (offer.tradeId() != null) {
+            search.append(offer.tradeId()).append(' ');
         }
-        json.addProperty("listingClass", listing.getClass().getName());
-        return json;
-    }
 
-    private static Trade tradeOf(
-        String professionId,
-        JsonObject json,
-        Set<String> namespaces,
-        List<StackRef> costs,
-        List<StackRef> results,
-        CharSequence searchText
-    ) {
+        Set<String> namespaces = new LinkedHashSet<>();
+        List<StackRef> costs = new ArrayList<>(2);
+        List<StackRef> results = List.of();
+
+        if (offer.declaration() != null) {
+            json.add("listing", offer.declaration());
+        } else {
+            json.add("costA", stackJson(offer.costA()));
+            if (offer.costB() != null) {
+                json.add("costB", stackJson(offer.costB()));
+            }
+            json.add("result", stackJson(offer.result()));
+            json.addProperty("maxUses", offer.maxUses());
+            json.addProperty("xp", offer.xp());
+            json.addProperty("priceMultiplier", offer.priceMultiplier());
+            if (offer.sampled()) {
+                json.addProperty("sampled", true);
+            }
+            for (StackRef cost : new StackRef[] {offer.costA(), offer.costB()}) {
+                if (cost != null) {
+                    costs.add(cost);
+                    describeStack(cost, namespaces, search);
+                }
+            }
+            results = offer.result() != null ? List.of(offer.result()) : List.of();
+            results.forEach(stack -> describeStack(stack, namespaces, search));
+        }
+
         String professionLower = professionId.toLowerCase(Locale.ROOT);
         int colon = professionId.indexOf(':');
         String path = colon >= 0 ? professionId.substring(colon + 1) : professionId;
@@ -398,186 +307,12 @@ public final class TradeCollector {
             Set.copyOf(allNamespaces),
             List.copyOf(costs),
             List.copyOf(results),
-            searchText.toString().toLowerCase(Locale.ROOT),
+            search.toString().toLowerCase(Locale.ROOT),
             json
         );
     }
 
-    private static String namespaceOf(String id) {
-        int colon = id.indexOf(':');
-        return (colon > 0 ? id.substring(0, colon) : "minecraft").toLowerCase(Locale.ROOT);
-    }
-
-    // -------------------------------------------------------------- offers
-
-    /**
-     * One concrete listing as a villager of one type would see it.
-     *
-     * <p>{@code trader} is null when the listing must not be materialized here; the variant is
-     * then reported by its declaration.
-     */
-    private record Variant(VillagerTrades.ItemListing listing, String villagerType, Entity trader) {}
-
-    /**
-     * What a listing's own fields say about how it produces an offer.
-     *
-     * <p>Vanilla's listing classes are package-private and their names differ between loaders'
-     * runtime mappings, so they are recognised by the values they hold, not by class name. Those
-     * values are also what decides the behaviour: a structure tag is what gets searched for, and a
-     * villager-type map is what the offer is looked up in.
-     *
-     * @param byVillagerType the listing's villager-type map, or null when the offer ignores type
-     * @param searchesTheWorld whether the listing names a structure to locate
-     */
-    private record Shape(Map<?, ?> byVillagerType, boolean searchesTheWorld) {}
-
-    /**
-     * Splits a listing into the concrete listings villagers actually roll.
-     *
-     * <p>A map from villager type to listing is a biome wrapper and is unwrapped before anything is
-     * rolled, so the world-search check sees the listing that runs rather than its wrapper: vanilla
-     * wraps its cartographer treasure maps that way. A map from villager type to anything else is
-     * read by the listing itself, so it is rolled once per type in the map. Either way a caller sees
-     * the jungle trade and the desert trade rather than one standing in for both.
-     */
-    private static List<Variant> variantsOf(VillagerTrades.ItemListing listing, Entity context) {
-        Shape shape = shapeOf(listing);
-        if (context == null || shape.searchesTheWorld()) {
-            return List.of(new Variant(listing, null, null));
-        }
-        if (shape.byVillagerType() == null) {
-            return List.of(new Variant(listing, null, context));
-        }
-        List<Variant> variants = new ArrayList<>(shape.byVillagerType().size());
-        for (Map.Entry<?, ?> entry : shape.byVillagerType().entrySet()) {
-            VillagerType type = (VillagerType) entry.getKey();
-            if (entry.getValue() instanceof VillagerTrades.ItemListing inner) {
-                variants.addAll(variantsOf(inner, villagerOf(context.level(), type)).stream()
-                    .map(v -> new Variant(v.listing(), typeId(type), v.trader()))
-                    .toList());
-            } else {
-                variants.add(new Variant(listing, typeId(type), villagerOf(context.level(), type)));
-            }
-        }
-        return variants;
-    }
-
-    /**
-     * Reads a listing's instance fields once to find its villager-type map and any structure tag.
-     *
-     * <p>A field that cannot be opened is a field whose meaning is unknown; the listing is then
-     * treated as one that may search the world, so it is described rather than run.
-     */
-    private static Shape shapeOf(VillagerTrades.ItemListing listing) {
-        Map<?, ?> byType = null;
-        boolean searches = false;
-        for (java.lang.reflect.Field field : listing.getClass().getDeclaredFields()) {
-            if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
-                continue;
-            }
-            Class<?> type = field.getType();
-            if (!Map.class.isAssignableFrom(type) && !net.minecraft.tags.TagKey.class.isAssignableFrom(type)) {
-                continue;
-            }
-            Object value;
-            try {
-                if (!field.trySetAccessible()) {
-                    return new Shape(null, true);
-                }
-                value = field.get(listing);
-            } catch (IllegalAccessException e) {
-                return new Shape(null, true);
-            }
-            if (value instanceof net.minecraft.tags.TagKey<?> tag
-                && tag.registry().equals(net.minecraft.core.registries.Registries.STRUCTURE)) {
-                searches = true;
-            } else if (value instanceof Map<?, ?> map && !map.isEmpty()
-                && map.keySet().stream().allMatch(VillagerType.class::isInstance)) {
-                byType = map;
-            }
-        }
-        return new Shape(byType, searches);
-    }
-
-    /**
-     * The entity offers are rolled against.
-     *
-     * <p>Listings read the level and the villager's type from the entity they are given. A detached
-     * villager supplies both without touching the world: nothing is spawned or added.
-     */
-    private static Entity villagerOf(Level level, VillagerType type) {
-        return new Villager(net.minecraft.world.entity.EntityType.VILLAGER, level, type);
-    }
-
-    private static String typeId(VillagerType type) {
-        ResourceLocation id = BuiltInRegistries.VILLAGER_TYPE.getKey(type);
-        return id != null ? id.toString() : type.toString();
-    }
-
-    /**
-     * Rolls a variant twice; a listing whose offer depends on the random source differs between
-     * the rolls and is marked, so a caller can tell a fixed trade from one that varies per villager.
-     */
-    private static Offer materialize(Variant variant) {
-        VillagerTrades.ItemListing listing = variant.listing();
-        Entity context = variant.trader();
-        String villagerType = variant.villagerType();
-        MerchantOffer first = singleOffer(listing, context, SAMPLE_SEED_A);
-        if (first == null) {
-            return null;
-        }
-        MerchantOffer second = singleOffer(listing, context, SAMPLE_SEED_B);
-        boolean sampled = second == null || !sameIo(first, second);
-        return new Offer(
-            stackRef(first.getCostA()),
-            first.getCostB().isEmpty() ? null : stackRef(first.getCostB()),
-            stackRef(first.getResult()),
-            first.getMaxUses(),
-            first.getXp(),
-            first.getPriceMultiplier(),
-            sampled,
-            villagerType
-        );
-    }
-
-    private static MerchantOffer singleOffer(VillagerTrades.ItemListing listing, Entity context, long seed) {
-        try {
-            return listing.getOffer(context, RandomSource.create(seed));
-        } catch (RuntimeException e) {
-            // A listing that cannot be materialized without more world context keeps its
-            // declaration; that is reported, not guessed.
-            return null;
-        }
-    }
-
-    private static boolean sameIo(MerchantOffer a, MerchantOffer b) {
-        return sameStack(a.getCostA(), b.getCostA())
-            && sameStack(a.getCostB(), b.getCostB())
-            && sameStack(a.getResult(), b.getResult())
-            && a.getMaxUses() == b.getMaxUses()
-            && a.getXp() == b.getXp()
-            && Float.compare(a.getPriceMultiplier(), b.getPriceMultiplier()) == 0;
-    }
-
-    private static boolean sameStack(ItemStack a, ItemStack b) {
-        if (a.isEmpty() != b.isEmpty()) {
-            return false;
-        }
-        if (a.isEmpty()) {
-            return true;
-        }
-        return a.getItem() == b.getItem() && a.getCount() == b.getCount();
-    }
-
-    private static StackRef stackRef(ItemStack stack) {
-        if (stack == null || stack.isEmpty()) {
-            return null;
-        }
-        ResourceLocation id = BuiltInRegistries.ITEM.getKey(stack.getItem());
-        Set<String> tags = new LinkedHashSet<>();
-        stack.getTags().forEach(tag -> tags.add(tag.location().toString().toLowerCase(Locale.ROOT)));
-        return new StackRef(id.toString(), stack.getHoverName().getString(), stack.getCount(), Set.copyOf(tags));
-    }
+    // -------------------------------------------------------------- renders
 
     /** The reported form of a stack: what it is and how many, without its component payload. */
     private static JsonObject stackJson(StackRef stack) {
@@ -596,7 +331,402 @@ public final class TradeCollector {
         namespaces.add(namespaceOf(stack.id()));
         search.append(stack.id()).append(' ').append(stack.displayName()).append(' ');
     }
+
+    private static String namespaceOf(String id) {
+        int colon = id.indexOf(':');
+        return (colon > 0 ? id.substring(0, colon) : "minecraft").toLowerCase(Locale.ROOT);
+    }
+
     private static String lower(String value) {
         return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
     }
+
+    // ------------------------------------------------------- rolling, shared
+
+    /**
+     * A rolled offer, before it is attached to the profession and level it was rolled for.
+     *
+     * <p>An offer that could not be rolled a second time is still the game's offer for the first
+     * roll; marking it sampled says a second roll did not reproduce it, which is the honest
+     * description of an offer that changed under the same seed.
+     */
+    private static TradeOffer rolledOffer(String listingClass, MerchantOffer first, MerchantOffer second) {
+        boolean sampled = second == null || !sameIo(first, second);
+        return new TradeOffer(
+            null,
+            null,
+            false,
+            listingClass,
+            null,
+            StackRef.of(first.getCostA()),
+            first.getCostB().isEmpty() ? null : StackRef.of(first.getCostB()),
+            StackRef.of(first.getResult()),
+            first.getMaxUses(),
+            first.getXp(),
+            first.getPriceMultiplier(),
+            sampled,
+            null,
+            null
+        );
+    }
+
+    private static boolean sameIo(MerchantOffer a, MerchantOffer b) {
+        return sameStack(a.getCostA(), b.getCostA())
+            && sameStack(a.getCostB(), b.getCostB())
+            && sameStack(a.getResult(), b.getResult())
+            && a.getMaxUses() == b.getMaxUses()
+            && a.getXp() == b.getXp()
+            && Float.compare(a.getPriceMultiplier(), b.getPriceMultiplier()) == 0;
+    }
+
+    private static boolean sameStack(net.minecraft.world.item.ItemStack a, net.minecraft.world.item.ItemStack b) {
+        if (a.isEmpty() != b.isEmpty()) {
+            return false;
+        }
+        return a.isEmpty() || (a.getItem() == b.getItem() && a.getCount() == b.getCount());
+    }
+
+    /** A declaration worth reporting, or null when the snapshot produced nothing usable. */
+    private static JsonElement jsonOf(JsonElement declaration) {
+        return declaration != null && declaration.isJsonObject() ? declaration : null;
+    }
+
+    /**
+     * The villager an offer is rolled against.
+     *
+     * <p>A listing and a trade both read the level and the villager's type from the entity they are
+     * given. A detached villager supplies both without touching the world: nothing is spawned or
+     * added. 26.3 moved the entity type constants out of {@code EntityType} into {@code EntityTypes}.
+     */
+    //? if >=26.3 {
+    /*private static Villager villagerOf(Level level, Holder.Reference<VillagerType> type) {
+        Villager villager = new Villager(EntityTypes.VILLAGER, level);
+        villager.setVillagerData(villager.getVillagerData().withType(type));
+        return villager;
+    }
+    *///? } else if >=26.1 {
+    /*private static Villager villagerOf(Level level, Holder.Reference<VillagerType> type) {
+        return new Villager(EntityType.VILLAGER, level, type);
+    }
+    *///? } else {
+    private static Villager villagerOf(Level level, VillagerType type) {
+        return new Villager(EntityType.VILLAGER, level, type);
+    }
+    //? }
+
+    /** The trades a set offers; 26.3 made the accessor match the record's component name. */
+    //? if >=26.3 {
+    /*private static HolderSet<VillagerTrade> tradeSetMembers(TradeSet set) {
+        return set.trades();
+    }
+    *///? } else if >=26.1 {
+    /*private static HolderSet<VillagerTrade> tradeSetMembers(TradeSet set) {
+        return set.getTrades();
+    }
+    *///? }
+
+    // -------------------------------------------------- source: 26.1 and later
+
+    // The 26.x trade subsystem: named registry entries, grouped into a set per profession and level.
+    // A trade is limited to villager types by a loot condition on the entity, so it is offered to
+    // each type in turn and reported against the ones it survives. A trade every type can roll is
+    // added once with no type, because the type is then not part of what the trade is, and a trade
+    // no type can roll is reported by its declaration.
+    //? if >=26.1 {
+    /*private static List<TradeOffer> readRegistryTrades(Level level, HolderLookup.Provider registries, RegistryOps<JsonElement> ops) {
+        if (!(level instanceof ServerLevel serverLevel) || registries == null) {
+            return List.of();
+        }
+        HolderLookup.RegistryLookup<TradeSet> tradeSets = registries.lookupOrThrow(Registries.TRADE_SET);
+        List<Holder.Reference<VillagerType>> villagerTypes =
+            registries.lookupOrThrow(Registries.VILLAGER_TYPE).listElements().toList();
+
+        List<TradeOffer> out = new ArrayList<>();
+        for (Holder.Reference<VillagerProfession> profession
+            : registries.lookupOrThrow(Registries.VILLAGER_PROFESSION).listElements().toList()) {
+            String professionId = Versioned.idOf(profession.key()).toString();
+            Int2ObjectMap<ResourceKey<TradeSet>> byLevel = profession.value().tradeSetsByLevel();
+            for (Int2ObjectMap.Entry<ResourceKey<TradeSet>> entry : byLevel.int2ObjectEntrySet()) {
+                TradeSet set = tradeSets.get(entry.getValue()).map(Holder.Reference::value).orElse(null);
+                if (set == null) {
+                    continue;
+                }
+                for (Holder<VillagerTrade> trade : tradeSetMembers(set)) {
+                    String tradeId = trade.unwrapKey().map(key -> Versioned.idOf(key).toString()).orElse(null);
+                    collectRegistryTrade(serverLevel, tradeId, trade.value(), villagerTypes,
+                        professionId, entry.getIntKey(), ops, out);
+                }
+            }
+        }
+        return out;
+    }
+
+    private static void collectRegistryTrade(
+        ServerLevel level,
+        String tradeId,
+        VillagerTrade trade,
+        List<Holder.Reference<VillagerType>> types,
+        String professionId,
+        int tradeLevel,
+        RegistryOps<JsonElement> ops,
+        List<TradeOffer> out
+    ) {
+        List<TradeOffer> rolled = new ArrayList<>();
+        for (Holder.Reference<VillagerType> type : types) {
+            TradeOffer offer = materializeRegistryTrade(
+                level, villagerOf(level, type), trade,
+                professionId, tradeLevel, tradeId, Versioned.idOf(type.key()).toString()
+            );
+            if (offer != null) {
+                rolled.add(offer);
+            }
+        }
+        if (rolled.isEmpty()) {
+            JsonElement declaration = JsonCodec.snapshotObject(trade, SNAPSHOT_DEPTH, ops);
+            out.add(new TradeOffer(
+                professionId, tradeLevel, false, VillagerTrade.class.getName(), tradeId,
+                null, null, null, 0, 0, 0.0F, false, null, null
+            ).described(jsonOf(declaration)));
+            return;
+        }
+        if (rolled.size() == types.size()) {
+            out.add(rolled.get(0).attached(professionId, tradeLevel, false, tradeId, null));
+            return;
+        }
+        out.addAll(rolled);
+    }
+
+    private static TradeOffer materializeRegistryTrade(
+        ServerLevel level,
+        Villager villager,
+        VillagerTrade trade,
+        String professionId,
+        int tradeLevel,
+        String tradeId,
+        String villagerType
+    ) {
+        MerchantOffer first = registryOffer(level, villager, trade, SAMPLE_SEED_A);
+        if (first == null) {
+            return null;
+        }
+        MerchantOffer second = registryOffer(level, villager, trade, SAMPLE_SEED_B);
+        return rolledOffer(VillagerTrade.class.getName(), first, second)
+            .attached(professionId, tradeLevel, false, tradeId, villagerType);
+    }
+
+    private static MerchantOffer registryOffer(ServerLevel level, Villager villager, VillagerTrade trade, long seed) {
+        LootParams params = new LootParams.Builder(level)
+            .withParameter(LootContextParams.ORIGIN, villager.position())
+            .withParameter(LootContextParams.THIS_ENTITY, villager)
+            .withParameter(LootContextParams.ADDITIONAL_COST_COMPONENT_ALLOWED, Unit.INSTANCE)
+            .create(LootContextParamSets.VILLAGER_TRADE);
+        LootContext context = new LootContext.Builder(params)
+            .withOptionalRandomSource(RandomSource.create(seed))
+            .create(java.util.Optional.empty());
+        try {
+            return trade.getOffer(context);
+        } catch (RuntimeException e) {
+            // A trade whose condition cannot be read from this villager is reported by its
+            // declaration; guessing a stack would report an offer the game never makes.
+            return null;
+        }
+    }
+    *///? }
+
+    // --------------------------------------------------- source: up to 1.21.1
+
+    // The 1.21.1 trade subsystem: a table of listings per profession and level. A listing that holds
+    // a villager-type map is expanded per type, and a listing that names a structure tag is reported
+    // by its declaration rather than run, because finding a map target searches the world and writes
+    // into map storage.
+    //? if <26.1 {
+    private static List<TradeOffer> readListingTrades(Level level, RegistryOps<JsonElement> ops) {
+        Entity context = villagerOf(level, VillagerType.PLAINS);
+        List<TradeOffer> out = new ArrayList<>();
+        for (Map.Entry<VillagerProfession, Int2ObjectMap<VillagerTrades.ItemListing[]>> entry
+            : VillagerTrades.TRADES.entrySet()) {
+            collectListings(professionIdOf(entry.getKey()), entry.getValue(), false, context, ops, out);
+        }
+        for (Map.Entry<VillagerProfession, Int2ObjectMap<VillagerTrades.ItemListing[]>> entry
+            : VillagerTrades.EXPERIMENTAL_TRADES.entrySet()) {
+            collectListings(professionIdOf(entry.getKey()), entry.getValue(), true, context, ops, out);
+        }
+        collectListings(WANDERING_TRADER_ID, VillagerTrades.WANDERING_TRADER_TRADES, false, context, ops, out);
+        for (Pair<VillagerTrades.ItemListing[], Integer> entry : VillagerTrades.EXPERIMENTAL_WANDERING_TRADER_TRADES) {
+            int entryLevel = entry.getRight() != null ? entry.getRight() : 1;
+            appendListings(WANDERING_TRADER_ID, entryLevel, true, entry.getLeft(), context, ops, out);
+        }
+        return out;
+    }
+
+    private static String professionIdOf(VillagerProfession profession) {
+        return BuiltInRegistries.VILLAGER_PROFESSION.getKey(profession).toString();
+    }
+
+    private static void collectListings(
+        String professionId,
+        Int2ObjectMap<VillagerTrades.ItemListing[]> byLevel,
+        boolean experimental,
+        Entity context,
+        RegistryOps<JsonElement> ops,
+        List<TradeOffer> out
+    ) {
+        if (byLevel == null) {
+            return;
+        }
+        for (Int2ObjectMap.Entry<VillagerTrades.ItemListing[]> entry : byLevel.int2ObjectEntrySet()) {
+            appendListings(professionId, entry.getIntKey(), experimental, entry.getValue(), context, ops, out);
+        }
+    }
+
+    private static void appendListings(
+        String professionId,
+        int level,
+        boolean experimental,
+        VillagerTrades.ItemListing[] listings,
+        Entity context,
+        RegistryOps<JsonElement> ops,
+        List<TradeOffer> out
+    ) {
+        if (listings == null) {
+            return;
+        }
+        for (VillagerTrades.ItemListing listing : listings) {
+            if (listing == null) {
+                continue;
+            }
+            for (ListingVariant variant : variantsOf(listing, context)) {
+                TradeOffer offer = variant.trader() == null
+                    ? null
+                    : materializeListing(professionId, level, experimental, variant);
+                out.add(offer != null
+                    ? offer
+                    : describeListing(professionId, level, experimental, variant, ops));
+            }
+        }
+    }
+
+    // One concrete listing as a villager of one type would see it. `trader` is null when the listing
+    // must not be materialized here; the variant is then reported by its declaration.
+    private record ListingVariant(VillagerTrades.ItemListing listing, String villagerType, Entity trader) {}
+
+    // What a listing's own fields say about how it produces an offer.
+    //
+    // Vanilla's listing classes are package-private and their names differ between loaders' runtime
+    // mappings, so they are recognised by the values they hold, not by class name. Those values are
+    // also what decides the behaviour: a structure tag is what gets searched for, and a villager-type
+    // map is what the offer is looked up in.
+    private record ListingShape(Map<?, ?> byVillagerType, boolean searchesTheWorld) {}
+
+    // Splits a listing into the concrete listings villagers actually roll.
+    //
+    // A map from villager type to listing is a biome wrapper and is unwrapped before anything is
+    // rolled, so the world-search check sees the listing that runs rather than its wrapper: vanilla
+    // wraps its cartographer treasure maps that way. A map from villager type to anything else is
+    // read by the listing itself, so it is rolled once per type in the map. Either way a caller sees
+    // the jungle trade and the desert trade rather than one standing in for both.
+    private static List<ListingVariant> variantsOf(VillagerTrades.ItemListing listing, Entity context) {
+        ListingShape shape = shapeOf(listing);
+        if (context == null || shape.searchesTheWorld()) {
+            return List.of(new ListingVariant(listing, null, null));
+        }
+        if (shape.byVillagerType() == null) {
+            return List.of(new ListingVariant(listing, null, context));
+        }
+        List<ListingVariant> variants = new ArrayList<>(shape.byVillagerType().size());
+        for (Map.Entry<?, ?> entry : shape.byVillagerType().entrySet()) {
+            VillagerType type = (VillagerType) entry.getKey();
+            if (entry.getValue() instanceof VillagerTrades.ItemListing inner) {
+                for (ListingVariant variant : variantsOf(inner, villagerOf(context.level(), type))) {
+                    variants.add(new ListingVariant(variant.listing(), typeId(type), variant.trader()));
+                }
+            } else {
+                variants.add(new ListingVariant(listing, typeId(type), villagerOf(context.level(), type)));
+            }
+        }
+        return variants;
+    }
+
+    // Reads a listing's instance fields once to find its villager-type map and any structure tag.
+    //
+    // A field that cannot be opened is a field whose meaning is unknown; the listing is then treated
+    // as one that may search the world, so it is described rather than run.
+    private static ListingShape shapeOf(VillagerTrades.ItemListing listing) {
+        Map<?, ?> byType = null;
+        boolean searches = false;
+        for (java.lang.reflect.Field field : listing.getClass().getDeclaredFields()) {
+            if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
+                continue;
+            }
+            Class<?> fieldType = field.getType();
+            if (!Map.class.isAssignableFrom(fieldType)
+                && !net.minecraft.tags.TagKey.class.isAssignableFrom(fieldType)) {
+                continue;
+            }
+            Object value;
+            try {
+                if (!field.trySetAccessible()) {
+                    return new ListingShape(null, true);
+                }
+                value = field.get(listing);
+            } catch (IllegalAccessException e) {
+                return new ListingShape(null, true);
+            }
+            if (value instanceof net.minecraft.tags.TagKey<?> tag
+                && tag.registry().equals(Registries.STRUCTURE)) {
+                searches = true;
+            } else if (value instanceof Map<?, ?> map && !map.isEmpty()
+                && map.keySet().stream().allMatch(VillagerType.class::isInstance)) {
+                byType = map;
+            }
+        }
+        return new ListingShape(byType, searches);
+    }
+
+    private static String typeId(VillagerType type) {
+        return BuiltInRegistries.VILLAGER_TYPE.getKey(type).toString();
+    }
+
+    // Rolls a variant twice; a listing whose offer depends on the random source differs between the
+    // rolls and is marked, so a caller can tell a fixed trade from one that varies per villager.
+    private static TradeOffer materializeListing(
+        String professionId,
+        int level,
+        boolean experimental,
+        ListingVariant variant
+    ) {
+        MerchantOffer first = listingOffer(variant.listing(), variant.trader(), SAMPLE_SEED_A);
+        if (first == null) {
+            return null;
+        }
+        MerchantOffer second = listingOffer(variant.listing(), variant.trader(), SAMPLE_SEED_B);
+        return rolledOffer(variant.listing().getClass().getName(), first, second)
+            .attached(professionId, level, experimental, variant.villagerType());
+    }
+
+    private static MerchantOffer listingOffer(VillagerTrades.ItemListing listing, Entity context, long seed) {
+        try {
+            return listing.getOffer(context, RandomSource.create(seed));
+        } catch (RuntimeException e) {
+            // A listing that cannot be materialized without more world context keeps its
+            // declaration; that is reported, not guessed.
+            return null;
+        }
+    }
+
+    // A listing that could not be turned into an offer, reported by what it declares.
+    private static TradeOffer describeListing(
+        String professionId,
+        int level,
+        boolean experimental,
+        ListingVariant variant,
+        RegistryOps<JsonElement> ops
+    ) {
+        JsonElement declaration = JsonCodec.snapshotObject(variant.listing(), SNAPSHOT_DEPTH, ops);
+        return new TradeOffer(
+            professionId, Integer.valueOf(level), experimental, variant.listing().getClass().getName(), null,
+            null, null, null, 0, 0, 0.0F, false, variant.villagerType(), null
+        ).described(jsonOf(declaration));
+    }
+    //? }
 }

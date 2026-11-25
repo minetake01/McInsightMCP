@@ -13,11 +13,13 @@ import net.minetake.mcinsight.api.Params;
 import net.minetake.mcinsight.api.RequestContext;
 import net.minetake.mcinsight.client.ClientStateAccessor;
 import net.minetake.mcinsight.game.GameAccess;
+import net.minetake.mcinsight.game.Versioned;
 import net.minetake.mcinsight.registry.DisplayNames;
 import net.minetake.mcinsight.registry.RegistryIndex;
 import net.minetake.mcinsight.serial.JsonCodec;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
+import net.minecraft.core.NonNullList;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.RegistryOps;
 import net.minecraft.resources.ResourceLocation;
@@ -241,7 +243,7 @@ public final class PlayerStateCollector {
         Level level = player.level();
         BlockPos blockPos = player.blockPosition();
         var biomeHolder = level.getBiome(blockPos);
-        String biome = biomeHolder.unwrapKey().map(key -> key.location().toString()).orElse("unknown");
+        String biome = biomeHolder.unwrapKey().map(Versioned::idOf).map(ResourceLocation::toString).orElse("unknown");
         Biome biomeValue = biomeHolder.value();
 
         List<EffectSample> effects = new ArrayList<>();
@@ -259,10 +261,15 @@ public final class PlayerStateCollector {
         }
 
         Inventory inventory = player.getInventory();
-        int mainSize = inventory.items.size();
+        //? if >=26.1 {
+        /*NonNullList<ItemStack> items = inventory.getNonEquipmentItems();
+        *///? } else {
+        NonNullList<ItemStack> items = inventory.items;
+        //? }
+        int mainSize = items.size();
         List<SlotItemSample> carried = new ArrayList<>();
         for (int i = 0; i < mainSize; i++) {
-            ItemStack stack = inventory.items.get(i);
+            ItemStack stack = items.get(i);
             if (!stack.isEmpty()) {
                 carried.add(new SlotItemSample(i, stack.copy()));
             }
@@ -285,15 +292,15 @@ public final class PlayerStateCollector {
         ClientStateAccessor.ScreenSnapshot openScreen = ClientStateAccessor.captureOpenScreenSnapshot();
 
         return new RawPlayerSnapshot(
-            player.getGameProfile().getName(),
+            Versioned.profileName(player.getGameProfile()),
             player.getUUID(),
-            level.dimension().location().toString(),
+            Versioned.dimensionId(level),
             biome,
             biomeValue.getBaseTemperature(),
             level.canSeeSky(blockPos),
             level.getBrightness(LightLayer.SKY, blockPos),
             level.getBrightness(LightLayer.BLOCK, blockPos),
-            biomeValue.getPrecipitationAt(blockPos).name().toLowerCase(Locale.ROOT),
+            precipitationAt(biomeValue, level, blockPos),
             player.getX(),
             player.getY(),
             player.getZ(),
@@ -317,11 +324,29 @@ public final class PlayerStateCollector {
             player.getMainHandItem().copy(),
             player.getOffhandItem().copy(),
             armor,
+            //? if >=26.1 {
+            /*inventory.getSelectedSlot(),
+            *///? } else {
             inventory.selected,
+            //? }
             carried,
             openScreen,
             level.registryAccess()
         );
+    }
+
+    /**
+     * The biome's precipitation at a position, lowercase.
+     *
+     * <p>26.x made the snow-or-rain decision depend on the sea level the position sits relative to,
+     * which is the level's own answer; 1.21.1 read it from the biome alone.
+     */
+    private static String precipitationAt(Biome biome, Level level, BlockPos pos) {
+        //? if >=26.1 {
+        /*return biome.getPrecipitationAt(pos, level.getSeaLevel()).name().toLowerCase(Locale.ROOT);
+        *///? } else {
+        return biome.getPrecipitationAt(pos).name().toLowerCase(Locale.ROOT);
+        //? }
     }
 
     private static String gameMode(Player player) {

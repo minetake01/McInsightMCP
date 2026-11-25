@@ -36,8 +36,7 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
       version_type: ${{ steps.meta.outputs.version_type }}
-      mc_version: ${{ steps.meta.outputs.mc_version }}
-      java_version: ${{ steps.meta.outputs.java_version }}
+      mc_versions: ${{ steps.meta.outputs.mc_versions }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -63,19 +62,19 @@ jobs:
             fi
           fi
 
-          MC_VERSION="$(grep -E '^minecraft_version=' mod/gradle.properties | cut -d'=' -f2- | tr -d '\r')"
-          JAVA_VERSION="$(grep -E '^java_version=' mod/gradle.properties | cut -d'=' -f2- | tr -d '\r')"
-          if [[ -z "${VERSION}" || -z "${MC_VERSION}" || -z "${JAVA_VERSION}" ]]; then
-            echo "::error::Failed to resolve version (${VERSION}), minecraft_version (${MC_VERSION}), or java_version (${JAVA_VERSION})."
+          # The matrix the mod is built for: one row per Minecraft version, as JSON for `strategy`.
+          MC_VERSIONS="$(grep -E '^minecraft_versions=' mod/gradle.properties | cut -d'=' -f2- | tr -d '\r')"
+          if [[ -z "${VERSION}" || -z "${MC_VERSIONS}" ]]; then
+            echo "::error::Failed to resolve version (${VERSION}) or minecraft_versions (${MC_VERSIONS})."
             exit 1
           fi
+          JSON="$(node -e 'const v = process.argv[1].split(",").map((s) => s.trim()).filter(Boolean); if (v.length === 0) process.exit(1); process.stdout.write(JSON.stringify(v));' "${MC_VERSIONS}")"
 
           {
             echo "version=${VERSION}"
             echo "tag=${TAG}"
             echo "version_type=${VERSION_TYPE}"
-            echo "mc_version=${MC_VERSION}"
-            echo "java_version=${JAVA_VERSION}"
+            echo "mc_versions=${JSON}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Verify version consistency across project files
@@ -84,20 +83,20 @@ jobs:
           set -euo pipefail
           EXPECTED="${{ steps.meta.outputs.version }}"
 
-          GRADLE_VER="$(grep -E '^version=' mod/gradle.properties | cut -d'=' -f2- | tr -d '\r')"
+          MOD_VER="$(grep -E '^mod\.version' mod/stonecutter.properties.toml | cut -d'=' -f2- | tr -d ' \r"')"
           PKG_VER="$(node -p "require('./mcp-server/package.json').version")"
 
-          echo "Expected version : ${EXPECTED}"
-          echo "gradle.properties: ${GRADLE_VER}"
-          echo "package.json     : ${PKG_VER}"
+          echo "Expected version  : ${EXPECTED}"
+          echo "stonecutter.props : ${MOD_VER}"
+          echo "package.json      : ${PKG_VER}"
 
-          if [[ "${GRADLE_VER}" != "${EXPECTED}" || "${PKG_VER}" != "${EXPECTED}" ]]; then
+          if [[ "${MOD_VER}" != "${EXPECTED}" || "${PKG_VER}" != "${EXPECTED}" ]]; then
             echo "::error::Version mismatch detected! Both version declarations must equal ${EXPECTED}."
             exit 1
           fi
 
-          # The mod reads its version from the metadata gradle.properties expands, and the MCP server
-          # from package.json, so these two are the only declarations.
+          # The mod reads its version from the metadata the build expands, and the MCP server from
+          # package.json, so these two are the only declarations.
           grep -q "readPackageVersion" mcp-server/src/server.ts
 
       - name: Setup pnpm
@@ -156,45 +155,54 @@ jobs:
         with:
           cache-cleanup: on-success
 
-      - name: Test common & Build NeoForge & Fabric mods
+      - name: Test common & build every Minecraft version
         working-directory: mod
         run: |
           chmod +x gradlew
-          ./gradlew :common:test :neoforge:build :fabric:build --no-daemon --stacktrace
+          versions="$(grep -E '^minecraft_versions=' gradle.properties | cut -d'=' -f2- | tr -d '\r')"
+          tasks=()
+          IFS=',' read -ra list <<< "${versions}"
+          for version in "${list[@]}"; do
+            version="${version// /}"
+            tasks+=(":common:${version}:test" ":neoforge:${version}:build" ":fabric:${version}:build")
+          done
+          printf 'Building %s\n' "${tasks[*]}"
+          ./gradlew "${tasks[@]}" --no-daemon --stacktrace
 
       - name: Collect mod JARs
         shell: bash
         run: |
           set -euo pipefail
           VERSION="${{ steps.meta.outputs.version }}"
-          MC_VERSION="${{ steps.meta.outputs.mc_version }}"
-
-          NEOFORGE_JAR="mod/neoforge/build/libs/mcinsight-neoforge-${MC_VERSION}-${VERSION}.jar"
-          FABRIC_JAR="mod/fabric/build/libs/mcinsight-fabric-${MC_VERSION}-${VERSION}.jar"
-
-          test -f "${NEOFORGE_JAR}"
-          test -f "${FABRIC_JAR}"
-
-          cp "${NEOFORGE_JAR}" release-out/
-          cp "${FABRIC_JAR}" release-out/
+          MC_VERSIONS="${{ steps.meta.outputs.mc_versions }}"
+          for mc in $(node -e 'process.stdout.write(JSON.parse(process.argv[1]).join(" "))' "${MC_VERSIONS}"); do
+            for loader in neoforge fabric; do
+              jar="mod/${loader}/versions/${mc}/build/libs/mcinsight-${loader}-${mc}-${VERSION}.jar"
+              test -f "${jar}"
+              cp "${jar}" release-out/
+            done
+          done
+          ls -l release-out/
 
       - name: Extract changelog release notes
         shell: bash
         run: |
           set -euo pipefail
           VERSION="${{ steps.meta.outputs.version }}"
+          MC_VERSIONS="${{ steps.meta.outputs.mc_versions }}"
           node -e '
             const fs = require("node:fs");
             const version = process.argv[1];
+            const mcVersions = JSON.parse(process.argv[2]).join(", ");
             const changelog = fs.readFileSync("CHANGELOG.md", "utf8");
             const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
             const re = new RegExp(`^## \\[${escaped}\\][^\\n]*\\n([\\s\\S]*?)(?=^## \\[|(?![\\s\\S]))`, "m");
             const match = changelog.match(re);
             const notes = match && match[1].trim()
               ? match[1].trim()
-              : `Release v${version} for Minecraft ${{ steps.meta.outputs.mc_version }} (NeoForge & Fabric) + McInsightMCP Server.`;
+              : `Release v${version} for Minecraft ${mcVersions} (NeoForge & Fabric) + McInsightMCP Server.`;
             fs.writeFileSync("release-out/RELEASE_NOTES.md", notes + "\n", "utf8");
-          ' "${VERSION}"
+          ' "${VERSION}" "${MC_VERSIONS}"
 
       - name: Verify Modrinth sync payload
         env:
@@ -292,17 +300,24 @@ jobs:
           name: McInsightMCP v${{ needs.build-and-verify.outputs.version }}
           body_path: release-assets/RELEASE_NOTES.md
           prerelease: ${{ needs.build-and-verify.outputs.version_type != 'release' }}
+          # One jar per loader per Minecraft version, so nothing here names a version.
           files: |
-            release-assets/mcinsight-neoforge-${{ needs.build-and-verify.outputs.mc_version }}-${{ needs.build-and-verify.outputs.version }}.jar
-            release-assets/mcinsight-fabric-${{ needs.build-and-verify.outputs.mc_version }}-${{ needs.build-and-verify.outputs.version }}.jar
-            release-assets/mcinsight-mcp-server-${{ needs.build-and-verify.outputs.version }}.tar.gz
-            release-assets/mcinsight-mcp-server-${{ needs.build-and-verify.outputs.version }}.zip
+            release-assets/mcinsight-neoforge-*.jar
+            release-assets/mcinsight-fabric-*.jar
+            release-assets/mcinsight-mcp-server-*.tar.gz
+            release-assets/mcinsight-mcp-server-*.zip
 
   publish-modrinth:
     name: Publish to Modrinth
     needs: [build-and-verify, publish-github]
     if: ${{ inputs.dry_run != true && vars.MODRINTH_PROJECT_ID != '' }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # One upload per (loader, Minecraft version): each jar declares the version it was built for.
+      matrix:
+        mc: ${{ fromJSON(needs.build-and-verify.outputs.mc_versions) }}
+        loader: [neoforge, fabric]
     steps:
       - name: Validate Modrinth token
         env:
@@ -327,37 +342,18 @@ jobs:
           name: release-assets
           path: release-assets
 
-      - name: Publish NeoForge build to Modrinth
+      - name: Publish ${{ matrix.loader }} build to Modrinth
         uses: Kir-Antipov/mc-publish@v3.3
         with:
           modrinth-id: ${{ vars.MODRINTH_PROJECT_ID }}
           modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
-          files: release-assets/mcinsight-neoforge-${{ needs.build-and-verify.outputs.mc_version }}-${{ needs.build-and-verify.outputs.version }}.jar
-          name: McInsight ${{ needs.build-and-verify.outputs.version }} (NeoForge)
-          version: ${{ needs.build-and-verify.outputs.version }}+neoforge
+          files: release-assets/mcinsight-${{ matrix.loader }}-${{ matrix.mc }}-${{ needs.build-and-verify.outputs.version }}.jar
+          name: McInsight ${{ needs.build-and-verify.outputs.version }} (${{ matrix.loader }}, ${{ matrix.mc }})
+          version: ${{ needs.build-and-verify.outputs.version }}+${{ matrix.loader }}+${{ matrix.mc }}
           version-type: ${{ needs.build-and-verify.outputs.version_type }}
           changelog-file: release-assets/RELEASE_NOTES.md
-          loaders: neoforge
-          game-versions: ${{ needs.build-and-verify.outputs.mc_version }}
-          dependencies: |
-            jei(optional)
-          fail-mode: fail
-
-      - name: Publish Fabric build to Modrinth
-        uses: Kir-Antipov/mc-publish@v3.3
-        with:
-          modrinth-id: ${{ vars.MODRINTH_PROJECT_ID }}
-          modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
-          files: release-assets/mcinsight-fabric-${{ needs.build-and-verify.outputs.mc_version }}-${{ needs.build-and-verify.outputs.version }}.jar
-          name: McInsight ${{ needs.build-and-verify.outputs.version }} (Fabric)
-          version: ${{ needs.build-and-verify.outputs.version }}+fabric
-          version-type: ${{ needs.build-and-verify.outputs.version_type }}
-          changelog-file: release-assets/RELEASE_NOTES.md
-          loaders: fabric
-          game-versions: ${{ needs.build-and-verify.outputs.mc_version }}
-          dependencies: |
-            fabric-api(required)
-            jei(optional)
+          loaders: ${{ matrix.loader }}
+          game-versions: ${{ matrix.mc }}
           fail-mode: fail
 
       - name: Sync README, license, links, and icon to Modrinth
@@ -375,15 +371,12 @@ jobs:
           const repo = process.env.GITHUB_REPOSITORY || 'minetake01/McInsightMCP';
           const blobBase = `https://github.com/${repo}/blob/main`;
 
-          const propsText = fs.readFileSync('mod/gradle.properties', 'utf8');
+          // The mod's metadata lives in the Stonecutter properties file; read the flat top-level
+          // keys first, then the per-version tables only where a loader value is needed.
           const props = {};
-          for (const line of propsText.split(/\r?\n/)) {
-            const trimmed = line.trim();
-            if (!trimmed || trimmed.startsWith('#')) continue;
-            const eq = trimmed.indexOf('=');
-            if (eq > 0) {
-              props[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
-            }
+          for (const line of fs.readFileSync('mod/stonecutter.properties.toml', 'utf8').split(/\r?\n/)) {
+            const match = /^([A-Za-z0-9_.]+)\s*=\s*"([^"]*)"/.exec(line);
+            if (match) props[match[1]] ??= match[2];
           }
 
           const rawReadme = fs.readFileSync('README.md', 'utf8');
@@ -408,13 +401,13 @@ jobs:
 
           const payload = {
             body: rewrittenBody,
-            license_id: props.license || 'MIT',
+            license_id: props['mod.license'] || 'MIT',
             license_url: `${blobBase}/LICENSE`,
-            source_url: props.mod_sources || `https://github.com/${repo}`,
-            issues_url: props.mod_issues || `https://github.com/${repo}/issues`,
+            source_url: props['mod.sources'] || `https://github.com/${repo}`,
+            issues_url: props['mod.issues'] || `https://github.com/${repo}/issues`,
           };
 
-          const userAgent = `${repo}/${process.env.VERSION || props.version || '0.1.0-beta.1'} (https://github.com/${repo})`;
+          const userAgent = `${repo}/${process.env.VERSION || props['mod.version'] || '0.1.0-beta.1'} (https://github.com/${repo})`;
           const metaRes = await fetch(`https://api.modrinth.com/v2/project/${encodeURIComponent(projectId)}`, {
             method: 'PATCH',
             headers: {
@@ -450,6 +443,12 @@ jobs:
     needs: [build-and-verify, publish-github]
     if: ${{ inputs.dry_run != true && vars.CURSEFORGE_PROJECT_ID != '' }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # One upload per (loader, Minecraft version), matching publish-modrinth.
+      matrix:
+        mc: ${{ fromJSON(needs.build-and-verify.outputs.mc_versions) }}
+        loader: [neoforge, fabric]
     steps:
       - name: Validate CurseForge token
         env:
@@ -466,41 +465,19 @@ jobs:
           name: release-assets
           path: release-assets
 
-      - name: Publish NeoForge build to CurseForge
+      - name: Publish ${{ matrix.loader }} build to CurseForge
         uses: Kir-Antipov/mc-publish@v3.3
         with:
           curseforge-id: ${{ vars.CURSEFORGE_PROJECT_ID }}
           curseforge-token: ${{ secrets.CURSEFORGE_TOKEN }}
-          files: release-assets/mcinsight-neoforge-${{ needs.build-and-verify.outputs.mc_version }}-${{ needs.build-and-verify.outputs.version }}.jar
-          name: McInsight ${{ needs.build-and-verify.outputs.version }} (NeoForge)
-          version: ${{ needs.build-and-verify.outputs.version }}+neoforge
+          files: release-assets/mcinsight-${{ matrix.loader }}-${{ matrix.mc }}-${{ needs.build-and-verify.outputs.version }}.jar
+          name: McInsight ${{ needs.build-and-verify.outputs.version }} (${{ matrix.loader }}, ${{ matrix.mc }})
+          version: ${{ needs.build-and-verify.outputs.version }}+${{ matrix.loader }}+${{ matrix.mc }}
           version-type: ${{ needs.build-and-verify.outputs.version_type }}
           changelog-file: release-assets/RELEASE_NOTES.md
-          loaders: neoforge
-          game-versions: ${{ needs.build-and-verify.outputs.mc_version }}
-          java: Java ${{ needs.build-and-verify.outputs.java_version }}
+          loaders: ${{ matrix.loader }}
+          game-versions: ${{ matrix.mc }}
           environment: client | server
-          dependencies: |
-            jei(optional)
-          fail-mode: fail
-
-      - name: Publish Fabric build to CurseForge
-        uses: Kir-Antipov/mc-publish@v3.3
-        with:
-          curseforge-id: ${{ vars.CURSEFORGE_PROJECT_ID }}
-          curseforge-token: ${{ secrets.CURSEFORGE_TOKEN }}
-          files: release-assets/mcinsight-fabric-${{ needs.build-and-verify.outputs.mc_version }}-${{ needs.build-and-verify.outputs.version }}.jar
-          name: McInsight ${{ needs.build-and-verify.outputs.version }} (Fabric)
-          version: ${{ needs.build-and-verify.outputs.version }}+fabric
-          version-type: ${{ needs.build-and-verify.outputs.version_type }}
-          changelog-file: release-assets/RELEASE_NOTES.md
-          loaders: fabric
-          game-versions: ${{ needs.build-and-verify.outputs.mc_version }}
-          java: Java ${{ needs.build-and-verify.outputs.java_version }}
-          environment: client | server
-          dependencies: |
-            fabric-api(required)
-            jei(optional)
           fail-mode: fail
 
   publish-npm:
@@ -558,3 +535,4 @@ jobs:
             # Uses npm Trusted Publishing (OIDC) configured on npmjs.com
             npm publish --access public --tag "${DIST_TAG}"
           fi
+

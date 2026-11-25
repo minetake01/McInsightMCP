@@ -14,6 +14,7 @@ import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.api.Params;
 import net.minetake.mcinsight.api.RequestContext;
 import net.minetake.mcinsight.game.MainThreadExecutor;
+import net.minetake.mcinsight.game.Versioned;
 import net.minetake.mcinsight.serial.JsonCodec;
 import net.minecraft.server.level.ServerPlayer;
 
@@ -109,7 +110,7 @@ public final class ServerPacketHandler {
         final List<byte[]> finalChunks = chunks;
         final UUID id = requestId;
         final int total = finalChunks.size();
-        sender.server.execute(() -> {
+        Versioned.serverOf(sender).execute(() -> {
             if (sender.hasDisconnected()) {
                 return;
             }

@@ -21,6 +21,7 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import net.minetake.mcinsight.game.Versioned;
 import net.minecraft.core.Holder;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.component.DataComponentPatch;
@@ -151,7 +152,7 @@ public final class JsonCodec {
             return NbtOps.INSTANCE.convertTo(JsonOps.INSTANCE, tag);
         } catch (Exception e) {
             JsonObject fallback = new JsonObject();
-            fallback.addProperty("_rawSnbt", tag.getAsString());
+            fallback.addProperty("_rawSnbt", tag.toString());
             return fallback;
         }
     }
@@ -183,12 +184,12 @@ public final class JsonCodec {
             case String s -> new JsonPrimitive(s);
             case Enum<?> e -> new JsonPrimitive(e.name());
             case ResourceLocation rl -> new JsonPrimitive(rl.toString());
-            case ResourceKey<?> key -> new JsonPrimitive(key.location().toString());
+            case ResourceKey<?> key -> new JsonPrimitive(Versioned.idOf(key).toString());
             case Component comp -> new JsonPrimitive(comp.getString());
             case TagKey<?> tag -> new JsonPrimitive("#" + tag.location());
             case ItemStack stack -> serializeItemStack(stack, ops);
             case Holder<?> holder -> holder.unwrapKey()
-                .map(k -> (JsonElement) new JsonPrimitive(k.location().toString()))
+                .map(k -> (JsonElement) new JsonPrimitive(Versioned.idOf(k).toString()))
                 .orElseGet(() -> new JsonPrimitive("<unregistered:" + holder.getClass().getSimpleName() + ">"));
             case Block block -> new JsonPrimitive(BuiltInRegistries.BLOCK.getKey(block).toString());
             case Item item -> new JsonPrimitive(BuiltInRegistries.ITEM.getKey(item).toString());

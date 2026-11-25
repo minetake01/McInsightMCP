@@ -15,6 +15,7 @@ import net.minetake.mcinsight.api.Params;
 import net.minetake.mcinsight.api.PartialData;
 import net.minetake.mcinsight.api.RequestContext;
 import net.minetake.mcinsight.game.GameAccess;
+import net.minetake.mcinsight.game.Versioned;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -231,8 +232,13 @@ public final class AreaScanner {
         BlockPos center = player.blockPosition();
         int minX = center.getX() - radius;
         int maxX = center.getX() + radius;
+        //? if >=26.1 {
+        /*int minY = Math.max(level.getMinY(), center.getY() - radius);
+        int maxY = Math.min(level.getMinY() + level.getHeight() - 1, center.getY() + radius);
+        *///? } else {
         int minY = Math.max(level.getMinBuildHeight(), center.getY() - radius);
         int maxY = Math.min(level.getMaxBuildHeight() - 1, center.getY() + radius);
+        //? }
         int minZ = center.getZ() - radius;
         int maxZ = center.getZ() + radius;
 
@@ -333,7 +339,7 @@ public final class AreaScanner {
         }
 
         return new ScanCapture(
-            level.dimension().location().toString(),
+            Versioned.dimensionId(level),
             blockCounts,
             blockEntities,
             totalBlockEntities,

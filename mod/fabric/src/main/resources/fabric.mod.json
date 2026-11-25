@@ -28,12 +28,9 @@
     "jei_mod_plugin": [
       "net.minetake.mcinsight.compat.jei.JeiPluginEntrypoint"
     ],
-    "emi": [
-      "net.minetake.mcinsight.compat.emi.EmiPluginEntrypoint"
-    ],
     "rei_client": [
       "net.minetake.mcinsight.compat.rei.ReiPluginEntrypoint"
-    ]
+    ]${optional_viewer_entrypoints}
   },
   "depends": {
     "fabricloader": ">=${fabric_loader_version}",
@@ -43,7 +40,6 @@
   },
   "suggests": {
     "jei": "*",
-    "emi": "*",
-    "roughlyenoughitems": "*"
+    "roughlyenoughitems": "*"${optional_viewer_suggests}
   }
 }

@@ -1,3 +1,14 @@
 plugins {
     id 'groovy-gradle-plugin'
 }
+
+// The convention plugins read Stonecutter's extension and structured properties, so the plugin
+// runtime needs Stonecutter on its classpath.
+repositories {
+    mavenCentral()
+    maven { url = uri('https://maven.kikugie.dev/releases') }
+}
+
+dependencies {
+    implementation 'dev.kikugie:stonecutter:0.10'
+}

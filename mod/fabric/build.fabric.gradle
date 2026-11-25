@@ -1,7 +1,12 @@
 plugins {
-    id 'multiloader-loader'
-    id 'net.fabricmc.fabric-loom-remap'
+    id 'mcinsight.node'
+    // Applies `fabric-loom` on Minecraft that ships unobfuscated, `fabric-loom-remap` before that.
+    id 'dev.kikugie.loom-back-compat'
 }
+
+def node = extensions.getByName('stonecutter')
+def nodeProps = node.properties
+def mcVersion = node.current.version
 
 // The e2e runs load the recipe viewer the real game would have and a test-only harness mod; the
 // normal dev runs do not, so a developer's own run stays the minimal mod.
@@ -13,9 +18,9 @@ sourceSets {
 }
 
 loom {
-    createRemapConfigurations(sourceSets.e2e)
+    if (!loomx.isUnobfuscated()) { createRemapConfigurations(sourceSets.e2e) }
     mods {
-        "${mod_id}" {
+        "${nodeProps.get('mod.id')}" {
             sourceSet sourceSets.main
         }
         mcinsight_e2e {
@@ -25,19 +30,24 @@ loom {
 }
 
 dependencies {
-    minecraft "com.mojang:minecraft:${minecraft_version}"
-    mappings loom.layered {
-        officialMojangMappings()
-        parchment("org.parchmentmc.data:parchment-${parchment_minecraft}:${parchment_version}@zip")
-    }
-    modImplementation "net.fabricmc:fabric-loader:${fabric_loader_version}"
-    modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_version}"
-    compileOnly libs.jei.common.api
-    modCompileOnly(variantOf(libs.emi.fabric.api) { classifier('api') })
-    modCompileOnly libs.rei.api.fabric
-    modCompileOnly libs.rei.plugin.fabric
+    minecraft "com.mojang:minecraft:${mcVersion}"
+    loomx.applyMojangMappings()
 
-    modE2eRuntimeOnly libs.jei.fabric
+    modImplementation "net.fabricmc:fabric-loader:${nodeProps.get('deps.fabric_loader')}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${nodeProps.get('deps.fabric_api')}"
+
+    compileOnly "mezz.jei:jei-${mcVersion}-common-api:${nodeProps.get('deps.jei')}"
+    nodeProps.getOrNull('deps.emi')?.with { emi ->
+        modCompileOnly "dev.emi:emi-fabric:${emi}:api"
+    }
+    modCompileOnly "me.shedaniel:RoughlyEnoughItems-api-fabric:${nodeProps.get('deps.rei')}"
+    modCompileOnly "me.shedaniel:RoughlyEnoughItems-default-plugin-fabric:${nodeProps.get('deps.rei')}"
+
+    // JEI declares the loader version it was built against; keeping it would put a second
+    // fabric-loader on the e2e classpath, which the loader refuses to start with.
+    modE2eRuntimeOnly("mezz.jei:jei-${mcVersion}-fabric:${nodeProps.get('deps.jei')}") {
+        exclude group: 'net.fabricmc', module: 'fabric-loader'
+    }
 }
 
 // Local-only: '-Pe2e.extraMods=<dir>' adds every jar in that directory to the e2e runs, so a
@@ -53,13 +63,13 @@ loom {
     runs {
         client {
             client()
-            displayName = 'Fabric Client'
+            displayName = "Fabric Client ${mcVersion}"
             generateRunConfig = true
             runDirectory = file('runs/client')
         }
         server {
             server()
-            displayName = 'Fabric Server'
+            displayName = "Fabric Server ${mcVersion}"
             generateRunConfig = true
             runDirectory = file('runs/server')
         }
@@ -110,10 +120,12 @@ loom {
                 jvmArgs   : ["@${classpathFile}"] + jvmArgs,
                 // Fabric discovers mods on the classpath; McInsight is left out by id instead.
                 withMod   : [],
-                withoutMod: ["-Dfabric.debug.disableModIds=${mod_id}"],
+                withoutMod: ["-Dfabric.debug.disableModIds=${nodeProps.get('mod.id')}"],
                 mainClass : exec.mainClass.get(),
                 args      : exec.args + exec.argumentProviders.collectMany { it.asArguments() as List },
             ]))
         }
     }
 }
+
+

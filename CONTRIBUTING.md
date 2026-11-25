@@ -11,14 +11,30 @@ Thank you for your interest in contributing to McInsightMCP!
 
 ### 1. Minecraft Mod (`mod/`)
 
+Each Minecraft version listed in `mod/gradle.properties` (`minecraft_versions`) is a Gradle node,
+`:common:<version>`, `:neoforge:<version>` and `:fabric:<version>`. Build the one you are working on:
+
 ```bash
 cd mod
-./gradlew :common:test :neoforge:build :fabric:build
+./gradlew :common:1.21.1:test :neoforge:1.21.1:build :fabric:1.21.1:build
+```
+
+The whole matrix is the same command for each version, and CI runs it before publishing:
+
+```bash
+./gradlew :common:1.21.1:test :common:26.1.2:test :common:26.3:test \
+          :neoforge:1.21.1:build :neoforge:26.1.2:build :neoforge:26.3:build \
+          :fabric:1.21.1:build :fabric:26.1.2:build :fabric:26.3:build
 ```
 
 Generated mod JARs:
-- `mod/neoforge/build/libs/mcinsight-neoforge-<mc_version>-<version>.jar`
-- `mod/fabric/build/libs/mcinsight-fabric-<mc_version>-<version>.jar`
+- `mod/neoforge/versions/<mc_version>/build/libs/mcinsight-neoforge-<mc_version>-<version>.jar`
+- `mod/fabric/versions/<mc_version>/build/libs/mcinsight-fabric-<mc_version>-<version>.jar`
+
+A rename between versions goes into `game/Versioned` or the Stonecutter replacements in
+`mcinsight.node.gradle`; a difference in shape is a `//? if` at the call site; a difference in whole
+files is a `files { disable(...) }` rule. Never branch the repository. See `docs/ARCHITECTURE.md` for
+the layout.
 
 ### 2. MCP Server (`mcp-server/`)
 
@@ -44,7 +60,7 @@ pnpm e2e --extra-mods /path/to/mods       # local only: try an arbitrary mod set
 pnpm e2e --list                           # presets, scenarios, suites
 ```
 
-Logs of every process are kept under `mod/<loader>/runs/e2e/<loader>-<scenario>/logs/`. See
+Logs of every process are kept under `mod/<loader>/versions/<mc_version>/runs/e2e/<loader>-<scenario>/logs/`. See
 [docs/ARCHITECTURE.md §12](docs/ARCHITECTURE.md) for how the runs are launched.
 
 ## Architecture & Conventions
@@ -70,15 +86,15 @@ Please read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before making structura
 
 When bumping the release version, keep these two declarations synchronized:
 
-1. `mod/gradle.properties` (`version`)
+1. `mod/stonecutter.properties.toml` (`mod.version`)
 2. `mcp-server/package.json` (`version`)
 
-Neither side keeps a copy in code. The mod asks its loader for its own version (`IPlatformHelper.getModVersion()`), which the build expands into `fabric.mod.json` / `neoforge.mods.toml` from `gradle.properties`. The MCP server calls `readPackageVersion()` (`mcp-server/src/version.ts`), which reads `package.json` at runtime.
+Neither side keeps a copy in code. The mod asks its loader for its own version (`IPlatformHelper.getModVersion()`), which the build expands into `fabric.mod.json` / `neoforge.mods.toml` from `stonecutter.properties.toml`. The MCP server calls `readPackageVersion()` (`mcp-server/src/version.ts`), which reads `package.json` at runtime.
 
 ## Pull Request Checklist
 
 - [ ] `pnpm typecheck`, `pnpm build`, and `pnpm test` pass in `mcp-server/`
-- [ ] `./gradlew :common:test :neoforge:build :fabric:build` passes in `mod/`
+- [ ] `./gradlew :common:<mc_version>:test :neoforge:<mc_version>:build :fabric:<mc_version>:build` passes in `mod/`
 - [ ] `pnpm e2e` passes for the area you changed (CI runs the `quick` preset; releases run `release`)
 - [ ] A changed endpoint or response shape is reflected in `mcp-server/src/api/` (the contract test enforces this)
 - [ ] Documentation (`README.md`, `README.ja.md`, `docs/ARCHITECTURE.md`, `CHANGELOG.md`) updated if user-facing behavior or tools changed

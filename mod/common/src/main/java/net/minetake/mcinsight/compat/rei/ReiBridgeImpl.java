@@ -23,6 +23,7 @@ import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.client.ClientStateAccessor;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
 import net.minetake.mcinsight.compat.ViewerModel;
+import net.minetake.mcinsight.game.Versioned;
 import net.minetake.mcinsight.serial.JsonCodec;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.RegistryOps;
@@ -226,7 +227,7 @@ public final class ReiBridgeImpl implements IRecipeViewerBridge {
         Recipe<?> vanilla = vanillaRecipe(origin);
         ResourceLocation recipeId = displayLocation;
         if (recipeId == null && origin instanceof RecipeHolder<?> holder) {
-            recipeId = holder.id();
+            recipeId = Versioned.recipeId(holder);
         }
         List<String> description = description(display);
         JsonElement rawJson = rawJson(vanilla, ops);
@@ -303,7 +304,7 @@ public final class ReiBridgeImpl implements IRecipeViewerBridge {
             return null;
         }
         try {
-            DataResult<JsonElement> encoded = Recipe.CODEC.encodeStart(ops, recipe);
+            DataResult<JsonElement> encoded = Versioned.recipeCodec().encodeStart(ops, recipe);
             return encoded.result().orElse(null);
         } catch (Exception e) {
             return null;
@@ -344,7 +345,7 @@ public final class ReiBridgeImpl implements IRecipeViewerBridge {
         List<String> tags;
         if (!itemStack.isEmpty()) {
             amount = (long) itemStack.getCount();
-            tags = itemStack.getTags().map(tag -> tag.location().toString()).sorted().toList();
+            tags = Versioned.itemTags(itemStack).map(tag -> tag.location().toString()).sorted().toList();
             var serialized = JsonCodec.serializeItemStack(itemStack, ops);
             components = serialized.has("components") ? serialized.get("components") : null;
         } else {

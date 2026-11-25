@@ -14,18 +14,31 @@ import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.api.Page;
 import net.minetake.mcinsight.api.Params;
 import net.minetake.mcinsight.api.RequestContext;
+import net.minetake.mcinsight.game.Versioned;
 import net.minetake.mcinsight.serial.JsonCodec;
 import net.minecraft.advancements.Advancement;
 import net.minecraft.advancements.AdvancementHolder;
 import net.minecraft.advancements.AdvancementProgress;
 import net.minecraft.advancements.AdvancementRewards;
-import net.minecraft.advancements.Criterion;
+import net.minecraft.advancements.AdvancementType;
+import net.minecraft.advancements.DisplayInfo;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.PlayerAdvancements;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.Item;
+//? if >=26.3 {
+/*import net.minecraft.advancements.triggers.Criterion;
+import net.minecraft.world.item.crafting.Recipe;
+*///? } else if >=26.1 {
+/*import net.minecraft.advancements.Criterion;
+import net.minecraft.world.item.crafting.Recipe;
+*///? } else {
+import net.minecraft.advancements.Criterion;
+//? }
 
 /**
  * Answers {@code advancements_query}: advancement definitions and, when the world owner is
@@ -194,12 +207,12 @@ public final class AdvancementCollector {
         advancement.parent().ifPresent(parent -> out.addProperty("parent", parent.toString()));
 
         advancement.display().ifPresent(display -> {
-            out.addProperty("title", display.getTitle().getString());
-            out.addProperty("description", display.getDescription().getString());
-            out.addProperty("frame", display.getType().getSerializedName());
-            ResourceLocation iconId = BuiltInRegistries.ITEM.getKey(display.getIcon().getItem());
+            out.addProperty("title", title(display).getString());
+            out.addProperty("description", description(display).getString());
+            out.addProperty("frame", type(display).getSerializedName());
+            ResourceLocation iconId = BuiltInRegistries.ITEM.getKey(iconItem(display));
             out.addProperty("icon", iconId.toString());
-            out.addProperty("hidden", display.isHidden());
+            out.addProperty("hidden", hidden(display));
         });
 
         if (advancement.display().isEmpty()) {
@@ -218,6 +231,55 @@ public final class AdvancementCollector {
 
         out.add("progress", describeProgress(sample));
         return out;
+    }
+
+    /**
+     * The display's parts.
+     *
+     * <p>26.3 turned {@code DisplayInfo} into a record, so its parts are asked for without the
+     * {@code get}/{@code is} prefix they had before.
+     */
+    private static Component title(DisplayInfo display) {
+        //? if >=26.3 {
+        /*return display.title();
+        *///? } else {
+        return display.getTitle();
+        //? }
+    }
+
+    private static Component description(DisplayInfo display) {
+        //? if >=26.3 {
+        /*return display.description();
+        *///? } else {
+        return display.getDescription();
+        //? }
+    }
+
+    private static AdvancementType type(DisplayInfo display) {
+        //? if >=26.3 {
+        /*return display.type();
+        *///? } else {
+        return display.getType();
+        //? }
+    }
+
+    private static boolean hidden(DisplayInfo display) {
+        //? if >=26.3 {
+        /*return display.hidden();
+        *///? } else {
+        return display.isHidden();
+        //? }
+    }
+
+    /** The item an advancement's icon is drawn with; 26.x holds the icon as a stack template. */
+    private static Item iconItem(DisplayInfo display) {
+        //? if >=26.3 {
+        /*return display.icon().item().value();
+        *///? } else if >=26.1 {
+        /*return display.getIcon().item().value();
+        *///? } else {
+        return display.getIcon().getItem();
+        //? }
     }
 
     private static JsonObject describeCriteria(Advancement advancement) {
@@ -271,22 +333,41 @@ public final class AdvancementCollector {
         if (rewards.experience() > 0) {
             out.addProperty("experience", rewards.experience());
         }
-        if (!rewards.loot().isEmpty()) {
+        if (!lootIds(rewards).isEmpty()) {
             JsonArray loot = new JsonArray();
-            for (ResourceKey<?> key : rewards.loot()) {
-                loot.add(key.location().toString());
+            for (ResourceLocation id : lootIds(rewards)) {
+                loot.add(id.toString());
             }
             out.add("loot", loot);
         }
         if (!rewards.recipes().isEmpty()) {
             JsonArray recipes = new JsonArray();
+            //? if >=26.1 {
+            /*for (ResourceKey<Recipe<?>> recipe : rewards.recipes()) {
+                recipes.add(Versioned.idOf(recipe).toString());
+            }
+            *///? } else {
             for (ResourceLocation recipe : rewards.recipes()) {
                 recipes.add(recipe.toString());
             }
+            //? }
             out.add("recipes", recipes);
         }
         rewards.function().ifPresent(function -> out.addProperty("function", function.getId().toString()));
         return out;
+    }
+
+    /**
+     * The loot tables a reward grants.
+     *
+     * <p>26.3 made this a holder set rather than a key list, so the ids are read off the holders.
+     */
+    private static List<ResourceLocation> lootIds(AdvancementRewards rewards) {
+        //? if >=26.3 {
+        /*return rewards.loot().stream().map(holder -> Versioned.idOf(holder.unwrapKey().orElseThrow())).toList();
+        *///? } else {
+        return rewards.loot().stream().map(Versioned::idOf).toList();
+        //? }
     }
 
     private static JsonObject describeProgress(Sample sample) {

@@ -213,7 +213,7 @@ async function discoverClientUrl() {
     }
   }
   throw new Error(
-    'Could not find a running McInsight client on 127.0.0.1:25580..25599. Start the Minecraft client (e.g. :neoforge:runClient) or pass --mc-url http://127.0.0.1:<port>.',
+    'Could not find a running McInsight client on 127.0.0.1:25580..25599. Start the Minecraft client (e.g. :neoforge:<mc_version>:runClient) or pass --mc-url http://127.0.0.1:<port>.',
   );
 }
 
@@ -494,3 +494,4 @@ main().catch((err) => {
   console.error('[bench] Fatal error:', err);
   process.exit(1);
 });
+

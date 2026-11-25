@@ -14,6 +14,7 @@ import net.minetake.mcinsight.compat.IRecipeViewerBridge;
 import net.minetake.mcinsight.compat.ViewerRegistry;
 import net.minetake.mcinsight.data.ServerSync;
 import net.minetake.mcinsight.game.GameAccess;
+import net.minetake.mcinsight.game.Versioned;
 import net.minetake.mcinsight.metrics.PerfMetrics;
 import net.minetake.mcinsight.platform.IPlatformHelper;
 import net.minetake.mcinsight.platform.Services;
@@ -60,7 +61,11 @@ public final class StatusHandler {
         out.addProperty("ok", true);
         out.addProperty("modId", McInsightConstants.MOD_ID);
         out.addProperty("modVersion", Services.PLATFORM.getModVersion());
+        //? if >=26.1 {
+        /*out.addProperty("minecraftVersion", SharedConstants.getCurrentVersion().name());
+        *///? } else {
         out.addProperty("minecraftVersion", SharedConstants.getCurrentVersion().getName());
+        //? }
         out.addProperty("loader", Services.PLATFORM.getLoaderName());
         out.addProperty("loaderVersion", Services.PLATFORM.getLoaderVersion());
         out.addProperty("port", ctx.boundPort());
@@ -144,9 +149,9 @@ public final class StatusHandler {
                 }
                 return new Session(
                     serverActive,
-                    level.dimension().location().toString(),
-                    level.getDifficulty().getKey(),
-                    level.getDayTime(),
+                    Versioned.dimensionId(level),
+                    Versioned.difficultyName(level),
+                    Versioned.dayTime(level),
                     level.getGameTime(),
                     level.isRaining(),
                     level.isThundering()

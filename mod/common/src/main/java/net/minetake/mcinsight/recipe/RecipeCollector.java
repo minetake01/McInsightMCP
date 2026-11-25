@@ -26,17 +26,24 @@ import net.minetake.mcinsight.compat.IRecipeViewerBridge;
 import net.minetake.mcinsight.compat.ViewerRegistry;
 import net.minetake.mcinsight.game.GameAccess;
 import net.minetake.mcinsight.game.MainThreadExecutor;
+import net.minetake.mcinsight.game.Versioned;
 import net.minetake.mcinsight.metrics.PerfMetrics;
 import net.minetake.mcinsight.serial.JsonCodec;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.RegistryOps;
 import net.minecraft.resources.ResourceLocation;
+//? if >=26.1 {
+/*import net.minecraft.util.context.ContextMap;
+import net.minecraft.world.item.crafting.display.RecipeDisplay;
+import net.minecraft.world.item.crafting.display.SlotDisplayContext;
+*///? }
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.Ingredient;
 import net.minecraft.world.item.crafting.Recipe;
 import net.minecraft.world.item.crafting.RecipeHolder;
 import net.minecraft.world.item.crafting.RecipeManager;
+import net.minecraft.world.level.Level;
 
 /**
  * Answers recipe queries from the recipe manager and from whichever viewers are installed.
@@ -63,7 +70,8 @@ public final class RecipeCollector {
     private record Bootstrap(
         RecipeManager recipeManager,
         HolderLookup.Provider registries,
-        List<RecipeHolder<?>> holders
+        List<RecipeHolder<?>> holders,
+        Level level
     ) {}
 
     private static final class IndexedRecipe {
@@ -144,7 +152,7 @@ public final class RecipeCollector {
             }
             return encodedJson.computeIfAbsent(rec.id, id -> {
                 try {
-                    return Recipe.CODEC.encodeStart(jsonOps, rec.recipe).result();
+                    return Versioned.recipeCodec().encodeStart(jsonOps, rec.recipe).result();
                 } catch (Exception ignored) {
                     // Falls back to a reflective snapshot at the call site.
                     return Optional.empty();
@@ -225,7 +233,12 @@ public final class RecipeCollector {
                 if (rm == null) {
                     return null;
                 }
-                return new Bootstrap(rm, GameAccess.getRegistryAccess(executor), new ArrayList<>(rm.getRecipes()));
+                return new Bootstrap(
+                    rm,
+                    GameAccess.getRegistryAccess(executor),
+                    new ArrayList<>(rm.getRecipes()),
+                    GameAccess.getLevel(executor)
+                );
             }, 10000);
         } catch (Exception e) {
             throw new InsightException(InsightError.INTERNAL_ERROR, e.getMessage());
@@ -247,7 +260,7 @@ public final class RecipeCollector {
             Recipe<?> recipe = holder.value();
             ResourceLocation typeRl = BuiltInRegistries.RECIPE_TYPE.getKey(recipe.getType());
             String typeStr = typeRl != null ? typeRl.toString() : recipe.getType().toString();
-            String recipeMod = typeRl != null ? typeRl.getNamespace() : holder.id().getNamespace();
+            String recipeMod = typeRl != null ? typeRl.getNamespace() : Versioned.recipeId(holder).getNamespace();
             counts.merge(typeStr, 1, Integer::sum);
 
             ResourceLocation serRl = BuiltInRegistries.RECIPE_SERIALIZER.getKey(recipe.getSerializer());
@@ -258,11 +271,12 @@ public final class RecipeCollector {
             String resultIdLower = null;
             Set<String> resultTags = new HashSet<>();
             try {
-                ItemStack res = recipe.getResultItem(boot.registries());
+                ItemStack res = resultOf(recipe, boot.registries(), boot.level());
                 if (res != null && !res.isEmpty()) {
                     resultPreview = res;
                     resultIdLower = BuiltInRegistries.ITEM.getKey(res.getItem()).toString().toLowerCase(Locale.ROOT);
-                    res.getTags().forEach(tk -> resultTags.add(tk.location().toString().toLowerCase(Locale.ROOT)));
+                    Versioned.itemTags(res)
+                        .forEach(tk -> resultTags.add(tk.location().toString().toLowerCase(Locale.ROOT)));
                 }
             } catch (Exception ignored) {
                 // Recipes that cannot produce a preview still get indexed.
@@ -271,13 +285,14 @@ public final class RecipeCollector {
             Set<String> inputIds = new HashSet<>();
             Set<String> inputTags = new HashSet<>();
             try {
-                for (Ingredient ing : recipe.getIngredients()) {
-                    for (ItemStack stack : ing.getItems()) {
+                for (Ingredient ing : ingredientsOf(recipe)) {
+                    for (ItemStack stack : stacksOf(ing)) {
                         if (stack.isEmpty()) {
                             continue;
                         }
                         inputIds.add(BuiltInRegistries.ITEM.getKey(stack.getItem()).toString().toLowerCase(Locale.ROOT));
-                        stack.getTags().forEach(tk -> inputTags.add(tk.location().toString().toLowerCase(Locale.ROOT)));
+                        Versioned.itemTags(stack)
+                            .forEach(tk -> inputTags.add(tk.location().toString().toLowerCase(Locale.ROOT)));
                     }
                 }
             } catch (Exception ignored) {
@@ -286,7 +301,7 @@ public final class RecipeCollector {
 
             boolean standardVanillaIo = isMinecraftSer && resultIdLower != null && !inputIds.isEmpty();
             IndexedRecipe rec = new IndexedRecipe(
-                holder.id(),
+                Versioned.recipeId(holder),
                 typeStr,
                 recipeMod,
                 serStr,
@@ -330,6 +345,65 @@ public final class RecipeCollector {
             recipeTypes.add(obj);
         }
         return index;
+    }
+
+    /**
+     * The stack a recipe presents as its result.
+     *
+     * <p>26.x stopped describing a recipe by its result item and ingredient list: it presents
+     * displays, whose result is a slot display resolved against the registries.
+     */
+    private static ItemStack resultOf(Recipe<?> recipe, HolderLookup.Provider registries, Level level) {
+        //? if >=26.1 {
+        /*ContextMap context = contextOf(level, registries);
+        for (RecipeDisplay display : recipe.display()) {
+            ItemStack stack = display.result().resolveForFirstStack(context);
+            if (!stack.isEmpty()) {
+                return stack;
+            }
+        }
+        return ItemStack.EMPTY;
+        *///? } else {
+        return recipe.getResultItem(registries);
+        //? }
+    }
+
+    /**
+     * What a slot display is resolved against.
+     *
+     * <p>A slot display reads the registries, so a context needs them. 26.3 made the builder
+     * immutable — {@code ContextMap.builder().set(...).build()} — and made the registries key a
+     * {@code RegistryAccess} rather than a lookup provider, so the level's own access is used; 26.1
+     * still has the mutable builder and accepts the provider directly.
+     */
+    //? if >=26.3 {
+    /*private static ContextMap contextOf(Level level, HolderLookup.Provider registries) {
+        return SlotDisplayContext.fromLevel(level);
+    }
+    *///? } else if >=26.1 {
+    /*private static ContextMap contextOf(Level level, HolderLookup.Provider registries) {
+        return new ContextMap.Builder()
+            .withParameter(SlotDisplayContext.REGISTRIES, registries)
+            .create(SlotDisplayContext.CONTEXT);
+    }
+    *///? }
+
+    /** The ingredients a recipe places, in the shape the version that builds it exposes. */
+    private static List<Ingredient> ingredientsOf(Recipe<?> recipe) {
+        //? if >=26.1 {
+        /*return recipe.placementInfo().ingredients();
+        *///? } else {
+        return recipe.getIngredients();
+        //? }
+    }
+
+    /** The stacks an ingredient stands for. */
+    private static List<ItemStack> stacksOf(Ingredient ingredient) {
+        //? if >=26.1 {
+        /*return ingredient.items().map(ItemStack::new).toList();
+        *///? } else {
+        return List.of(ingredient.getItems());
+        //? }
     }
 
     private static JsonObject queryIndex(

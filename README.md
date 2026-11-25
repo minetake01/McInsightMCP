@@ -44,13 +44,15 @@ McInsightMCP connects MCP-compatible AI assistants (Claude Desktop, Cursor, Clau
 
 | Component | Requirement |
 |---|---|
-| **Minecraft** | Currently `1.21.1` (Java 21) — see [Releases](https://github.com/minetake01/McInsightMCP/releases) for supported versions |
+| **Minecraft** | `1.21.1` (Java 21) and `26.1.2` / `26.3` (Java 25) — one JAR per version and loader, see [Releases](https://github.com/minetake01/McInsightMCP/releases) |
 | **NeoForge** | Standalone — no required mod dependencies |
 | **Fabric** | Requires [Fabric API](https://modrinth.com/mod/fabric-api) |
 | **MCP Server** | [Node.js](https://nodejs.org/) `>= 22.12` |
 
 ### Optional In-Game Integrations (Auto-Detected)
-- **JEI, EMI, and REI** (recipe categories, catalysts, and item/fluid/chemical info pages)
+- **JEI, EMI, and REI** (recipe categories, catalysts, and item/fluid/chemical info pages). EMI is
+  integrated on `1.21.1` only: it has no release for `26.x` yet, and the bridge is left out of those
+  builds rather than failing to load.
 - **In-Game Guides & Quests**: Patchouli, GuideME, FTB Quests, Create Ponder, Oracle Index, and mod language files
 
 ### Built-In Mod Recipe Formatting
@@ -153,15 +155,19 @@ Whenever a tool takes an item, it takes an **exact** id (`namespace:path`) or a 
 
 ## Building from Source
 
-Requires **JDK 21** for the mod (Gradle itself runs on **JDK 25**, downloaded if missing) and **Node.js >= 22.12** + **pnpm** for the MCP server.
+Requires **JDK 21** for the mod on 1.21.x (**JDK 25** for 26.x, and Gradle itself runs on 25, downloaded if missing) and **Node.js >= 22.12** + **pnpm** for the MCP server.
+
+Each Minecraft version in `mod/gradle.properties` (`minecraft_versions`) is a Gradle node, `:<loader>:<version>`:
 
 ```bash
-# 1. Test common logic & build the NeoForge and Fabric mod JARs
+# 1. Test common logic & build the NeoForge and Fabric mod JARs for every supported version
 cd mod
-./gradlew :common:test :neoforge:build :fabric:build
+./gradlew :common:1.21.1:test :neoforge:1.21.1:build :fabric:1.21.1:build \
+          :common:26.1.2:test :neoforge:26.1.2:build :fabric:26.1.2:build \
+          :common:26.3:test :neoforge:26.3:build :fabric:26.3:build
 # Output JARs:
-#   mod/neoforge/build/libs/mcinsight-neoforge-<mc_version>-0.1.0-beta.2.jar
-#   mod/fabric/build/libs/mcinsight-fabric-<mc_version>-0.1.0-beta.2.jar
+#   mod/neoforge/versions/26.3/build/libs/mcinsight-neoforge-26.3-0.1.0-beta.2.jar
+#   mod/fabric/versions/26.3/build/libs/mcinsight-fabric-26.3-0.1.0-beta.2.jar
 
 # 2. Build and test the MCP server
 cd ../mcp-server

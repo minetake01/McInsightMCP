@@ -370,15 +370,18 @@ export type DataMapsResponse = PageOf<'entries', DataMapEntry>;
 /**
  * A trade listing.
  *
- * <p>Deliberately open: a listing is either a concrete offer (`costA`/`costB`/`result`) or the
+ * <p>Deliberately open: a trade is either a concrete offer (`costA`/`costB`/`result`) or the
  * reflected declaration of one the mod will not materialize (`listing`), and `sampled` marks an
- * offer whose result varies per villager.
+ * offer whose result varies per villager. `tradeId` names the datapack registry entry on versions
+ * that keep trades in a registry; `level` is absent where the game does not level the trade, as for
+ * the wandering trader.
  */
 export interface TradeEntry {
   profession: string;
   level?: number;
   experimental?: boolean;
   listingClass: string;
+  tradeId?: string;
   costA?: StackInfo;
   costB?: StackInfo;
   result?: StackInfo;

@@ -1,0 +1,198 @@
+plugins {
+    id 'java-library'
+}
+
+// One node is one (branch, Minecraft version) pair. Stonecutter gives every node its own project,
+// so the naming, the Java level, the metadata expansion and the shared `common` sources are
+// decided here once instead of in each branch script.
+def sc = extensions.getByName('stonecutter')
+def props = sc.properties
+def mcVersion = sc.current.version
+def javaVersion = props.get('java') as int
+def modId = props.get('mod.id')
+// :fabric:1.21.1 is the fabric branch's node for 1.21.1; the branch name is the module name.
+def branch = project.path.split(':')[1]
+
+group = props.get('mod.group')
+// `mcinsight-neoforge-1.21.1-0.1.0-beta.2.jar`: the loader and the Minecraft version are what tell
+// two builds of the same mod version apart.
+version = props.get('mod.version')
+base.archivesName = "${modId}-${branch}-${mcVersion}"
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(javaVersion)
+    withSourcesJar()
+}
+
+repositories {
+    mavenCentral()
+    // Every third-party repository is restricted to the groups it serves, so a missing artifact
+    // fails fast instead of being looked for across the whole set.
+    exclusiveContent {
+        forRepositories(
+            maven { name = 'ParchmentMC'; url = uri('https://maven.parchmentmc.org/') },
+            maven { name = 'NeoForge'; url = uri('https://maven.neoforged.net/releases') }
+        )
+        filter { includeGroup('org.parchmentmc.data') }
+    }
+    exclusiveContent {
+        forRepository { maven { name = 'BlameJared'; url = uri('https://maven.blamejared.com') } }
+        filter {
+            includeGroup('mezz.jei')
+            includeGroup('net.mezzdev.config')
+        }
+    }
+    exclusiveContent {
+        forRepository { maven { name = 'TerraformersMC'; url = uri('https://maven.terraformersmc.com/') } }
+        filter { includeGroup('dev.emi') }
+    }
+    exclusiveContent {
+        forRepositories(
+            maven { name = 'Shedaniel'; url = uri('https://maven.shedaniel.me/') },
+            maven { name = 'Architectury'; url = uri('https://maven.architectury.dev/') }
+        )
+        filter {
+            includeGroup('me.shedaniel')
+            includeGroup('me.shedaniel.cloth')
+            includeGroup('dev.architectury')
+        }
+    }
+}
+
+// The `common` branch owns the shared sources; every loader node compiles that branch's
+// preprocessed output for the same Minecraft version. Its raw `src/` is not put on a loader
+// classpath: Stonecutter only preprocesses a directory inside the branch that owns it, so the raw
+// form would still carry the other versions' code.
+if (branch != 'common') {
+    def commonNode = rootProject.project(":common:${mcVersion}")
+    def commonGenerated = commonNode.layout.buildDirectory.dir('generated/stonecutter/main/java')
+
+    sourceSets.main {
+        java.srcDir(commonGenerated)
+    }
+
+    // Every task that consumes the generated sources names the producing task, otherwise Gradle
+    // cannot order a sources jar or a compile against it.
+    tasks.withType(JavaCompile).configureEach {
+        dependsOn(commonNode.tasks.named('stonecutterGenerate'))
+    }
+    tasks.withType(Jar).configureEach {
+        dependsOn(commonNode.tasks.named('stonecutterGenerate'))
+    }
+    tasks.named('processResources') {
+        // Preprocessed (and already expanded) rather than raw, for the same reason as the sources.
+        from(commonNode.tasks.named('processResources'))
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = javaVersion
+}
+
+// The sources are written in 1.21.1's names, which is the oldest version built here; a version that
+// renamed a class gets the new name substituted rather than carrying an `//? if` around every use.
+// Only the renames that are purely lexical belong here: a class that also changed shape is handled
+// where it is used, because a substitution would hide the difference instead of showing it.
+def renamedIn26 = !mcVersion.startsWith('1.21')
+sc.replacements {
+    string(renamedIn26) {
+        include '**/*.java'
+        replace 'net.minecraft.Util', 'net.minecraft.util.Util'
+        replace 'net.minecraft.world.entity.npc.VillagerProfession', 'net.minecraft.world.entity.npc.villager.VillagerProfession'
+        replace 'net.minecraft.world.entity.npc.VillagerType', 'net.minecraft.world.entity.npc.villager.VillagerType'
+        replace 'net.minecraft.world.entity.npc.Villager', 'net.minecraft.world.entity.npc.villager.Villager'
+    }
+    regex(renamedIn26) {
+        include '**/*.java'
+        replace '\\bResourceLocation\\b', 'Identifier', '\\bIdentifier\\b', 'ResourceLocation'
+    }
+}
+
+// A recipe viewer is only compiled into a version that has a pin for it, so "this viewer does not
+// exist yet on this Minecraft version" is one boolean the sources can ask about. Its entrypoint is
+// declared by the loader metadata, which is expanded or preprocessed separately (see below).
+def hasEmi = props.getOrNull('deps.emi') != null
+sc.constants { put('emi', (boolean) hasEmi) }
+// Not a `//? if emi` per file: the bridge is one package that either exists as a whole or not at
+// all, and a disabled file is skipped by the compiler instead of being commented out line by line.
+sc.files { disable(!hasEmi, 'net/minetake/mcinsight/compat/emi/**') }
+
+tasks.named('jar', Jar) {
+    manifest {
+        attributes([
+            'Specification-Title'   : props.get('mod.name'),
+            'Specification-Vendor'  : props.get('mod.author'),
+            'Specification-Version' : project.version,
+            'Implementation-Title'  : branch,
+            'Implementation-Version': project.version,
+            'Implementation-Vendor' : props.get('mod.author'),
+            'Built-On-Minecraft'    : mcVersion
+        ])
+    }
+}
+
+// Flat keys, because `expand` binds variables by name: a dotted key would be read as a property
+// path on the `mod` object rather than as one string.
+def expandProps = [
+    'version'                      : project.version,
+    'mod_id'                       : modId,
+    'mod_name'                     : props.get('mod.name'),
+    'mod_author'                   : props.get('mod.author'),
+    'license'                      : props.get('mod.license'),
+    'description'                  : props.get('mod.description'),
+    'mod_homepage'                 : props.get('mod.homepage'),
+    'mod_sources'                  : props.get('mod.sources'),
+    'mod_issues'                   : props.get('mod.issues'),
+    'minecraft_version'            : mcVersion,
+    'pack_format'                  : props.get('pack_format'),
+    // JSON and TOML have no comment syntax, so an entry that only some versions carry is emitted as
+    // data rather than wrapped in a `//? if`. Each fragment keeps its own file's separators, so it
+    // collapses to nothing without leaving a dangling comma or a blank dependency block.
+    'optional_viewer_entrypoints'  : hasEmi
+        ? ''',
+    "emi": [
+      "net.minetake.mcinsight.compat.emi.EmiPluginEntrypoint"
+    ]'''
+        : '',
+    'optional_viewer_suggests'     : hasEmi ? ',\n    "emi": "*"' : '',
+    'optional_viewer_dependency'   : hasEmi
+        ? """
+[[dependencies.${modId}]]
+modId="emi"
+type="optional"
+versionRange="[1.1.0,)"
+ordering="AFTER"
+side="CLIENT"
+"""
+        : '',
+    // 26.1 replaced the single mod logo with a wide banner and a square icon. The mod's image is
+    // square, so on 26.x it is the icon and before that it is the logo. A comment marker would do,
+    // but the loader parses this file before anything reads it back as text, so the choice is made
+    // where the other per-version values are.
+    'mod_icon_attributes'          : renamedIn26
+        ? 'iconFile="mcinsight.png"'
+        : 'logoFile="mcinsight.png"\nlogoBlur=false',
+    'java_version'                 : javaVersion,
+    'fabric_loader_version'        : props.getOrNull('deps.fabric_loader') ?: '',
+    'neoforge_loader_version'      : props.getOrNull('deps.neo_loader') ?: '',
+    'neoforge_loader_version_range': props.getOrNull('deps.neo_loader_range') ?: '',
+]
+
+tasks.named('processResources', ProcessResources) {
+    inputs.properties(expandProps)
+    filesMatching(['pack.mcmeta', 'fabric.mod.json', 'META-INF/neoforge.mods.toml']) {
+        expand expandProps
+    }
+}
+
+['apiElements', 'runtimeElements', 'sourcesElements'].each { variant ->
+    configurations.named(variant) {
+        outgoing {
+            // The archive name already is `<modId>-<branch>-<mcVersion>`.
+            capability("$group:${base.archivesName.get()}:$version")
+            capability("$group:$modId:$version")
+        }
+    }
+}
+

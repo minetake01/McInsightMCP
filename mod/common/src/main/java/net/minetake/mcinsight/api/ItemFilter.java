@@ -4,6 +4,7 @@ import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Set;
+import net.minetake.mcinsight.game.Versioned;
 import net.minecraft.core.Holder;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
@@ -53,17 +54,19 @@ public final class ItemFilter {
         if (query.isTag()) {
             Set<String> members = new LinkedHashSet<>();
             TagKey<Item> key = TagKey.create(Registries.ITEM, rl);
-            BuiltInRegistries.ITEM.getTag(key).ifPresent(set -> {
+            Versioned.tag(BuiltInRegistries.ITEM, key).ifPresent(set -> {
                 for (Holder<Item> holder : set) {
-                    holder.unwrapKey().ifPresent(k -> members.add(k.location().toString().toLowerCase(Locale.ROOT)));
+                    holder.unwrapKey().ifPresent(k -> members.add(Versioned.idOf(k).toString().toLowerCase(Locale.ROOT)));
                 }
             });
             return forTag(query.id(), members);
         }
         Set<String> tagIds = new LinkedHashSet<>();
-        BuiltInRegistries.ITEM.getHolder(rl).ifPresent(holder ->
-            holder.tags().forEach(t -> tagIds.add(t.location().toString().toLowerCase(Locale.ROOT)))
-        );
+        Item item = Versioned.byId(BuiltInRegistries.ITEM, rl);
+        if (item != null) {
+            item.builtInRegistryHolder().tags()
+                .forEach(t -> tagIds.add(t.location().toString().toLowerCase(Locale.ROOT)));
+        }
         return forItem(query.id(), tagIds);
     }
 

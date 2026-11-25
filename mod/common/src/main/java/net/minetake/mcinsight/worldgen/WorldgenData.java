@@ -10,6 +10,7 @@ import java.util.function.Supplier;
 import net.minetake.mcinsight.api.InsightError;
 import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.data.DataPackView;
+import net.minetake.mcinsight.game.Versioned;
 import net.minetake.mcinsight.platform.Services;
 import net.minecraft.core.Holder;
 import net.minecraft.core.Registry;
@@ -18,7 +19,11 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.dimension.DimensionType;
+//? if >=26.3 {
+/*import net.minecraft.world.level.levelgen.feature.Feature;
+*///? } else {
 import net.minecraft.world.level.levelgen.feature.ConfiguredFeature;
+//? }
 import net.minecraft.world.level.levelgen.placement.PlacedFeature;
 import net.minecraft.world.level.levelgen.structure.Structure;
 
@@ -61,6 +66,22 @@ public final class WorldgenData {
 
         public String id() {
             return id;
+        }
+
+        /**
+         * The datapack folder this kind's files live in.
+         *
+         * <p>26.3 removed the configured-feature wrapper, so a configured feature is now a
+         * {@code Feature} with its settings in it and its files moved from
+         * {@code worldgen/configured_feature} to {@code worldgen/feature}.
+         */
+        public String folder() {
+            //? if >=26.3 {
+            /*if (this == CONFIGURED_FEATURE) {
+                return "worldgen/feature";
+            }
+            *///? }
+            return folder;
         }
 
         public static Kind parse(String raw) {
@@ -130,18 +151,43 @@ public final class WorldgenData {
                 "Worldgen '" + kind.id + "' data is unavailable: neither the dynamic registry nor the datapack files are reachable."
             );
         }
-        return fromFolders(view, kind, kind.folder);
+        return fromFolders(view, kind, kind.folder());
     }
 
     public static int count(DataPackView view, Kind kind) {
         return switch (kind) {
             case PLACED_FEATURE -> view.count(Registries.PLACED_FEATURE);
-            case CONFIGURED_FEATURE -> view.count(Registries.CONFIGURED_FEATURE);
+            case CONFIGURED_FEATURE -> configuredFeatureCount(view);
             case BIOME -> view.count(Registries.BIOME);
             case STRUCTURE -> view.count(Registries.STRUCTURE);
             case DIMENSION_TYPE -> view.count(Registries.DIMENSION_TYPE);
             case BIOME_MODIFIER -> folderCount(view, BIOME_MODIFIER_FOLDERS);
         };
+    }
+
+    /** How many configured features the registry holds; 26.3 keeps them in {@code feature}. */
+    private static int configuredFeatureCount(DataPackView view) {
+        //? if >=26.3 {
+        /*return view.count(Registries.FEATURE);
+        *///? } else {
+        return view.count(Registries.CONFIGURED_FEATURE);
+        //? }
+    }
+
+    /**
+     * The configured features the registry holds.
+     *
+     * <p>26.3 removed the wrapper: a configured feature is now a {@code Feature} with its settings
+     * already in it, in the {@code feature} registry, so the same datapack files are read from a
+     * different registry and encoded with a different codec. {@link Kind#folder()} follows the
+     * folder.
+     */
+    private static List<Definition> configuredFeatures(DataPackView view, Kind kind) {
+        //? if >=26.3 {
+        /*return encoded(view, kind, Registries.FEATURE, Feature.DIRECT_CODEC);
+        *///? } else {
+        return encoded(view, kind, Registries.CONFIGURED_FEATURE, ConfiguredFeature.DIRECT_CODEC);
+        //? }
     }
 
     /** Whether biome modifiers exist on the active loader, which decides if the kind is answerable. */
@@ -191,7 +237,7 @@ public final class WorldgenData {
     private static List<Definition> fromRegistry(DataPackView view, Kind kind) {
         return switch (kind) {
             case PLACED_FEATURE -> encoded(view, kind, Registries.PLACED_FEATURE, PlacedFeature.DIRECT_CODEC);
-            case CONFIGURED_FEATURE -> encoded(view, kind, Registries.CONFIGURED_FEATURE, ConfiguredFeature.DIRECT_CODEC);
+            case CONFIGURED_FEATURE -> configuredFeatures(view, kind);
             case BIOME -> biomes(view);
             case STRUCTURE -> encoded(view, kind, Registries.STRUCTURE, Structure.DIRECT_CODEC);
             case DIMENSION_TYPE -> encoded(view, kind, Registries.DIMENSION_TYPE, DimensionType.DIRECT_CODEC);
@@ -208,7 +254,7 @@ public final class WorldgenData {
         List<Holder.Reference<T>> entries = view.entries(registryKey);
         List<Definition> out = new ArrayList<>(entries.size());
         for (Holder.Reference<T> entry : entries) {
-            ResourceLocation id = entry.key().location();
+            ResourceLocation id = Versioned.idOf(entry.key());
             String cacheKey = "worldgen:" + kind.id + ":" + id;
             T value = entry.value();
             out.add(definition(id, cacheKey, () -> view.encode(cacheKey, codec, value), () -> null));
@@ -220,7 +266,7 @@ public final class WorldgenData {
         List<Holder.Reference<Biome>> entries = view.entries(Registries.BIOME);
         List<Definition> out = new ArrayList<>(entries.size());
         for (Holder.Reference<Biome> entry : entries) {
-            ResourceLocation id = entry.key().location();
+            ResourceLocation id = Versioned.idOf(entry.key());
             String cacheKey = "worldgen:" + Kind.BIOME.id + ":" + id;
             Biome biome = entry.value();
             out.add(definition(

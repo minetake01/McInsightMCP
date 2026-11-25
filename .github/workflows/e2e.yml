@@ -86,8 +86,7 @@ jobs:
         with:
           name: e2e-logs-${{ inputs.preset || 'quick' }}
           path: |
-            mod/*/runs/e2e/*/logs/
-            mod/*/runs/e2e/*/*/logs/
-            mod/*/runs/e2e/*/*/crash-reports/
+            mod/*/versions/*/runs/e2e/**/logs/
+            mod/*/versions/*/runs/e2e/**/crash-reports/
           retention-days: 7
           if-no-files-found: ignore

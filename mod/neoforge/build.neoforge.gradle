@@ -1,7 +1,11 @@
 plugins {
-    id 'multiloader-loader'
+    id 'mcinsight.node'
     id 'net.neoforged.moddev'
 }
+
+def node = extensions.getByName('stonecutter')
+def nodeProps = node.properties
+def mcVersion = node.current.version
 
 // The e2e runs load the recipe viewers the real game would have; the normal dev runs do not, so
 // a developer's own run stays the minimal mod.
@@ -27,14 +31,18 @@ if (extraModsDir != null) {
 }
 
 neoForge {
-    version = neoforge_version
+    version = nodeProps.get('deps.neo_loader')
     addModdingDependenciesTo sourceSets.e2e
-    parchment {
-        minecraftVersion = parchment_minecraft
-        mappingsVersion = parchment_version
+
+    nodeProps.getOrNull('parchment.mappings')?.with { mappings ->
+        parchment {
+            minecraftVersion = nodeProps.get('parchment.minecraft')
+            mappingsVersion = mappings
+        }
     }
+
     mods {
-        "${mod_id}" {
+        "${nodeProps.get('mod.id')}" {
             sourceSet sourceSets.main
         }
         mcinsight_e2e {
@@ -43,7 +51,7 @@ neoForge {
     }
     runs {
         configureEach {
-            systemProperty('neoforge.enabledGameTestNamespaces', mod_id)
+            systemProperty('neoforge.enabledGameTestNamespaces', nodeProps.get('mod.id'))
             ideName = "NeoForge ${it.name.capitalize()} (${project.path})"
         }
         client {
@@ -72,6 +80,17 @@ neoForge {
     }
 }
 
+dependencies {
+    compileOnly "mezz.jei:jei-${mcVersion}-neoforge-api:${nodeProps.get('deps.jei')}"
+    nodeProps.getOrNull('deps.emi')?.with { emi ->
+        compileOnly "dev.emi:emi-neoforge:${emi}:api"
+    }
+    compileOnly "me.shedaniel:RoughlyEnoughItems-api-neoforge:${nodeProps.get('deps.rei')}"
+    compileOnly "me.shedaniel:RoughlyEnoughItems-default-plugin-neoforge:${nodeProps.get('deps.rei')}"
+
+    e2eLocalRuntime "mezz.jei:jei-${mcVersion}-neoforge:${nodeProps.get('deps.jei')}"
+}
+
 // The runner launches the game itself, without Gradle in between, so it owns the process and can
 // stop it. MDG already writes everything a launch needs to argument files; this task records them
 // with the one property that differs per scenario, the mod folder of the mod under test.
@@ -91,7 +110,7 @@ neoForge {
                 [set.output.classesDirs.files, set.output.resourcesDir].flatten().collect { "${id}%%${it.absolutePath}" }
             }
             def harness = folders('mcinsight_e2e', sourceSets.e2e)
-            def withMod = folders(mod_id, sourceSets.main) + harness
+            def withMod = folders(nodeProps.get('mod.id'), sourceSets.main) + harness
             def out = spec.get().asFile
             out.parentFile.mkdirs()
             def classpathFile = new File(out.parentFile, "${side}-classpath.txt")
@@ -100,7 +119,7 @@ neoForge {
             out.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson([
                 loader    : 'neoforge',
                 side      : side,
-                java      : javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(java_version) }
+                java      : javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(nodeProps.get('java') as int) }
                                 .get().executablePath.asFile.absolutePath,
                 jvmArgs   : ["@${classpathFile}", "@${new File(moddev, "${run}RunVmArgs.txt")}"],
                 // The harness always loads; McInsight loads only with `withMod`, which is how the
@@ -113,11 +132,4 @@ neoForge {
         }
     }
 }
-dependencies {
-    compileOnly libs.jei.neoforge.api
-    compileOnly(variantOf(libs.emi.neoforge.api) { classifier('api') })
-    compileOnly libs.rei.api.neoforge
-    compileOnly libs.rei.plugin.neoforge
 
-    e2eLocalRuntime libs.jei.neoforge
-}

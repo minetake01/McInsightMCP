@@ -14,6 +14,7 @@ import net.minetake.mcinsight.api.RequestContext;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
 import net.minetake.mcinsight.compat.ViewerRegistry;
 import net.minetake.mcinsight.game.GameAccess;
+import net.minetake.mcinsight.game.Versioned;
 import net.minetake.mcinsight.serial.JsonCodec;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.component.DataComponentMap;
@@ -111,7 +112,7 @@ public final class EntryInspector {
     }
 
     private static JsonObject describeItem(RequestContext ctx, ResourceLocation id) {
-        Item item = BuiltInRegistries.ITEM.get(id);
+        Item item = Versioned.byId(BuiltInRegistries.ITEM, id);
         ItemStack stack = new ItemStack(item);
         HolderLookup.Provider registries = getRegistries(ctx);
         JsonObject out = JsonCodec.serializeItemStack(stack, registries);
@@ -143,7 +144,7 @@ public final class EntryInspector {
     }
 
     private static JsonObject describeBlock(ResourceLocation id) {
-        Block block = BuiltInRegistries.BLOCK.get(id);
+        Block block = Versioned.byId(BuiltInRegistries.BLOCK, id);
         JsonObject out = new JsonObject();
         Item asItem = block.asItem();
         if (asItem != Items.AIR) {
@@ -154,7 +155,7 @@ public final class EntryInspector {
     }
 
     private static JsonObject describeFluid(ResourceLocation id) {
-        Fluid fluid = BuiltInRegistries.FLUID.get(id);
+        Fluid fluid = Versioned.byId(BuiltInRegistries.FLUID, id);
         FluidState defaultState = fluid.defaultFluidState();
         JsonObject out = new JsonObject();
         out.addProperty("fluidClass", fluid.getClass().getName());
@@ -173,7 +174,7 @@ public final class EntryInspector {
     }
 
     private static JsonObject describeEntity(ResourceLocation id) {
-        EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.get(id);
+        EntityType<?> type = Versioned.byId(BuiltInRegistries.ENTITY_TYPE, id);
         JsonObject out = new JsonObject();
         out.addProperty("entityTypeClass", type.getClass().getName());
         out.addProperty("category", type.getCategory().getName());
@@ -204,7 +205,9 @@ public final class EntryInspector {
             }
             out.add("stateProperties", stateProperties);
         }
-        addTags(out, defaultState.getTags().map(tag -> tag.location().toString()).toList());
+        // A state is a value of its block, so its tags are the block holder's; 26.x dropped the
+        // forwarding method and left only that answer.
+        addTags(out, block.builtInRegistryHolder().tags().map(tag -> tag.location().toString()).toList());
         return out;
     }
 

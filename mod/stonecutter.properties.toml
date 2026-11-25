@@ -1,0 +1,81 @@
+# Everything a branch's build script needs to know, keyed by Minecraft version and loader.
+#
+# Labels are the node path: [<branch>."<minecraft version>"]. A loader node also reads the plain
+# ["<minecraft version>"] section, so values shared by every branch live there. Lambdas read them
+# with `sc.properties`.
+
+mod.id = "mcinsight"
+mod.name = "McInsight"
+mod.group = "net.minetake.mcinsight"
+mod.version = "0.1.0-beta.2"
+mod.author = "Minetake"
+mod.license = "MIT"
+mod.description = "Read-only Minecraft runtime introspection mod for AI assistants via McInsightMCP."
+mod.homepage = "https://github.com/minetake01/McInsightMCP"
+mod.sources = "https://github.com/minetake01/McInsightMCP"
+mod.issues = "https://github.com/minetake01/McInsightMCP/issues"
+
+# The recipe viewers and JUnit move with the Minecraft version, so the pins are per version below.
+
+["1.21.1"]
+java = "21"
+# Minecraft's resource pack format, which `pack.mcmeta` has to declare for this version.
+pack_format = "34"
+
+deps.jei = "19.76.1.481"
+deps.emi = "1.1.24+1.21.1"
+deps.rei = "16.0.799"
+deps.junit = "6.1.3"
+
+# Parchment stops at the last obfuscated version; later Minecraft ships its parameter names.
+parchment.minecraft = "1.21.1"
+parchment.mappings = "2024.11.17"
+# The NeoForm build the `common` branch compiles Minecraft from, without a loader.
+deps.neoform = "1.21.1-20240808.144430"
+
+[fabric."1.21.1"]
+deps.fabric_loader = "0.20.1"
+deps.fabric_api = "0.116.18+1.21.1"
+
+[neoforge."1.21.1"]
+deps.neo_loader = "21.1.267"
+deps.neo_loader_range = "[4,)"
+
+# 26.x ships unobfuscated, so it needs no Parchment and its parameter names come with the game.
+# EMI has no 26.x release yet, so these sections carry no `deps.emi`: the bridge is left out of the
+# build entirely and comes back the moment a pin is added here.
+["26.1.2"]
+java = "25"
+pack_format = "46"
+
+deps.jei = "29.54.0.123"
+deps.rei = "26.1.819"
+deps.junit = "6.1.3"
+
+deps.neoform = "26.1.2-1"
+
+[fabric."26.1.2"]
+deps.fabric_loader = "0.20.1"
+deps.fabric_api = "0.155.3+26.1.2"
+
+[neoforge."26.1.2"]
+deps.neo_loader = "26.1.2.130"
+deps.neo_loader_range = "[4,)"
+
+["26.3"]
+java = "25"
+pack_format = "46"
+
+deps.jei = "31.23.0.130"
+deps.rei = "26.3.824"
+deps.junit = "6.1.3"
+
+deps.neoform = "26.3-1"
+
+[fabric."26.3"]
+deps.fabric_loader = "0.20.1"
+deps.fabric_api = "0.167.0+26.3"
+
+[neoforge."26.3"]
+deps.neo_loader = "26.3.0.118"
+deps.neo_loader_range = "[4,)"

@@ -125,6 +125,10 @@ const SUITES = {
     });
     await r.check('trades filtered by result side produce that item only', async () => {
       const res = ok(await mcp.call('mc_query_item_flow', { item: 'minecraft:emerald', direction: 'obtain', sources: ['trades'], limit: 100 }));
+      // A part that could not be read is named in `missing`; saying so beats reporting the absent
+      // page as a shape violation.
+      const missing = (res.missing ?? []).find((m) => m.part === 'trades');
+      expect(!missing, `trades could not be read: ${JSON.stringify(missing)}`);
       const t = page(res.trades, 'trades');
       expect(t.total > 0, 'no trade sells emeralds');
       const wrong = t.trades.filter((x) => x.result?.id !== 'minecraft:emerald');

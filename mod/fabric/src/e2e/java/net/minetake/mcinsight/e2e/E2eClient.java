@@ -7,10 +7,14 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.world.Difficulty;
-import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.LevelSettings;
 import net.minecraft.world.level.WorldDataConfiguration;
+//? if >=26.1 {
+/*import net.minecraft.world.level.gamerules.GameRules;
+*///? } else {
+import net.minecraft.world.level.GameRules;
+//? }
 import net.minecraft.world.level.levelgen.WorldOptions;
 import net.minecraft.world.level.levelgen.presets.WorldPresets;
 import org.slf4j.Logger;
@@ -37,6 +41,24 @@ public final class E2eClient implements ClientModInitializer {
             }
             requested = true;
             LOG.info("[E2E] creating world {}", world);
+            // GameRules moved to its own package and the difficulty became part of the level
+            // settings in 26.1; both are the same world either way.
+            //? if >=26.1 {
+            /*client.execute(() -> client.createWorldOpenFlows().createFreshLevel(
+                world,
+                new LevelSettings(
+                    world,
+                    GameType.CREATIVE,
+                    new LevelSettings.DifficultySettings(Difficulty.PEACEFUL, false, false),
+                    true,
+                    WorldDataConfiguration.DEFAULT
+                ),
+                new WorldOptions(SEED, false, false),
+                registries -> registries.lookupOrThrow(Registries.WORLD_PRESET)
+                    .getOrThrow(WorldPresets.FLAT).value().createWorldDimensions(),
+                new TitleScreen()
+            ));
+            *///? } else {
             client.tell(() -> client.createWorldOpenFlows().createFreshLevel(
                 world,
                 new LevelSettings(world, GameType.CREATIVE, false, Difficulty.PEACEFUL, true, new GameRules(), WorldDataConfiguration.DEFAULT),
@@ -45,6 +67,7 @@ public final class E2eClient implements ClientModInitializer {
                     .getHolderOrThrow(WorldPresets.FLAT).value().createWorldDimensions(),
                 new TitleScreen()
             ));
+            //? }
         });
     }
 }

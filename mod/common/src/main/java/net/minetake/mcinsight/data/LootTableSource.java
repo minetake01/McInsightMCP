@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Locale;
 import net.minetake.mcinsight.api.InsightError;
 import net.minetake.mcinsight.api.InsightException;
+import net.minetake.mcinsight.game.Versioned;
 import net.minecraft.core.Holder;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.Registries;
@@ -32,7 +33,7 @@ public record LootTableSource(
     public static List<LootTableSource> read(DataPackView view) {
         List<LootTableSource> out = new ArrayList<>();
         for (Holder.Reference<LootTable> reference : lootTables(view).listElements().toList()) {
-            ResourceLocation id = reference.key().location();
+            ResourceLocation id = Versioned.idOf(reference.key());
             JsonElement encoded = view.encode("loot:" + id, LootTable.DIRECT_CODEC, reference.value());
             out.add(new LootTableSource(
                 id.toString(),

@@ -12,6 +12,7 @@ import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.api.Page;
 import net.minetake.mcinsight.api.Params;
 import net.minetake.mcinsight.api.RequestContext;
+import net.minetake.mcinsight.game.Versioned;
 import net.minetake.mcinsight.registry.RegistryIndex.Kind;
 import net.minecraft.core.Holder;
 import net.minecraft.core.HolderSet;
@@ -93,7 +94,7 @@ public final class TagQuery {
         int offset
     ) {
         TagKey<T> key = TagKey.create(registry.key(), tagId);
-        Optional<HolderSet.Named<T>> declared = registry.getTag(key);
+        Optional<HolderSet.Named<T>> declared = Versioned.tag(registry, key);
         if (declared.isEmpty()) {
             throw new InsightException(
                 InsightError.NOT_FOUND,
@@ -104,7 +105,7 @@ public final class TagQuery {
         JsonArray rows = new JsonArray();
         int total = 0;
         for (Holder<T> holder : declared.get()) {
-            ResourceLocation memberId = holder.unwrapKey().map(member -> member.location()).orElse(null);
+            ResourceLocation memberId = holder.unwrapKey().map(Versioned::idOf).orElse(null);
             if (memberId == null) {
                 continue;
             }

@@ -1,0 +1,45 @@
+plugins {
+    id 'mcinsight.node'
+    id 'net.neoforged.moddev'
+}
+
+// The `common` branch compiles the shared sources against Minecraft alone: no loader, so nothing
+// in them can depend on Fabric or NeoForge APIs.
+def node = extensions.getByName('stonecutter')
+def nodeProps = node.properties
+def mcVersion = node.current.version
+
+neoForge {
+    neoFormVersion = nodeProps.get('deps.neoform')
+
+    // Parchment stops at the last obfuscated version; later Minecraft ships parameter names.
+    nodeProps.getOrNull('parchment.mappings')?.with { mappings ->
+        parchment {
+            minecraftVersion = nodeProps.get('parchment.minecraft')
+            mappingsVersion = mappings
+        }
+    }
+
+    // The unit tests read the same Minecraft classes the mod does.
+    addModdingDependenciesTo sourceSets.test
+}
+
+dependencies {
+    compileOnly "mezz.jei:jei-${mcVersion}-common-api:${nodeProps.get('deps.jei')}"
+    // The `:api` classifier is EMI's dependency-free API jar, which is all the bridge compiles against.
+    nodeProps.getOrNull('deps.emi')?.with { emi ->
+        compileOnly "dev.emi:emi-xplat-mojmap:${emi}:api"
+    }
+    compileOnly "me.shedaniel:RoughlyEnoughItems-api-neoforge:${nodeProps.get('deps.rei')}"
+    compileOnly "me.shedaniel:RoughlyEnoughItems-default-plugin-neoforge:${nodeProps.get('deps.rei')}"
+
+    testImplementation platform("org.junit:junit-bom:${nodeProps.get('deps.junit')}")
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test', Test) {
+    useJUnitPlatform()
+}
+
+

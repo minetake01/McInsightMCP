@@ -41,8 +41,14 @@ public final class GameAccess {
         if (server != null) {
             return server.getRecipeManager();
         }
+        //? if >=26.1 {
+        /*// A 26.x client holds no recipe manager: recipes reach it as displays, resolved by the
+        // client's recipe access rather than as the server's recipe table.
+        return null;
+        *///? } else {
         Level level = getLevel(executor);
         return level != null ? level.getRecipeManager() : null;
+        //? }
     }
 
     public static HolderLookup.Provider getRegistryAccess(MainThreadExecutor executor) {
@@ -50,7 +56,7 @@ public final class GameAccess {
         if (server != null) {
             // Not server.registryAccess(): its RELOADABLE layer is a placeholder, so loot tables,
             // predicates, and item modifiers are missing there. The reload result holds every layer.
-            return server.reloadableRegistries().get();
+            return Versioned.reloadedRegistries(server);
         }
         Level level = getLevel(executor);
         return level != null ? level.registryAccess() : null;

@@ -9,7 +9,7 @@ from source, this document says so instead of describing an expectation.
 McInsightMCP/
 ├── docs/
 │   └── ARCHITECTURE.md     # This document: contract, package map, transports, MCP server
-├── mod/                    # Multiloader Gradle project (common / neoforge / fabric)
+├── mod/                    # Stonecutter Gradle project: one node per (loader, Minecraft version)
 ├── mcp-server/             # TypeScript MCP server (Streamable HTTP & stdio), MCP spec 2026-07-28
 └── bench/                  # Main-thread MSPT and endpoint latency benchmark harness
 ```
@@ -175,7 +175,8 @@ Rules that hold across packages:
   `data/DataPackView`, so worldgen, loot tables, loot modifiers, and data maps share one snapshot, one
   generation stamp, and one JSON cache. Guides read the asset/data resource managers through
   `guides/GuideIndex`, which keeps its own per-generation index and content caches; trades read the
-  game's trade tables through `trade/TradeCollector`.
+  game's trade system through `trade/TradeCollector`, whose two readers (`readRegistryTrades` for
+  26.1 and later, `readListingTrades` up to 1.21.1) are version-exclusive branches of one file.
 
 Loader modules bind the same common code:
 
@@ -183,6 +184,15 @@ Loader modules bind the same common code:
 mod/neoforge/...  # @Mod entrypoint, payload registration, reload listeners, client events
 mod/fabric/...    # Fabric entrypoints; shared payload registration in McInsightFabricCommon
 ```
+
+The build is a Stonecutter tree with one branch per module (`common`, `fabric`, `neoforge`) and one
+node per Minecraft version in each branch. `:common:<version>` owns the shared `src/`, and
+`:fabric:<version>` / `:neoforge:<version>` compile that branch's preprocessed output for the same
+version; the version list is `minecraft_versions` in `mod/gradle.properties` and each version's pins
+are in `mod/stonecutter.properties.toml`. A difference in a name is a Stonecutter replacement, a
+difference in shape is a Stonecutter comment (`//? if >=26.1 {`), and a difference in whole files is
+a `files { disable(...) }` rule — never a copy of the file. Names the versions still share live in
+`game/Versioned`, which is where a rename is answered once.
 
 ---
 
@@ -476,21 +486,27 @@ tag containing it, and never looks inside a value; `registry` matches a substrin
 `totalMatchedValues`, `matchedValuesTruncated`. `rawJson` is included when `includeRaw=true`, when
 neither `q` nor `item` is set, or when the definition holds at most 100 values.
 
-**`trades_query`** — offers are materialized with the game's own `ItemListing.getOffer` for a
-detached villager, so price and enchantment randomness land the way the game applies them. A listing
-holding a villager-type map is expanded per type (a biome wrapper is unwrapped first, so the
-listing that actually runs is what gets checked); a listing whose offer depends on randomness is
-sampled twice and marked `sampled`. Listings are recognised by the values they hold rather than by
-class name, because vanilla's listing classes are package-private and renamed by loader mappings. A
-listing that names a structure tag would search the world for a map target, which is unbounded work
-on the server thread and a write into map storage, so it is reported by its reflected declaration
-instead; so is a listing that fails to materialize. Entries carry `profession`, `level`, optional
-`experimental`, `listingClass`, `costA`/`costB`/`result` (`id`, `displayName`, `count`, or
-`{"empty": true}`), `maxUses`, `xp`, `priceMultiplier`, optional `sampled` and `villagerType`, or a
-reflected `listing` snapshot. `item=` matches either side of the swap unless `side` is `cost` (the
-player pays with it) or `result` (the player receives it); `side` without `item` is
-`INVALID_PARAMETER`. A declared-only listing has no stacks, so `item=` never matches it; `q` still
-does, and matches profession, listing class, stack ids and names.
+**`trades_query`** — offers come from the version's own trade system: up to 1.21.1 each profession
+holds a table of `ItemListing` objects, and from 26.1 the trades are named registry entries grouped
+into a `TradeSet` per profession and level. Either way the offer is produced by the game —
+`ItemListing.getOffer` against a detached villager, or `VillagerTrade.getOffer` against the same loot
+context a villager builds — so price and enchantment randomness land the way the game applies them. A
+listing holding a villager-type map is expanded per type (a biome wrapper is unwrapped first, so the
+listing that actually runs is what gets checked); a 26.x trade, which limits itself to villager types
+with a loot condition, is rolled once per type and reported against the types it survives. An offer
+whose result depends on randomness is sampled twice and marked `sampled`. Listings are recognised by
+the values they hold rather than by class name, because vanilla's listing classes are package-private
+and renamed by loader mappings. A listing that names a structure tag would search the world for a map
+target, which is unbounded work on the server thread and a write into map storage, so it is reported
+by its reflected declaration instead; so is a listing that fails to materialize. Entries carry
+`profession`, `level` (absent where the game does not level the trade, as for the wandering trader),
+optional `experimental`, `listingClass`, `tradeId` (26.x only — the registry entry the trade is
+defined by), `costA`/`costB`/`result` (`id`, `displayName`, `count`, or `{"empty": true}`), `maxUses`,
+`xp`, `priceMultiplier`, optional `sampled` and `villagerType`, or a reflected `listing` snapshot.
+`item=` matches either side of the swap unless `side` is `cost` (the player pays with it) or `result`
+(the player receives it); `side` without `item` is `INVALID_PARAMETER`. A declared-only listing has no
+stacks, so `item=` never matches it; `q` still does, and matches profession, listing class, trade id,
+stack ids and names.
 
 **`advancements_query`** — entries carry `id`, `modId`, optional `parent`, display fields (`title`,
 `description`, `frame`, `icon`, `hidden`), `criteria[]`, optional `criteriaDetails`, optional
@@ -529,6 +545,9 @@ JEI, EMI, and REI are adapters over `ViewerModel`:
   latter), so a caller compares structure explicitly instead of inferring it from the viewer name.
 - `ViewerRegistry` holds the adapters and knows no viewer names; adapters announce theirs. The status
   endpoint and `recipes/types` enumerate whatever registered.
+- An adapter is compiled only into the versions whose build pins its dependency: EMI has no `26.x`
+  release, so those builds carry no EMI bridge and no EMI entrypoint. Adding a `deps.emi` pin for a
+  version is what brings it back — nothing about the adapter is version-conditional in the source.
 
 ---
 
@@ -758,7 +777,8 @@ server over Streamable HTTP, the way an agent would.
 
 - **Launch.** Each loader has `e2eClient`/`e2eServer` runs (NeoForge: MDG runs; Fabric: Loom runs)
   on an `e2e` source set. `exportE2eClientLaunch`/`exportE2eServerLaunch` write
-  `mod/<loader>/build/e2e/{client,server}.json`: the Java executable, JVM and program arguments, and
+  `mod/<loader>/versions/<mc_version>/build/e2e/{client,server}.json`: the Java executable, JVM and
+  program arguments, and
   two alternative argument sets, `withMod` and `withoutMod`. The runner launches the JVM from that spec
   itself, so it owns the process, captures its log, and stops it. "Without McInsight" is the same game
   without the mod: NeoForge leaves it out of `fml.modFolders`, Fabric disables it with
@@ -773,17 +793,18 @@ server over Streamable HTTP, the way an agent would.
   dedicated server running McInsight; server data travels over the packet bridge) and
   `multiplayer-nomod` (a dedicated server without McInsight; server data must fail as
   `SERVER_MOD_REQUIRED` and composite answers must say what is missing). Each scenario runs in a fresh
-  directory under `mod/<loader>/runs/e2e/<loader>-<scenario>/`, and its process logs stay there.
+  directory under `mod/<loader>/versions/<mc_version>/runs/e2e/<loader>-<scenario>/`, and its process
+  logs stay there.
 - **Suites and presets.** Checks are grouped into suites (`status`, `registry`, `recipes`, `world`,
   `worlddata`, `progress`, `guides`, `contract`, `bridge`, `nomod`). Each scenario lists the suites
   that apply to it, and `--suite` narrows that. Presets name common selections: `quick` (NeoForge
   singleplayer, the default), `multiplayer` (both NeoForge multiplayer scenarios), and `release`
-  (every loader and scenario). `--list` prints all of them.
+  (every Minecraft version, loader and scenario). `--version`, `--loader` and `--list` narrow or print them.
 - **Mod set.** By default the runs load only McInsight, the harness, and JEI (the viewer the real game
   would have), so a run is deterministic. `--extra-mods <dir>` adds every jar in that directory to the
   e2e runs for a local experiment; it is refused under `CI`.
 - **JEI version.** Both loaders' e2e runs load the JEI build the mod compiles against (`jei` in
-  `mod/gradle/libs.versions.toml`), so the bridge is exercised against the API it was written for.
+  `mod/stonecutter.properties.toml`), so the bridge is exercised against the API it was written for.
 - **CI.** `.github/workflows/e2e.yml` runs the `quick` preset on pull requests and pushes. A
   `workflow_dispatch` can choose any preset, and `release.yml` calls it with `release` before
   publishing. On Linux, `MCINSIGHT_E2E_XVFB=1` makes the runner start the client under `xvfb-run` with

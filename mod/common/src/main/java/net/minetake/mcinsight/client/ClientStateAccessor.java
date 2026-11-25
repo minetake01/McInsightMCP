@@ -53,7 +53,12 @@ public final class ClientStateAccessor {
 
     public static ScreenSnapshot captureOpenScreenSnapshot() {
         Minecraft mc = Minecraft.getInstance();
+        //? if >=26.3 {
+        /*
+        Screen screen = mc.gui.screen();
+        *///? } else {
         Screen screen = mc.screen;
+        //? }
         if (screen == null) {
             return null;
         }

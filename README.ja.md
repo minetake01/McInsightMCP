@@ -44,13 +44,14 @@ McInsightMCP を使うと、Claude Desktop・Cursor・Claude Code・VS Code な�
 
 | 項目 | 要件 |
 |---|---|
-| Minecraft | 現在は `1.21.1`（Java 21）に対応（対応バージョン一覧は [Releases](https://github.com/minetake01/McInsightMCP/releases) を参照） |
+| Minecraft | `1.21.1`（Java 21）と `26.1.2` / `26.3`（Java 25）に対応（バージョンとローダーの組み合わせごとに JAR が 1 つ。一覧は [Releases](https://github.com/minetake01/McInsightMCP/releases) を参照） |
 | NeoForge | 単体で動作（必須の前提 MOD なし） |
 | Fabric | [Fabric API](https://modrinth.com/mod/fabric-api) が必須 |
 | MCP サーバー | [Node.js](https://nodejs.org/) `22.12` 以上 |
 
 ### 自動連携するオプション MOD
-- JEI / EMI / REI（レシピカテゴリ、触媒ブロック、アイテム・流体等の説明ページ）
+- JEI / REI（レシピカテゴリ、触媒ブロック、アイテム・流体等の説明ページ）
+- EMI は `1.21.1` のみ対応です。`26.x` 向けのリリースがまだ無いため、そのビルドには連携ごと含めていません（読み込み失敗にはなりません）。
 - ゲーム内ガイド・クエスト: Patchouli / GuideME / FTB Quests / Create Ponder / Oracle Index / 言語ファイル
 
 ### 主要 MOD 向けレシピ整形
@@ -151,15 +152,19 @@ AI クライアント側で接続先 URL に `http://127.0.0.1:3876/mcp` を指�
 
 ## ソースからのビルド
 
-MOD のビルドには JDK 21 が必要です（Gradle 自体は JDK 25 で動き、見つからなければ自動でダウンロードされます）。MCP サーバーのビルドには Node.js 22.12 以上と pnpm が必要です。
+MOD のビルドには JDK 21（26.x は JDK 25）が必要です（Gradle 自体は JDK 25 で動き、見つからなければ自動でダウンロードされます）。MCP サーバーのビルドには Node.js 22.12 以上と pnpm が必要です。
+
+対応する Minecraft のバージョンごとに、`:<ローダー>:<バージョン>` という Gradle のノードができます（一覧は `mod/gradle.properties` の `minecraft_versions`）。
 
 ```bash
 # 1. 共通ロジックのテストと NeoForge / Fabric MOD のビルド
 cd mod
-./gradlew :common:test :neoforge:build :fabric:build
+./gradlew :common:1.21.1:test :neoforge:1.21.1:build :fabric:1.21.1:build \
+          :common:26.1.2:test :neoforge:26.1.2:build :fabric:26.1.2:build \
+          :common:26.3:test :neoforge:26.3:build :fabric:26.3:build
 # 生成物:
-#   mod/neoforge/build/libs/mcinsight-neoforge-<mc_version>-0.1.0-beta.2.jar
-#   mod/fabric/build/libs/mcinsight-fabric-<mc_version>-0.1.0-beta.2.jar
+#   mod/neoforge/versions/26.3/build/libs/mcinsight-neoforge-26.3-0.1.0-beta.2.jar
+#   mod/fabric/versions/26.3/build/libs/mcinsight-fabric-26.3-0.1.0-beta.2.jar
 
 # 2. MCP サーバーのビルド・テスト
 cd ../mcp-server

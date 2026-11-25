@@ -8,8 +8,7 @@ modId="${mod_id}"
 version="${version}"
 displayName="${mod_name}"
 displayURL="${mod_homepage}"
-logoFile="mcinsight.png"
-logoBlur=false
+${mod_icon_attributes}
 authors="${mod_author}"
 description='''${description}'''
 
@@ -23,7 +22,7 @@ side="BOTH"
 [[dependencies.${mod_id}]]
 modId="minecraft"
 type="required"
-versionRange="${minecraft_version_range}"
+versionRange="[${minecraft_version}]"
 ordering="NONE"
 side="BOTH"
 
@@ -33,14 +32,7 @@ type="optional"
 versionRange="[19.0.0,)"
 ordering="AFTER"
 side="CLIENT"
-
-[[dependencies.${mod_id}]]
-modId="emi"
-type="optional"
-versionRange="[1.1.0,)"
-ordering="AFTER"
-side="CLIENT"
-
+${optional_viewer_dependency}
 [[dependencies.${mod_id}]]
 modId="roughlyenoughitems"
 type="optional"

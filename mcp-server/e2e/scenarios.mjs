@@ -85,6 +85,9 @@ async function multiplayer(ctx, { serverHasMod }) {
       'server-ip=127.0.0.1',
       'online-mode=false',
       'enforce-secure-profile=false',
+      // 26.3 defaults the whitelist on, so the joining player has to be let in explicitly; the
+      // earlier versions default it off, and setting it is what makes the scenario version-neutral.
+      'white-list=false',
       'spawn-protection=0',
       'level-type=minecraft:flat',
       'generate-structures=false',

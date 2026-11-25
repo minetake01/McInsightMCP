@@ -26,7 +26,6 @@ import mezz.jei.api.recipe.IFocusGroup;
 import mezz.jei.api.recipe.IRecipeLookup;
 import mezz.jei.api.recipe.IRecipeManager;
 import mezz.jei.api.recipe.RecipeIngredientRole;
-import mezz.jei.api.recipe.RecipeType;
 import mezz.jei.api.recipe.category.IRecipeCategory;
 import mezz.jei.api.recipe.vanilla.IJeiIngredientInfoRecipe;
 import mezz.jei.api.runtime.IIngredientManager;
@@ -36,6 +35,7 @@ import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.client.ClientStateAccessor;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
 import net.minetake.mcinsight.compat.ViewerModel;
+import net.minetake.mcinsight.game.Versioned;
 import net.minetake.mcinsight.serial.JsonCodec;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.FormattedText;
@@ -165,8 +165,20 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
             return null;
         }
         IRecipeManager recipeManager = requireRuntime().getRecipeManager();
-        Optional<RecipeType<?>> type = recipeManager.getRecipeType(uid);
-        return type.isPresent() ? recipeManager.getRecipeCategory(type.get()) : null;
+        return recipeManager.getRecipeType(uid).map(recipeManager::getRecipeCategory).orElse(null);
+    }
+
+    /**
+     * The role JEI gives a workstation: an ingredient the recipe uses but does not consume.
+     *
+     * <p>29.x renamed it, because a station is no longer one of the roles a catalyst could be.
+     */
+    private static RecipeIngredientRole stationRole() {
+        //? if >=26.1 {
+        /*return RecipeIngredientRole.CRAFTING_STATION;
+        *///? } else {
+        return RecipeIngredientRole.CATALYST;
+        //? }
     }
 
     private List<ViewerModel.Ingredient> workstations(IRecipeCategory<?> category) {
@@ -240,7 +252,7 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
         if (name != null) {
             return name;
         }
-        return recipe instanceof RecipeHolder<?> holder ? holder.id() : null;
+        return recipe instanceof RecipeHolder<?> holder ? Versioned.recipeId(holder) : null;
     }
 
     /**
@@ -298,7 +310,7 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
             return null;
         }
         try {
-            DataResult<JsonElement> encoded = Recipe.CODEC.encodeStart(ops, recipe);
+            DataResult<JsonElement> encoded = Versioned.recipeCodec().encodeStart(ops, recipe);
             return encoded.result().orElse(null);
         } catch (Exception e) {
             return null;
@@ -317,7 +329,7 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
         IIngredientSupplier supplier = supplierOf(category, recipe);
         List<ViewerModel.Ingredient> catalysts = supplier == null
             ? List.of()
-            : ingredients(supplier.getIngredients(RecipeIngredientRole.CATALYST), ingredientManager, ops);
+            : ingredients(supplier.getIngredients(stationRole()), ingredientManager, ops);
         Slots rendered = renderedSlots(category, recipe, ingredientManager, ops);
         if (rendered != null) {
             return new Slots(rendered.inputs(), rendered.outputs(), catalysts, ViewerModel.SlotGranularity.SLOTS);
@@ -493,7 +505,7 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
 
     private static <V> List<String> tagsOf(V value, IIngredientHelper<V> helper, Optional<ItemStack> stack) {
         if (stack.isPresent() && !stack.get().isEmpty()) {
-            return stack.get().getTags().map(tag -> tag.location().toString()).sorted().toList();
+            return Versioned.itemTags(stack.get()).map(tag -> tag.location().toString()).sorted().toList();
         }
         try {
             return helper.getTagStream(value).map(ResourceLocation::toString).sorted().toList();
@@ -514,10 +526,10 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
         IFocusFactory focusFactory = runtime.getJeiHelpers().getFocusFactory();
         IIngredientManager ingredientManager = runtime.getIngredientManager();
         List<RecipeIngredientRole> roles =
-            List.of(RecipeIngredientRole.INPUT, RecipeIngredientRole.OUTPUT, RecipeIngredientRole.CATALYST);
+            List.of(RecipeIngredientRole.INPUT, RecipeIngredientRole.OUTPUT, stationRole());
         List<IFocus<?>> focuses = new ArrayList<>();
         if (BuiltInRegistries.ITEM.containsKey(target)) {
-            ItemStack stack = new ItemStack(BuiltInRegistries.ITEM.get(target));
+            ItemStack stack = new ItemStack(Versioned.byId(BuiltInRegistries.ITEM, target));
             if (!stack.isEmpty()) {
                 for (RecipeIngredientRole role : roles) {
                     focuses.add(focusFactory.createFocus(role, VanillaTypes.ITEM_STACK, stack));

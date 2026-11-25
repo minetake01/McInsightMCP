@@ -10,6 +10,7 @@ import net.minetake.mcinsight.api.InsightError;
 import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.cache.CacheGenerations;
 import net.minetake.mcinsight.cache.GenerationalCache;
+import net.minetake.mcinsight.game.Versioned;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
@@ -122,7 +123,7 @@ public final class RegistryIndex {
         Registry<?> registry = registry(kind);
         List<Entry> entries = new ArrayList<>(registry.size());
         for (ResourceLocation id : registry.keySet()) {
-            Object value = registry.get(id);
+            Object value = Versioned.byId(registry, id);
             String idString = id.toString();
             String modId = id.getNamespace();
             String displayName = DisplayNames.of(kind, id);
@@ -139,7 +140,7 @@ public final class RegistryIndex {
         entries.sort(Comparator.comparing(Entry::id));
 
         List<TagName> tags = new ArrayList<>();
-        for (var tagKey : registry.getTagNames().toList()) {
+        for (TagKey<?> tagKey : Versioned.tagIds(registry).toList()) {
             ResourceLocation id = tagKey.location();
             tags.add(new TagName(
                 "#" + id,
@@ -154,6 +155,6 @@ public final class RegistryIndex {
     }
 
     private static <T> boolean hasTagIn(Registry<T> registry, ResourceLocation id) {
-        return registry.getTag(TagKey.create(registry.key(), id)).isPresent();
+        return Versioned.tag(registry, TagKey.create(registry.key(), id)).isPresent();
     }
 }

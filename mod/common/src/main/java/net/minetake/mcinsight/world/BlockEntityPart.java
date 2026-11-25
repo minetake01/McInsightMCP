@@ -136,8 +136,13 @@ public final class BlockEntityPart {
 
         int minX = center.getX() - radius;
         int maxX = center.getX() + radius;
+        //? if >=26.1 {
+        /*int minY = Math.max(level.getMinY(), center.getY() - radius);
+        int maxY = Math.min(level.getMinY() + level.getHeight() - 1, center.getY() + radius);
+        *///? } else {
         int minY = Math.max(level.getMinBuildHeight(), center.getY() - radius);
         int maxY = Math.min(level.getMaxBuildHeight() - 1, center.getY() + radius);
+        //? }
         int minZ = center.getZ() - radius;
         int maxZ = center.getZ() + radius;
 

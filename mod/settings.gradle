@@ -1,34 +1,60 @@
 pluginManagement {
     repositories {
         gradlePluginPortal()
+        mavenCentral()
         exclusiveContent {
-            forRepository {
-                maven {
-                    name = 'Fabric'
-                    url = uri('https://maven.fabricmc.net')
-                }
-            }
-            filter {
-                includeGroupAndSubgroups('net.fabricmc')
-            }
+            forRepository { maven { name = 'Fabric'; url = uri('https://maven.fabricmc.net') } }
+            filter { includeGroupAndSubgroups('net.fabricmc') }
         }
         exclusiveContent {
-            forRepository {
-                maven {
-                    name = 'NeoForge'
-                    url = uri('https://maven.neoforged.net/releases')
-                }
-            }
-            filter {
-                includeGroupAndSubgroups('net.neoforged')
-            }
+            forRepository { maven { name = 'NeoForge'; url = uri('https://maven.neoforged.net/releases') } }
+            filter { includeGroupAndSubgroups('net.neoforged') }
         }
+        exclusiveContent {
+            forRepository { maven { name = 'KikuGie'; url = uri('https://maven.kikugie.dev/releases') } }
+            filter { includeGroupAndSubgroups('dev.kikugie') }
+        }
+    }
+
+    // Plugin versions live here, so a branch script names a plugin and nothing else.
+    plugins {
+        id 'net.fabricmc.fabric-loom-remap' version '1.19.4'
+        id 'net.fabricmc.fabric-loom' version '1.19.4'
+        id 'net.neoforged.moddev' version '2.0.148'
+        id 'dev.kikugie.loom-back-compat' version '0.4.3'
     }
 }
 
 plugins {
+    id 'dev.kikugie.stonecutter' version '0.10'
     id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
 }
 
+// The one declaration of which Minecraft versions this repository builds. `mcp-server/e2e` and
+// the release workflow read the same key from the same file.
+def minecraftVersions = (providers.gradleProperty('minecraft_versions').getOrElse('') as String)
+    .split(',')*.trim().findAll { !it.isEmpty() }
+if (minecraftVersions.isEmpty()) {
+    throw new GradleException('minecraft_versions is empty: set it in mod/gradle.properties.')
+}
+
+stonecutter {
+    // This repository is written in Groovy; Kotlin build scripts would be a second language.
+    kotlinController = false
+
+    create(rootProject) {
+        // One branch per module. Every node is `:<branch>:<minecraft version>`, and a branch's
+        // build script is shared by all of its nodes.
+        ['common', 'fabric', 'neoforge'].each { branchName ->
+            branch(branchName) {
+                minecraftVersions.each { minecraft ->
+                    version(minecraft).buildscript("build.${branchName}.gradle")
+                }
+            }
+        }
+        vcsVersion = minecraftVersions.first()
+    }
+}
+
 rootProject.name = 'mcinsight'
-include('common', 'neoforge', 'fabric')
+

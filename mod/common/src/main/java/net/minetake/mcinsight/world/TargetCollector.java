@@ -11,6 +11,7 @@ import net.minetake.mcinsight.api.Params;
 import net.minetake.mcinsight.api.PartialData;
 import net.minetake.mcinsight.api.RequestContext;
 import net.minetake.mcinsight.game.GameAccess;
+import net.minetake.mcinsight.game.Versioned;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.Registries;
@@ -174,7 +175,7 @@ public final class TargetCollector {
         HitResult hit = WorldData.pick(player, distance, includeFluids);
         if (hit instanceof net.minecraft.world.phys.BlockHitResult blockHit) {
             return new Ray(
-                level.dimension().location().toString(),
+                Versioned.dimensionId(level),
                 HitResult.Type.BLOCK,
                 blockHit.getBlockPos().immutable(),
                 blockHit.getDirection().getName(),
@@ -183,14 +184,14 @@ public final class TargetCollector {
         }
         if (hit instanceof net.minecraft.world.phys.EntityHitResult entityHit) {
             return new Ray(
-                level.dimension().location().toString(),
+                Versioned.dimensionId(level),
                 HitResult.Type.ENTITY,
                 null,
                 null,
                 entityHit.getEntity().getId()
             );
         }
-        return new Ray(level.dimension().location().toString(), HitResult.Type.MISS, null, null, -1);
+        return new Ray(Versioned.dimensionId(level), HitResult.Type.MISS, null, null, -1);
     }
 
     /**

@@ -20,6 +20,9 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.RegistryOps;
 import net.minecraft.resources.ResourceLocation;
+//? if >=26.1 {
+/*import net.minecraft.util.ProblemReporter;
+*///? }
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.item.ItemEntity;
@@ -33,6 +36,9 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.Property;
 import net.minecraft.world.level.material.FluidState;
+//? if >=26.1 {
+/*import net.minecraft.world.level.storage.TagValueOutput;
+*///? }
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.EntityHitResult;
@@ -169,7 +175,7 @@ final class WorldData {
 
         if (includeTags) {
             JsonArray tags = new JsonArray();
-            state.getTags().map(tag -> tag.location().toString()).sorted().forEach(tags::add);
+            state.getBlock().builtInRegistryHolder().tags().map(tag -> tag.location().toString()).sorted().forEach(tags::add);
             if (!tags.isEmpty()) {
                 out.add("tags", tags);
             }
@@ -264,8 +270,7 @@ final class WorldData {
         CompoundTag nbt = null;
         if (detailed) {
             try {
-                CompoundTag tag = new CompoundTag();
-                entity.saveWithoutId(tag);
+                CompoundTag tag = entityTag(entity);
                 if (!tag.isEmpty()) {
                     nbt = tag;
                 }
@@ -287,6 +292,25 @@ final class WorldData {
             droppedItem,
             nbt
         );
+    }
+
+    /**
+     * The entity's own fields, without the id and position the caller already reports.
+     *
+     * <p>26.x serializes into a {@code TagValueOutput} that needs the registry context and a
+     * problem reporter; the discarding reporter matches 1.21.1, where a tag silently keeps whatever
+     * the entity wrote instead of raising.
+     */
+    private static CompoundTag entityTag(Entity entity) {
+        //? if >=26.1 {
+        /*TagValueOutput output = TagValueOutput.createWithContext(ProblemReporter.DISCARDING, entity.level().registryAccess());
+        entity.saveWithoutId(output);
+        return output.buildResult();
+        *///? } else {
+        CompoundTag tag = new CompoundTag();
+        entity.saveWithoutId(tag);
+        return tag;
+        //? }
     }
 
     /** Whether an entity matches a free-text filter over its type, its name, and its dropped item. */

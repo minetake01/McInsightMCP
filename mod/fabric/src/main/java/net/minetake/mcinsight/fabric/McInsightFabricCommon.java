@@ -22,9 +22,15 @@ public final class McInsightFabricCommon implements ModInitializer {
         // The client entrypoint runs after this one and rebinds with its client direction.
         InsightNetworking.bind(new FabricTransport(payload -> false));
 
+        //? if >=26.1 {
+        /*PayloadTypeRegistry.clientboundPlay().register(InsightHelloPayload.TYPE, InsightHelloPayload.STREAM_CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(InsightResponsePayload.TYPE, InsightResponsePayload.STREAM_CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(InsightRequestPayload.TYPE, InsightRequestPayload.STREAM_CODEC);
+        *///? } else {
         PayloadTypeRegistry.playS2C().register(InsightHelloPayload.TYPE, InsightHelloPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(InsightResponsePayload.TYPE, InsightResponsePayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(InsightRequestPayload.TYPE, InsightRequestPayload.STREAM_CODEC);
+        //? }
 
         ServerPlayNetworking.registerGlobalReceiver(
             InsightRequestPayload.TYPE,

@@ -4,10 +4,14 @@ import com.mojang.logging.LogUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.world.Difficulty;
-import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.LevelSettings;
 import net.minecraft.world.level.WorldDataConfiguration;
+//? if >=26.1 {
+/*import net.minecraft.world.level.gamerules.GameRules;
+*///? } else {
+import net.minecraft.world.level.GameRules;
+//? }
 import net.minecraft.world.level.levelgen.WorldOptions;
 import net.minecraft.world.level.levelgen.presets.WorldPresets;
 import net.neoforged.api.distmarker.Dist;
@@ -35,6 +39,7 @@ public final class E2eClient {
     @SubscribeEvent
     public static void onTitle(ScreenEvent.Opening event) {
         String world = System.getProperty("mcinsight.e2e.createWorld");
+        LOG.info("[E2E] screen {} world={}", event.getNewScreen(), world);
         if (world == null || requested || !(event.getNewScreen() instanceof TitleScreen)) {
             return;
         }
@@ -43,6 +48,22 @@ public final class E2eClient {
         LOG.info("[E2E] creating world {}", world);
         // Run after the current screen change finishes; opening a world from inside it would be
         // replaced by the title screen that is being opened right now.
+        //? if >=26.1 {
+        /*mc.execute(() -> mc.createWorldOpenFlows().createFreshLevel(
+            world,
+            new LevelSettings(
+                world,
+                GameType.CREATIVE,
+                new LevelSettings.DifficultySettings(Difficulty.PEACEFUL, false, false),
+                true,
+                WorldDataConfiguration.DEFAULT
+            ),
+            new WorldOptions(SEED, false, false),
+            registries -> registries.lookupOrThrow(net.minecraft.core.registries.Registries.WORLD_PRESET)
+                .getOrThrow(WorldPresets.FLAT).value().createWorldDimensions(),
+            new TitleScreen()
+        ));
+        *///? } else {
         mc.tell(() -> mc.createWorldOpenFlows().createFreshLevel(
             world,
             new LevelSettings(world, GameType.CREATIVE, false, Difficulty.PEACEFUL, true, new GameRules(), WorldDataConfiguration.DEFAULT),
@@ -51,5 +72,6 @@ public final class E2eClient {
                 .getHolderOrThrow(WorldPresets.FLAT).value().createWorldDimensions(),
             new TitleScreen()
         ));
+        //? }
     }
 }
