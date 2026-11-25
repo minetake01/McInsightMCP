@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
 import { afterEach, describe, expect, it } from 'vitest';
-import { JarInspector, extractClassUtf8Strings } from '../src/decompiler/jarInspector.js';
+import { extractClassUtf8Strings } from '../src/bytecode/constantPool.js';
+import { JarInspector } from '../src/decompiler/jarInspector.js';
 
 const REAL_MODS_DIR = process.env.MCINSIGHT_TEST_MODS_DIR ?? '';
 const hasRealModpack = Boolean(REAL_MODS_DIR && fs.existsSync(REAL_MODS_DIR));
