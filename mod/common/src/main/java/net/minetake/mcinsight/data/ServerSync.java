@@ -28,6 +28,8 @@ import net.minetake.mcinsight.platform.Services;
  */
 public final class ServerSync {
 
+    private static final long TRANSPORT_MARGIN_MS = 2_000L;
+
     private static volatile boolean shakeHanded;
     private static volatile String remoteLoader;
     private static volatile int remoteProtocolVersion;
@@ -105,7 +107,9 @@ public final class ServerSync {
             if (!sent) {
                 throw new InsightException(InsightError.REMOTE_ERROR, "Could not send the request packet to the server.");
             }
-            JsonObject response = future.get(Math.max(500L, endpoint.budgetMs()), TimeUnit.MILLISECONDS);
+            // The host may spend the endpoint's whole budget; the round trip comes on top of it, so a
+            // host that answers at its deadline is still heard instead of reported as a timeout.
+            JsonObject response = future.get(endpoint.budgetMs() + TRANSPORT_MARGIN_MS, TimeUnit.MILLISECONDS);
             if (response.has("ok") && !response.get("ok").getAsBoolean()) {
                 String code = response.has("code") ? response.get("code").getAsString() : "";
                 String message = response.has("error") ? response.get("error").getAsString() : "";

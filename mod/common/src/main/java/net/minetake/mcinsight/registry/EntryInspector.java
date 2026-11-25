@@ -266,7 +266,12 @@ public final class EntryInspector {
         try {
             return ctx.executor().supplyOnGameThread(() -> GameAccess.getRegistryAccess(ctx.executor()), MAIN_THREAD_TIMEOUT_MS);
         } catch (Exception e) {
-            return null;
+            // Without the registries the item's components cannot be encoded; an answer missing
+            // them would look like an item that has none.
+            throw new InsightException(
+                InsightError.DATA_UNAVAILABLE,
+                "The game thread did not hand over the registries: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName())
+            );
         }
     }
 

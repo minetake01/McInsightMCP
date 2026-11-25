@@ -118,6 +118,22 @@ public final class GuideIndex {
         return byId.get(id.trim().toLowerCase(Locale.ROOT));
     }
 
+    /**
+     * Records the guides this index could not see.
+     *
+     * <p>Books shipped as datapack files live with the world owner; without it they are absent from
+     * the index, and an answer that silently lacks them would read as "this pack has no such book".
+     */
+    public void reportGaps(net.minetake.mcinsight.api.PartialData partial) {
+        if (dataResources == null) {
+            partial.add(
+                "datapack_guides",
+                InsightError.DATA_UNAVAILABLE,
+                "Guides shipped in datapacks are held by the world owner and are not readable in this session."
+            );
+        }
+    }
+
     /** The language search defaults to when the caller does not name one. */
     public String language() {
         return language;

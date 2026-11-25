@@ -9,6 +9,7 @@ import net.minetake.mcinsight.api.InsightError;
 import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.api.Page;
 import net.minetake.mcinsight.api.Params;
+import net.minetake.mcinsight.api.PartialData;
 import net.minetake.mcinsight.api.RequestContext;
 
 /**
@@ -48,7 +49,11 @@ public final class GuideQuery {
             }
             total++;
         }
-        return Page.of("guides", rows, offset, total);
+        JsonObject out = Page.of("guides", rows, offset, total);
+        PartialData partial = new PartialData();
+        index.reportGaps(partial);
+        partial.applyTo(out);
+        return out;
     }
 
     public static JsonObject search(RequestContext ctx, Params p) throws Exception {
@@ -109,6 +114,9 @@ public final class GuideQuery {
         JsonObject out = Page.of("hits", hits, offset, total);
         out.addProperty("query", query);
         out.addProperty("lang", targetLanguage);
+        PartialData partial = new PartialData();
+        index.reportGaps(partial);
+        partial.applyTo(out);
         return out;
     }
 
