@@ -215,12 +215,12 @@ export const ENDPOINTS = {
   }),
   trades_query: endpoint<
     'trades_query',
-    'item' | 'q' | 'profession' | 'mod' | 'limit' | 'offset',
+    'item' | 'side' | 'q' | 'profession' | 'mod' | 'limit' | 'offset',
     TradesResponse
   >({
     id: 'trades_query',
     path: '/api/v1/trades/query',
-    params: ['item', 'q', 'profession', 'mod', 'limit', 'offset'],
+    params: ['item', 'side', 'q', 'profession', 'mod', 'limit', 'offset'],
     defaultLimit: 40,
     maxLimit: 200,
   }),

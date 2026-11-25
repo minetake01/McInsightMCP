@@ -72,11 +72,31 @@ public final class TradeCollector {
         String professionPathLower,
         String professionNamespaceLower,
         Set<String> namespacesLower,
-        Set<String> itemIdsLower,
-        Set<String> itemTagsLower,
+        List<StackRef> costs,
+        List<StackRef> results,
         String searchTextLower,
         JsonObject json
     ) {}
+
+    /** Which side of a trade {@code item=} must be on: what the player pays, or what they get. */
+    private enum Side {
+        ANY, COST, RESULT;
+
+        static Side parse(String raw) {
+            if (raw == null) {
+                return ANY;
+            }
+            return switch (raw.toLowerCase(Locale.ROOT)) {
+                case "any" -> ANY;
+                case "cost" -> COST;
+                case "result" -> RESULT;
+                default -> throw new InsightException(
+                    InsightError.INVALID_PARAMETER,
+                    "Parameter 'side' must be one of any, cost, result, got: " + raw + "."
+                );
+            };
+        }
+    }
 
     private record TradeIndex(List<Trade> trades) {}
 
@@ -100,8 +120,11 @@ public final class TradeCollector {
         String query = lower(p.string("q"));
         String profession = lower(p.string("profession"));
         String modId = lower(p.string("mod"));
-        String itemRaw = p.string("item");
-        ItemFilter item = ItemFilter.of(ItemQuery.optional(itemRaw));
+        ItemFilter item = ItemFilter.of(ItemQuery.optional(p.string("item")));
+        Side side = Side.parse(p.string("side"));
+        if (item == null && side != Side.ANY) {
+            throw new InsightException(InsightError.INVALID_PARAMETER, "Parameter 'side' needs 'item'.");
+        }
 
         TradeIndex index = INDEX.get(() -> build(ctx.executor()));
 
@@ -118,7 +141,7 @@ public final class TradeCollector {
                 && !trade.namespacesLower().contains(modId)) {
                 continue;
             }
-            if (item != null && !tradeMatchesItem(trade, item)) {
+            if (item != null && !tradeMatchesItem(trade, item, side)) {
                 continue;
             }
             if (!query.isEmpty() && !matchesQuery(trade, query)) {
@@ -133,14 +156,20 @@ public final class TradeCollector {
     }
 
     /**
-     * Whether a trade touches the queried item on either side.
+     * Whether the queried item is on the requested side of a trade.
      *
-     * <p>A trade is a swap, so the item can appear as something spent or something received;
-     * {@code item=} does not guess which the caller meant.
+     * <p>Each stack is matched with its own tags, so a cost tagged {@code #c:gems} does not make the
+     * result count as a gem. A listing that could only be described, not rolled, has no stacks and
+     * never matches an item; it stays reachable through {@code q}.
      */
-    private static boolean tradeMatchesItem(Trade trade, ItemFilter item) {
-        for (String id : trade.itemIdsLower()) {
-            if (item.matches(id, trade.itemTagsLower())) {
+    private static boolean tradeMatchesItem(Trade trade, ItemFilter item, Side side) {
+        return (side != Side.RESULT && anyMatches(trade.costs(), item))
+            || (side != Side.COST && anyMatches(trade.results(), item));
+    }
+
+    private static boolean anyMatches(List<StackRef> stacks, ItemFilter item) {
+        for (StackRef stack : stacks) {
+            if (item.matches(stack.id(), stack.tagsLower())) {
                 return true;
             }
         }
@@ -168,7 +197,7 @@ public final class TradeCollector {
 
     private static TradeIndex buildOnGameThread(MainThreadExecutor executor) {
         Level level = GameAccess.getLevel(executor);
-        Entity context = level != null ? contextEntity(level) : null;
+        Entity context = level != null ? villagerOf(level, VillagerType.PLAINS) : null;
         RegistryOps<JsonElement> ops = GameAccess.jsonOps(GameAccess.getRegistryAccess(executor));
 
         List<Trade> trades = new ArrayList<>();
@@ -183,17 +212,6 @@ public final class TradeCollector {
         collectWanderingTrades(VillagerTrades.WANDERING_TRADER_TRADES, false, context, ops, trades);
         collectExperimentalWanderingTrades(context, ops, trades);
         return new TradeIndex(List.copyOf(trades));
-    }
-
-    /**
-     * The entity offers are materialized against.
-     *
-     * <p>Vanilla listings read the level and, for biome-specific trades, the villager's type from
-     * the entity they are given. A detached villager supplies both without touching the world:
-     * nothing is spawned or added, it exists only for the duration of this build.
-     */
-    private static Entity contextEntity(Level level) {
-        return new Villager(net.minecraft.world.entity.EntityType.VILLAGER, level);
     }
 
     private static void collect(
@@ -271,50 +289,78 @@ public final class TradeCollector {
         RegistryOps<JsonElement> ops,
         List<Trade> out
     ) {
-        List<Offer> offers = offersOf(listing, context);
-        if (offers.isEmpty()) {
-            JsonObject json = baseEntry(professionId, level, experimental, listing);
-            JsonElement declaration = JsonCodec.snapshotObject(listing, SNAPSHOT_DEPTH, ops);
-            if (declaration != null && declaration.isJsonObject()) {
-                json.add("listing", declaration);
+        for (Variant variant : variantsOf(listing, context)) {
+            Offer offer = variant.trader() != null ? materialize(variant) : null;
+            if (offer == null) {
+                out.add(declarationOf(professionId, level, experimental, variant, ops));
+            } else {
+                out.add(offerOf(professionId, level, experimental, variant.listing(), offer));
             }
-            out.add(tradeOf(professionId, json, Set.of(), Set.of(), ""));
-            return;
-        }
-        for (Offer offer : offers) {
-            JsonObject json = baseEntry(professionId, level, experimental, listing);
-            if (offer.villagerType() != null) {
-                json.addProperty("villagerType", offer.villagerType());
-            }
-            json.add("costA", stackJson(offer.costA()));
-            if (offer.costB() != null) {
-                json.add("costB", stackJson(offer.costB()));
-            }
-            json.add("result", stackJson(offer.result()));
-            json.addProperty("maxUses", offer.maxUses());
-            json.addProperty("xp", offer.xp());
-            json.addProperty("priceMultiplier", offer.priceMultiplier());
-            if (offer.sampled()) {
-                json.addProperty("sampled", true);
-            }
-
-            Set<String> namespaces = new LinkedHashSet<>();
-            namespaces.add(namespaceOf(professionId));
-            Set<String> itemIds = new LinkedHashSet<>();
-            Set<String> itemTags = new LinkedHashSet<>();
-            StringBuilder search = new StringBuilder()
-                .append(professionId).append(' ')
-                .append(listing.getClass().getName()).append(' ');
-            collectStack(offer.costA(), namespaces, itemIds, itemTags, search);
-            collectStack(offer.costB(), namespaces, itemIds, itemTags, search);
-            collectStack(offer.result(), namespaces, itemIds, itemTags, search);
-            if (offer.villagerType() != null) {
-                search.append(offer.villagerType()).append(' ');
-            }
-            out.add(tradeOf(professionId, json, namespaces, itemIds, itemTags, search));
         }
     }
 
+    /** A listing that could not be turned into an offer, reported by what it declares. */
+    private static Trade declarationOf(
+        String professionId,
+        int level,
+        boolean experimental,
+        Variant variant,
+        RegistryOps<JsonElement> ops
+    ) {
+        JsonObject json = baseEntry(professionId, level, experimental, variant.listing());
+        if (variant.villagerType() != null) {
+            json.addProperty("villagerType", variant.villagerType());
+        }
+        JsonElement declaration = JsonCodec.snapshotObject(variant.listing(), SNAPSHOT_DEPTH, ops);
+        if (declaration != null && declaration.isJsonObject()) {
+            json.add("listing", declaration);
+        }
+        String search = professionId + ' ' + variant.listing().getClass().getName()
+            + (variant.villagerType() != null ? ' ' + variant.villagerType() : "");
+        return tradeOf(professionId, json, Set.of(), List.of(), List.of(), search);
+    }
+
+    private static Trade offerOf(
+        String professionId,
+        int level,
+        boolean experimental,
+        VillagerTrades.ItemListing listing,
+        Offer offer
+    ) {
+        JsonObject json = baseEntry(professionId, level, experimental, listing);
+        if (offer.villagerType() != null) {
+            json.addProperty("villagerType", offer.villagerType());
+        }
+        json.add("costA", stackJson(offer.costA()));
+        if (offer.costB() != null) {
+            json.add("costB", stackJson(offer.costB()));
+        }
+        json.add("result", stackJson(offer.result()));
+        json.addProperty("maxUses", offer.maxUses());
+        json.addProperty("xp", offer.xp());
+        json.addProperty("priceMultiplier", offer.priceMultiplier());
+        if (offer.sampled()) {
+            json.addProperty("sampled", true);
+        }
+
+        Set<String> namespaces = new LinkedHashSet<>();
+        StringBuilder search = new StringBuilder()
+            .append(professionId).append(' ')
+            .append(listing.getClass().getName()).append(' ');
+        List<StackRef> costs = new ArrayList<>(2);
+        for (StackRef cost : new StackRef[] {offer.costA(), offer.costB()}) {
+            if (cost != null) {
+                costs.add(cost);
+                describeStack(cost, namespaces, search);
+            }
+        }
+        List<StackRef> results = offer.result() != null ? List.of(offer.result()) : List.of();
+        results.forEach(r -> describeStack(r, namespaces, search));
+        if (offer.villagerType() != null) {
+            search.append(offer.villagerType()).append(' ');
+        }
+        return tradeOf(professionId, json, namespaces, costs, results, search);
+    }
     private static JsonObject baseEntry(
         String professionId,
         int level,
@@ -335,18 +381,8 @@ public final class TradeCollector {
         String professionId,
         JsonObject json,
         Set<String> namespaces,
-        Set<String> itemIds,
-        String searchText
-    ) {
-        return tradeOf(professionId, json, namespaces, itemIds, Set.of(), searchText);
-    }
-
-    private static Trade tradeOf(
-        String professionId,
-        JsonObject json,
-        Set<String> namespaces,
-        Set<String> itemIds,
-        Set<String> itemTags,
+        List<StackRef> costs,
+        List<StackRef> results,
         CharSequence searchText
     ) {
         String professionLower = professionId.toLowerCase(Locale.ROOT);
@@ -360,8 +396,8 @@ public final class TradeCollector {
             path.toLowerCase(Locale.ROOT),
             namespace,
             Set.copyOf(allNamespaces),
-            Set.copyOf(itemIds),
-            Set.copyOf(itemTags),
+            List.copyOf(costs),
+            List.copyOf(results),
             searchText.toString().toLowerCase(Locale.ROOT),
             json
         );
@@ -375,66 +411,117 @@ public final class TradeCollector {
     // -------------------------------------------------------------- offers
 
     /**
-     * Vanilla listings whose class is not public, so it cannot be named from here.
+     * One concrete listing as a villager of one type would see it.
      *
-     * <p>Their behaviour is reachable only through {@link VillagerTrades.ItemListing#getOffer}, so
-     * they are recognised by name and treated as ordinary listings; naming the class in an
-     * {@code instanceof} would not compile.
+     * <p>{@code trader} is null when the listing must not be materialized here; the variant is
+     * then reported by its declaration.
      */
-    private static final Set<String> TYPE_SENSITIVE_LISTINGS = Set.of(
-        "TypeSpecificTrade",
-        "EmeraldsForVillagerTypeItem"
-    );
-
-    private static final Set<String> WORLD_SEARCHING_LISTINGS = Set.of(
-        "TreasureMapForEmeralds"
-    );
+    private record Variant(VillagerTrades.ItemListing listing, String villagerType, Entity trader) {}
 
     /**
-     * Materializes a listing into the offers it can produce.
+     * What a listing's own fields say about how it produces an offer.
      *
-     * <p>Biome-specific listings carry one sub-listing per villager type; each type is materialized
-     * so a caller sees the jungle trade and the desert trade rather than one of them standing in
-     * for both. A listing whose offer depends on a random source is sampled twice and marked, so a
-     * caller can tell a fixed trade from one that varies per villager.
+     * <p>Vanilla's listing classes are package-private and their names differ between loaders'
+     * runtime mappings, so they are recognised by the values they hold, not by class name. Those
+     * values are also what decides the behaviour: a structure tag is what gets searched for, and a
+     * villager-type map is what the offer is looked up in.
+     *
+     * @param byVillagerType the listing's villager-type map, or null when the offer ignores type
+     * @param searchesTheWorld whether the listing names a structure to locate
      */
-    private static List<Offer> offersOf(VillagerTrades.ItemListing listing, Entity context) {
-        if (context == null || searchesTheWorld(listing)) {
-            return List.of();
-        }
-        if (TYPE_SENSITIVE_LISTINGS.contains(listing.getClass().getSimpleName())) {
-            return offersByVillagerType(listing, context);
-        }
-        Offer offer = materialize(listing, context, null);
-        return offer != null ? List.of(offer) : List.of();
-    }
+    private record Shape(Map<?, ?> byVillagerType, boolean searchesTheWorld) {}
 
     /**
-     * Listings whose offer is produced by searching the world.
+     * Splits a listing into the concrete listings villagers actually roll.
      *
-     * <p>Materializing one asks the level for the nearest matching structure and builds a filled
-     * map, which is both unbounded work and a write into the level's map storage. Its declaration
-     * is reported instead, so the answer stays a description and the query stays read-only.
+     * <p>A map from villager type to listing is a biome wrapper and is unwrapped before anything is
+     * rolled, so the world-search check sees the listing that runs rather than its wrapper: vanilla
+     * wraps its cartographer treasure maps that way. A map from villager type to anything else is
+     * read by the listing itself, so it is rolled once per type in the map. Either way a caller sees
+     * the jungle trade and the desert trade rather than one standing in for both.
      */
-    private static boolean searchesTheWorld(VillagerTrades.ItemListing listing) {
-        return WORLD_SEARCHING_LISTINGS.contains(listing.getClass().getSimpleName());
-    }
-
-    private static List<Offer> offersByVillagerType(VillagerTrades.ItemListing listing, Entity context) {
-        Level level = context.level();
-        List<Offer> offers = new ArrayList<>();
-        for (VillagerType type : BuiltInRegistries.VILLAGER_TYPE) {
-            ResourceLocation typeId = BuiltInRegistries.VILLAGER_TYPE.getKey(type);
-            Entity typed = new Villager(net.minecraft.world.entity.EntityType.VILLAGER, level, type);
-            Offer offer = materialize(listing, typed, typeId != null ? typeId.toString() : type.toString());
-            if (offer != null) {
-                offers.add(offer);
+    private static List<Variant> variantsOf(VillagerTrades.ItemListing listing, Entity context) {
+        Shape shape = shapeOf(listing);
+        if (context == null || shape.searchesTheWorld()) {
+            return List.of(new Variant(listing, null, null));
+        }
+        if (shape.byVillagerType() == null) {
+            return List.of(new Variant(listing, null, context));
+        }
+        List<Variant> variants = new ArrayList<>(shape.byVillagerType().size());
+        for (Map.Entry<?, ?> entry : shape.byVillagerType().entrySet()) {
+            VillagerType type = (VillagerType) entry.getKey();
+            if (entry.getValue() instanceof VillagerTrades.ItemListing inner) {
+                variants.addAll(variantsOf(inner, villagerOf(context.level(), type)).stream()
+                    .map(v -> new Variant(v.listing(), typeId(type), v.trader()))
+                    .toList());
+            } else {
+                variants.add(new Variant(listing, typeId(type), villagerOf(context.level(), type)));
             }
         }
-        return offers;
+        return variants;
     }
 
-    private static Offer materialize(VillagerTrades.ItemListing listing, Entity context, String villagerType) {
+    /**
+     * Reads a listing's instance fields once to find its villager-type map and any structure tag.
+     *
+     * <p>A field that cannot be opened is a field whose meaning is unknown; the listing is then
+     * treated as one that may search the world, so it is described rather than run.
+     */
+    private static Shape shapeOf(VillagerTrades.ItemListing listing) {
+        Map<?, ?> byType = null;
+        boolean searches = false;
+        for (java.lang.reflect.Field field : listing.getClass().getDeclaredFields()) {
+            if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
+                continue;
+            }
+            Class<?> type = field.getType();
+            if (!Map.class.isAssignableFrom(type) && !net.minecraft.tags.TagKey.class.isAssignableFrom(type)) {
+                continue;
+            }
+            Object value;
+            try {
+                if (!field.trySetAccessible()) {
+                    return new Shape(null, true);
+                }
+                value = field.get(listing);
+            } catch (IllegalAccessException e) {
+                return new Shape(null, true);
+            }
+            if (value instanceof net.minecraft.tags.TagKey<?> tag
+                && tag.registry().equals(net.minecraft.core.registries.Registries.STRUCTURE)) {
+                searches = true;
+            } else if (value instanceof Map<?, ?> map && !map.isEmpty()
+                && map.keySet().stream().allMatch(VillagerType.class::isInstance)) {
+                byType = map;
+            }
+        }
+        return new Shape(byType, searches);
+    }
+
+    /**
+     * The entity offers are rolled against.
+     *
+     * <p>Listings read the level and the villager's type from the entity they are given. A detached
+     * villager supplies both without touching the world: nothing is spawned or added.
+     */
+    private static Entity villagerOf(Level level, VillagerType type) {
+        return new Villager(net.minecraft.world.entity.EntityType.VILLAGER, level, type);
+    }
+
+    private static String typeId(VillagerType type) {
+        ResourceLocation id = BuiltInRegistries.VILLAGER_TYPE.getKey(type);
+        return id != null ? id.toString() : type.toString();
+    }
+
+    /**
+     * Rolls a variant twice; a listing whose offer depends on the random source differs between
+     * the rolls and is marked, so a caller can tell a fixed trade from one that varies per villager.
+     */
+    private static Offer materialize(Variant variant) {
+        VillagerTrades.ItemListing listing = variant.listing();
+        Entity context = variant.trader();
+        String villagerType = variant.villagerType();
         MerchantOffer first = singleOffer(listing, context, SAMPLE_SEED_A);
         if (first == null) {
             return null;
@@ -505,23 +592,10 @@ public final class TradeCollector {
         return json;
     }
 
-    private static void collectStack(
-        StackRef stack,
-        Set<String> namespaces,
-        Set<String> itemIds,
-        Set<String> itemTags,
-        StringBuilder search
-    ) {
-        if (stack == null) {
-            return;
-        }
-        String lowerId = stack.id().toLowerCase(Locale.ROOT);
-        itemIds.add(lowerId);
-        itemTags.addAll(stack.tagsLower());
-        namespaces.add(namespaceOf(lowerId));
+    private static void describeStack(StackRef stack, Set<String> namespaces, StringBuilder search) {
+        namespaces.add(namespaceOf(stack.id()));
         search.append(stack.id()).append(' ').append(stack.displayName()).append(' ');
     }
-
     private static String lower(String value) {
         return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
     }
