@@ -10,17 +10,28 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+/**
+ * The mod's configuration file.
+ *
+ * <p>Client-only settings (where the HTTP port lives, whether a token is required) sit next to the
+ * caps an operator may want to change. The caps are applied through {@link Limits}, which every
+ * collector reads, so they are enforced on the side that actually serves the data.
+ */
 public final class McInsightConfig {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final int DEFAULT_PORT = 25580;
-    private static final int HARD_MAX_SCAN_RADIUS = 32;
-    private static final int HARD_MAX_RECIPE_RESULTS = 500;
+
+    static final int HARD_MAX_SCAN_RADIUS = 32;
+    static final int HARD_MAX_SYNC_BLOCK_RADIUS = 16;
+    static final int HARD_MAX_RECIPE_RESULTS = 500;
+    static final int HARD_MAX_RAYCAST_DISTANCE = 64;
 
     public boolean enabled = true;
     public int port = DEFAULT_PORT;
     public int portRangeSize = 20;
     public String authToken = "";
     public int maxScanRadius = 16;
+    public int maxSyncBlockRadius = 16;
     public int maxRecipeResults = 100;
 
     public static McInsightConfig loadOrCreate() {
@@ -48,6 +59,7 @@ public final class McInsightConfig {
         }
 
         config.sanitize();
+        Limits.apply(config);
         return config;
     }
 
@@ -57,22 +69,22 @@ public final class McInsightConfig {
             port = DEFAULT_PORT;
         }
         if (portRangeSize < 1 || portRangeSize > 50) {
-            int clamped = Math.min(Math.max(portRangeSize, 1), 50);
             McInsightConstants.LOG.warn("Config 'portRangeSize' ({}) out of range 1..50; resetting to 20.", portRangeSize);
-            portRangeSize = clamped == portRangeSize ? 20 : 20;
+            portRangeSize = 20;
         }
         if (authToken == null) {
             authToken = "";
         }
-        if (maxScanRadius < 1 || maxScanRadius > HARD_MAX_SCAN_RADIUS) {
-            int clamped = Math.min(Math.max(maxScanRadius, 1), HARD_MAX_SCAN_RADIUS);
-            McInsightConstants.LOG.warn("Config 'maxScanRadius' ({}) out of range 1..{}; clamping to {}.", maxScanRadius, HARD_MAX_SCAN_RADIUS, clamped);
-            maxScanRadius = clamped;
+        maxScanRadius = capped("maxScanRadius", maxScanRadius, 1, HARD_MAX_SCAN_RADIUS);
+        maxSyncBlockRadius = capped("maxSyncBlockRadius", maxSyncBlockRadius, 1, HARD_MAX_SYNC_BLOCK_RADIUS);
+        maxRecipeResults = capped("maxRecipeResults", maxRecipeResults, 1, HARD_MAX_RECIPE_RESULTS);
+    }
+
+    private static int capped(String name, int value, int min, int max) {
+        int clamped = Math.min(Math.max(value, min), max);
+        if (clamped != value) {
+            McInsightConstants.LOG.warn("Config '{}' ({}) out of range {}..{}; clamping to {}.", name, value, min, max, clamped);
         }
-        if (maxRecipeResults < 1 || maxRecipeResults > HARD_MAX_RECIPE_RESULTS) {
-            int clamped = Math.min(Math.max(maxRecipeResults, 1), HARD_MAX_RECIPE_RESULTS);
-            McInsightConstants.LOG.warn("Config 'maxRecipeResults' ({}) out of range 1..{}; clamping to {}.", maxRecipeResults, HARD_MAX_RECIPE_RESULTS, clamped);
-            maxRecipeResults = clamped;
-        }
+        return clamped;
     }
 }
