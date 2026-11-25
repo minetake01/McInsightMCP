@@ -189,9 +189,10 @@ tasks.named('processResources', ProcessResources) {
 ['apiElements', 'runtimeElements', 'sourcesElements'].each { variant ->
     configurations.named(variant) {
         outgoing {
-            // The archive name already is `<modId>-<branch>-<mcVersion>`.
+            // One capability, named after the archive: `<modId>-<branch>-<mcVersion>`. A second one
+            // that leaves the branch and version out is one coordinate claimed by all six artifacts,
+            // so a consumer resolving it would get whichever the build happened to publish.
             capability("$group:${base.archivesName.get()}:$version")
-            capability("$group:$modId:$version")
         }
     }
 }
