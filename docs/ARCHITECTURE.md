@@ -94,9 +94,9 @@ server advertises in its hello packet; it is a derived rule, not a second hand-m
      and `biome_modifier` is skipped without datapack resources or on a loader that has no such
      concept), while `worldgen/query` fails `DATA_UNAVAILABLE` when the requested kind has neither
      registry entries nor reachable datapack files.
-   - `AdvancementCollector` returns the client-synced definitions and records the missing `progress`
-     part with `SERVER_MOD_REQUIRED`; a `status` filter, which needs progress, fails
-     `DATA_UNAVAILABLE`.
+   - Guide list and search answers add a `missing` entry `datapack_guides` (`DATA_UNAVAILABLE`) when
+     the session cannot read datapack files, because books shipped as data would otherwise be absent
+     without a trace.
    - Composite parts (`looking_at` block-entity contents, `scan` block-entity contents) add a
      `missing` entry with `SERVER_MOD_REQUIRED` when no bridge is available.
 
@@ -318,10 +318,10 @@ Every paginated endpoint answers with one envelope:
 - The array key is domain-specific: `results`, `members`, `guides`, `hits`, `entries`, `recipes`,
   `trades`, `advancements`.
 - An endpoint may add scalar fields beside the envelope (for example `registry_tag`'s `kind`/`id`,
-  `worldgen_query`'s `kind`, `guides_search`'s `query`/`lang`, `advancements_query`'s
-  `progressUnavailable`), but the page fields themselves are never renamed or dropped.
-- `recipes_query` is the one multi-bucket answer: each bucket (`vanilla`, and one per viewer name)
-  carries its own envelope. It has no top-level page.
+  `worldgen_query`'s `kind`, `guides_search`'s `query`/`lang`), but the page fields themselves are
+  never renamed or dropped.
+- `recipes_query` is the one multi-page answer: `vanilla` and each entry of `viewers` (keyed by
+  viewer name) carry their own envelope. It has no top-level page.
 - `loot_query` is the one endpoint with a second array: it pages `entries` and returns
   `lootModifiers` whole with `totalModifiers`.
 
@@ -336,7 +336,7 @@ Anything else (`stone`, a display name, a partial id) is `INVALID_ID`. Names are
 `registry_search`, which matches ids and localized display names and returns the exact id.
 
 `ItemFilter` gives that one value its meaning everywhere (`recipes_query`, `loot_query`,
-`trades_query`, and the MCP item-flow tool):
+`trades_query`, `datamaps_query`, and the MCP item-flow tool):
 
 - An exact id matches that item, and also matches a slot that accepts a tag the item belongs to.
 - A `#tag` query matches the tag itself and every member of it.
@@ -357,8 +357,8 @@ so its validation is "not blank" plus an indexed lookup.
 { "partial": true, "missing": [{ "part": "server_scan_block_entities", "code": "SERVER_MOD_REQUIRED", "error": "..." }] }
 ```
 
-`part` names the fragment (an endpoint id for server parts, or `radius`/`progress` for a bounded or
-unavailable field). There is no provenance field: the presence of an entry says what could not be
+`part` names the fragment (an endpoint id for server parts, `radius` for a bounded field, or
+`datapack_guides` for the guide documents only the world owner can read). There is no provenance field: the presence of an entry says what could not be
 read, not where the readable parts came from.
 
 ### 6.4 Per-endpoint answers
@@ -423,17 +423,17 @@ looks the tag up in item, block, fluid, and entity and reports every kind that d
 `activeViewers[]`, and `viewers` keyed by viewer name, each with a category count and categories
 (`uid`, `modId`, `title`, `workstations[]`).
 
-**`recipes_query`** — `source` accepts `all` (default), `vanilla`, `viewer`, or one of the concrete
-viewer names `jei`, `emi`, `rei`; any other value is `INVALID_SOURCE` before a viewer lookup happens
-(the accepted set is the switch in `RecipeCollector.query`, so adding a viewer means adding it there
-and in `ViewerQuery.resolve`). `role` is `any` (default), `input`, `output`, `catalyst`, or
-`workstation`; `type` matches a `RecipeType` id or viewer category uid; `mod` matches the recipe type's
-namespace or the recipe id's namespace. The answer carries a `vanilla` bucket when the
-`RecipeManager` answered and one bucket per answering viewer, keyed by viewer name, plus
-`activeViewers[]` (present only when at least one viewer answered). Each bucket is the page shape with
-key `recipes`; viewer buckets are uncounted (`totalKnown: false`). A named viewer that is not active is
-`VIEWER_UNAVAILABLE`; `source=vanilla` with no recipe manager is `DATA_UNAVAILABLE`; so is
-`source=all` when neither the recipe manager nor any viewer answered.
+**`recipes_query`** — `source` accepts `all` (default), `vanilla`, `viewer`, or the name of any
+registered viewer adapter; a name no adapter registered is `INVALID_SOURCE`, and a registered but
+inactive viewer is `VIEWER_UNAVAILABLE`. No viewer name is written in the query code: the registry
+answers. `role` is `any` (default), `input`, `output`, `catalyst`, or `workstation`; any other value is
+`INVALID_PARAMETER`. `type` matches a `RecipeType` id or viewer category uid; `mod` matches the recipe
+type's namespace or the recipe id's namespace. The answer carries `vanilla` when the recipe manager
+was asked and `viewers` keyed by viewer name when at least one viewer answered. Each is the page shape
+with key `recipes`; viewer pages are uncounted (`totalKnown: false`). Catalysts and workstations exist
+only in viewers, so for those roles `vanilla` is an empty counted page. `source=vanilla` with no recipe
+manager is `DATA_UNAVAILABLE`; so is `source=all` when neither the recipe manager nor any viewer can
+answer.
 
 Viewer recipes use the shared model: `viewer`, `categoryUid`, optional `categoryTitle`/`modId`/
 `recipeId`/`sourceRecipeIds`/`recipeClass`, `slotGranularity: "slots" | "flat"`, `inputs`/`outputs` as
@@ -469,29 +469,36 @@ Fabric is `UNSUPPORTED_ON_LOADER`. Modifier entries carry `id`, `modId`, `type`,
 `targetTables`, and `rawJson`.
 
 **`datamaps_query`** — NeoForge only (`UNSUPPORTED_ON_LOADER`). `q` matches the definition id, a value
-key, or a value's JSON; `registry` matches a substring of the derived registry (`item`, `block`,
+key, or a value's JSON; `item` (the `ItemFilter` rule) selects values whose key is that entry or a
+tag containing it, and never looks inside a value; `registry` matches a substring of the derived registry (`item`, `block`,
 `custommod:machine_fuel`, …); `mod` the namespace. Entries carry `id`, `modId`, `registry`,
-`totalValueCount`, and, for a content query, `matchedValues` (up to 50 per entry),
-`totalMatchedValues`, `matchedValuesTruncated`. `rawJson` is included when `includeRaw=true`, when no
-query is set, or when the definition holds at most 100 values.
+`totalValueCount`, and, for a `q` or `item` query, `matchedValues` (up to 50 per entry),
+`totalMatchedValues`, `matchedValuesTruncated`. `rawJson` is included when `includeRaw=true`, when
+neither `q` nor `item` is set, or when the definition holds at most 100 values.
 
 **`trades_query`** — offers are materialized with the game's own `ItemListing.getOffer` for a
-detached villager, so price and enchantment randomness land the way the game applies them. Biome-
-specific listings are expanded per villager type; a listing whose offer depends on randomness is
-sampled twice and marked `sampled`. Listings that cannot be materialized (or that would search the
-world) are reported by their reflected declaration instead of being dropped. Entries carry
-`profession`, `level`, optional `experimental`, `listingClass`, `costA`/`costB`/`result`
-(`id`, `displayName`, `count`, or `{"empty": true}`), `maxUses`, `xp`, `priceMultiplier`, optional
-`sampled` and `villagerType`, or a reflected `listing` snapshot. `item=` matches either side of the
-swap; `q` matches profession, listing class, stack ids and names.
+detached villager, so price and enchantment randomness land the way the game applies them. A listing
+holding a villager-type map is expanded per type (a biome wrapper is unwrapped first, so the
+listing that actually runs is what gets checked); a listing whose offer depends on randomness is
+sampled twice and marked `sampled`. Listings are recognised by the values they hold rather than by
+class name, because vanilla's listing classes are package-private and renamed by loader mappings. A
+listing that names a structure tag would search the world for a map target, which is unbounded work
+on the server thread and a write into map storage, so it is reported by its reflected declaration
+instead; so is a listing that fails to materialize. Entries carry `profession`, `level`, optional
+`experimental`, `listingClass`, `costA`/`costB`/`result` (`id`, `displayName`, `count`, or
+`{"empty": true}`), `maxUses`, `xp`, `priceMultiplier`, optional `sampled` and `villagerType`, or a
+reflected `listing` snapshot. `item=` matches either side of the swap unless `side` is `cost` (the
+player pays with it) or `result` (the player receives it); `side` without `item` is
+`INVALID_PARAMETER`. A declared-only listing has no stacks, so `item=` never matches it; `q` still
+does, and matches profession, listing class, stack ids and names.
 
 **`advancements_query`** — entries carry `id`, `modId`, optional `parent`, display fields (`title`,
 `description`, `frame`, `icon`, `hidden`), `criteria[]`, optional `criteriaDetails`, optional
 `requirements`, optional `rewards`, and `progress` (`done`, `percent`, `completedCriteria`,
-`remainingCriteria`) when progress was readable. The answer always carries `progressUnavailable`
-(`true` when it was not) and, in that case, a `missing` entry named `progress` with
-`SERVER_MOD_REQUIRED`. Recipe-unlock advancements under `recipes/` are excluded unless
-`includeRecipes=true`; `status=completed|incomplete` without progress is `DATA_UNAVAILABLE`.
+`remainingCriteria`). Definitions and progress both belong to the world owner, so the endpoint is
+`SERVER_DATA`: it runs where a server is active, and a client whose server does not run McInsight
+gets `SERVER_MOD_REQUIRED` rather than a definitions-only page that would read as "nothing
+completed". Recipe-unlock advancements under `recipes/` are excluded unless `includeRecipes=true`.
 
 **`guides_list` / `guides_search` / `guides_page`** — sources are `patchouli`, `guideme`,
 `ftbquests`, `ponder`, `oracle`, `lang`; `source=all` is the default and an unknown value is

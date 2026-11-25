@@ -28,7 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `item=` (and every id argument) now accepts only a full `namespace:path` id or a `#namespace:tag` tag; substring and display-name matching is gone, and names are resolved through `registry_search` first. Recipes without structural I/O are matched by exact resolved ids in their encoded JSON
 - Data origin is no longer part of any response: the authoritative-server-data flag, the flattened JEI info field, and the registry-versus-resource-manager source marker are replaced by plain values plus `viewerInformation: {<viewerName>: string[]}`
 - Pagination is uniform across endpoints (previously each collector reported its own field set), and `recipes_query`'s effective page ceiling can be lowered by `maxRecipeResults`
-- Advancement progress is reported as one `progressUnavailable` boolean plus a `missing` entry (part `progress`, code `SERVER_MOD_REQUIRED`) when the world owner cannot supply it, instead of a separate availability flag and reason string
+- `advancements_query` is server data: definitions and progress always come together from the world owner, and every entry carries `progress`; a client whose server does not run McInsight gets `SERVER_MOD_REQUIRED` instead of a definitions-only page
+- `recipes_query` puts viewer pages under `viewers: {<name>: page}` instead of beside `ok`/`vanilla`, and `source` accepts any registered viewer name (an unregistered one is `INVALID_SOURCE`); an unknown `role` is `INVALID_PARAMETER` instead of meaning `any`
+- `trades_query` takes `side=cost|result` so the trade direction is the mod's filter; `mc_query_item_flow` uses it, which makes the trade page's `total`/`returned`/`hasMore` describe what is returned
+- `datamaps_query` takes `item=` with the shared `ItemFilter` rule (value keys only), and `mc_query_item_flow` uses it instead of a free-text `q`
+- `mc_query_world_data` rejects a parameter the chosen `kind` does not read, and `mc_query_item_flow` rejects a named source that cannot answer (`loot` with `direction: use`, `viewer_info` for a `#tag`) instead of returning a `{skipped}` placeholder
+- Guide list/search answers report `missing: [{part: "datapack_guides"}]` when datapack-shipped books are unreadable in the session
+- Bridged requests wait the endpoint budget plus a transport margin, so a host that answers at its deadline is still heard
 - Trade listings report `sampled` for a randomized offer and a reflected `listing` object for one that cannot be materialized, so both facts are named after what the mod actually emits
 - `loot_query` pages only its loot tables: `entries` carries the `offset`/`totalKnown`/`total`/`returned`/`hasMore` envelope, while `lootModifiers` is returned whole with `totalModifiers` (the active modifier set is the small list the pack layers name, so slicing it with the table page's offset would make paging tables shift the modifier window)
 - `mc_query_item_flow` runs each source through a handler whose failure becomes a `missing` entry (`partial: true` with the mod's code), so a failed part is reported rather than omitted and a successful part is never dropped
@@ -47,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The stale bench parameters that the new contract rejects (`item=` as a substring, per-run `cantKeepUp` accounting from a server handle the harness never had). Every benchmarked URL now resolves in `InsightEndpoint` with only that endpoint's declared parameters and in-bounds `limit` values
 
 ### Fixed
+- Loot tables were unreadable on an integrated server: `MinecraftServer.registryAccess()` holds only a placeholder for the reloadable layer, so registries are now read from `reloadableRegistries()`, which holds every layer
+- `trades_query` timed out on the server thread: vanilla wraps cartographer treasure maps in a biome-specific wrapper, which hid the world search from the check, so each map listing searched for a structure per villager type. Wrappers are unwrapped first and listings are recognised by the values they hold (a structure tag, a villager-type map) instead of by class name
+- `registry_inspect` no longer answers without default components when the game thread does not hand over the registries; it fails with `DATA_UNAVAILABLE`
+- The MCP client no longer turns a failed mod-version lookup into "versions unknown", which surfaced as a parser version mismatch
 - Benchmark URLs that would now be rejected with `400 INVALID_PARAMETER`: `recipes/query` substring item queries were replaced with exact-id and percent-encoded `#tag` queries, and all paths/parameters were checked against `InsightEndpoint.allowedParams()`
 - `describeBuiltinParsers`/`mc_query_recipes` viewer handling no longer assumes a fixed viewer name set; buckets and availability come from whatever registered
 - Version synchronization instructions: the MCP server version is read from `package.json`, so `server.ts` is no longer a version declaration to keep in sync
