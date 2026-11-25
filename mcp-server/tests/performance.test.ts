@@ -58,8 +58,8 @@ describe('Performance Optimizations & Guardrails', () => {
 
     const t0 = performance.now();
     const [v1, v2, m1, g1] = await Promise.all([
-      client.tryGetLoadedModVersions(),
-      client.tryGetLoadedModVersions(),
+      client.getLoadedModVersions(),
+      client.getLoadedModVersions(),
       client.tryGetModsDir(),
       client.tryGetGameDir(),
     ]);

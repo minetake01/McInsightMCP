@@ -36,11 +36,8 @@ export class McHttpClient {
   private probeInFlight: Promise<string> | undefined;
   private negativeDiscoveryUntil = 0;
 
-  private cachedModVersions: { expiresAt: number; map?: Map<string, string> } | undefined;
-  private modVersionsInFlight: Promise<Map<string, string> | undefined> | undefined;
-
-  private cachedPaths: { expiresAt: number; modsDir?: string; gameDir?: string } | undefined;
-  private pathsInFlight: Promise<{ modsDir?: string; gameDir?: string } | undefined> | undefined;
+  private readonly modVersions = new TtlValue<Map<string, string>>(() => this.metadataTtlMs);
+  private readonly paths = new TtlValue<{ modsDir?: string; gameDir?: string }>(() => this.metadataTtlMs);
 
   private readonly explicitUrl?: string;
   private readonly authToken?: string;
@@ -59,8 +56,8 @@ export class McHttpClient {
   }
 
   invalidateCache(): void {
-    this.cachedModVersions = undefined;
-    this.cachedPaths = undefined;
+    this.modVersions.clear();
+    this.paths.clear();
     this.negativeDiscoveryUntil = 0;
   }
 
@@ -243,99 +240,81 @@ export class McHttpClient {
     return body as T;
   }
 
-  private async fetchAndCachePaths(): Promise<{ modsDir?: string; gameDir?: string } | undefined> {
-    const now = Date.now();
-    if (this.cachedPaths && this.cachedPaths.expiresAt > now) {
-      return this.cachedPaths;
-    }
-    if (!this.explicitUrl && !this.discoveredUrl && this.negativeDiscoveryUntil > now) {
+  /** The session paths the mod reports; a mod that cannot be reached leaves them unknown. */
+  private async sessionPaths(): Promise<{ modsDir?: string; gameDir?: string } | undefined> {
+    if (!this.explicitUrl && !this.discoveredUrl && this.negativeDiscoveryUntil > Date.now()) {
       return undefined;
     }
-    if (this.pathsInFlight) {
-      return this.pathsInFlight;
-    }
-
-    const promise = (async () => {
-      try {
-        const status = await this.get<McStatusResponse>(ENDPOINTS.status.path);
-        const entry = {
-          expiresAt: Date.now() + this.metadataTtlMs,
-          modsDir: status.modsDir,
-          gameDir: status.gameDir,
-        };
-        this.cachedPaths = entry;
-        return entry;
-      } catch (err) {
-        if (err instanceof McApiError && err.statusCode === 401) {
-          throw err;
-        }
-        this.cachedPaths = {
-          expiresAt: Date.now() + NEGATIVE_CACHE_TTL_MS,
-        };
-        return undefined;
-      }
-    })();
-
-    this.pathsInFlight = promise;
     try {
-      return await promise;
-    } finally {
-      if (this.pathsInFlight === promise) {
-        this.pathsInFlight = undefined;
+      return await this.paths.get(async () => {
+        const status = await this.get<McStatusResponse>(ENDPOINTS.status.path);
+        return { modsDir: status.modsDir, gameDir: status.gameDir };
+      });
+    } catch (err) {
+      // Offline use (--mods-dir / --game-dir) is a supported mode, so an unreachable mod is an
+      // answer here ("unknown"); a rejected token is not, because configuration is wrong.
+      if (err instanceof McApiError && err.statusCode === 401) {
+        throw err;
       }
+      return undefined;
     }
   }
 
   async tryGetModsDir(): Promise<string | undefined> {
-    return (await this.fetchAndCachePaths())?.modsDir;
+    return (await this.sessionPaths())?.modsDir;
   }
 
   async tryGetGameDir(): Promise<string | undefined> {
-    return (await this.fetchAndCachePaths())?.gameDir;
+    return (await this.sessionPaths())?.gameDir;
   }
 
-  async tryGetLoadedModVersions(): Promise<Map<string, string> | undefined> {
-    const now = Date.now();
-    if (this.cachedModVersions && this.cachedModVersions.expiresAt > now) {
-      return this.cachedModVersions.map;
-    }
-    if (!this.explicitUrl && !this.discoveredUrl && this.negativeDiscoveryUntil > now) {
-      return undefined;
-    }
-    if (this.modVersionsInFlight) {
-      return this.modVersionsInFlight;
-    }
+  /**
+   * The loaded mod versions, keyed by mod id.
+   *
+   * <p>Only asked for alongside a query that needs the same mod, so a failure here is that query's
+   * failure; reporting "versions unknown" instead would surface as a parser version mismatch.
+   */
+  async getLoadedModVersions(): Promise<Map<string, string>> {
+    return this.modVersions.get(async () => {
+      const res = await this.get<McModsResponse>(ENDPOINTS.mods.path);
+      return new Map((res.mods ?? []).map((m) => [m.id, m.version]));
+    });
+  }
+}
 
-    const promise = (async () => {
-      try {
-        const res = await this.get<McModsResponse>(ENDPOINTS.mods.path);
-        const map = new Map<string, string>();
-        for (const m of res.mods ?? []) {
-          map.set(m.id, m.version);
-        }
-        this.cachedModVersions = {
-          expiresAt: Date.now() + this.metadataTtlMs,
-          map,
-        };
-        return map;
-      } catch (err) {
-        if (err instanceof McApiError && err.statusCode === 401) {
-          throw err;
-        }
-        this.cachedModVersions = {
-          expiresAt: Date.now() + NEGATIVE_CACHE_TTL_MS,
-          map: undefined,
-        };
-        return undefined;
-      }
-    })();
+/**
+ * A value fetched at most once per TTL, with concurrent callers sharing one request.
+ *
+ * <p>Failures are not cached: the next caller asks again, so a mod that was briefly busy does not
+ * make the value unavailable for a whole TTL.
+ */
+class TtlValue<T> {
+  private cached: { expiresAt: number; value: T } | undefined;
+  private inFlight: Promise<T> | undefined;
 
-    this.modVersionsInFlight = promise;
+  constructor(private readonly ttlMs: () => number) {}
+
+  clear(): void {
+    this.cached = undefined;
+  }
+
+  async get(load: () => Promise<T>): Promise<T> {
+    if (this.cached && this.cached.expiresAt > Date.now()) {
+      return this.cached.value;
+    }
+    if (this.inFlight) {
+      return this.inFlight;
+    }
+    const promise = load().then((value) => {
+      this.cached = { expiresAt: Date.now() + this.ttlMs(), value };
+      return value;
+    });
+    this.inFlight = promise;
     try {
       return await promise;
     } finally {
-      if (this.modVersionsInFlight === promise) {
-        this.modVersionsInFlight = undefined;
+      if (this.inFlight === promise) {
+        this.inFlight = undefined;
       }
     }
   }

@@ -251,7 +251,6 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
         res.end(
           JSON.stringify({
             ok: true,
-            activeViewers: ['emi'],
             // Vanilla bucket: a counted page of manager recipes.
             vanilla: page(
               'recipes',
@@ -296,8 +295,8 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
               ],
               3,
             ),
-            // A viewer bucket: uncounted, slot-based.
-            emi: uncountedPage('recipes', [VIEWER_RECIPE]),
+            // Viewer pages: uncounted, slot-based, keyed by viewer name under `viewers`.
+            viewers: { emi: uncountedPage('recipes', [VIEWER_RECIPE]) },
           }),
         );
         return;
@@ -429,7 +428,6 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
               ],
               1,
             ),
-            progressUnavailable: false,
           }),
         );
         return;
@@ -541,7 +539,7 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
           rawJson?: unknown;
         }>;
       };
-      emi: { totalKnown: boolean; returned: number; recipes: Array<Record<string, unknown>> };
+      viewers: { emi: { totalKnown: boolean; total?: number; returned: number; recipes: Array<Record<string, unknown>> } };
     }>(recRes.body);
     expect(recData.ok).toBe(true);
     expect(recData.vanilla.totalKnown).toBe(true);
@@ -557,9 +555,9 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
     );
     expect(recData.vanilla.recipes.find((r) => r.recipeType === 'custommod:arcane_fusion')?.rawJson).toBeDefined();
     // Viewer bucket is slot-based and uncounted.
-    expect(recData.emi.totalKnown).toBe(false);
-    expect(recData.emi.total).toBeUndefined();
-    expect(recData.emi.recipes[0]?.slotGranularity).toBe('slots');
+    expect(recData.viewers.emi.totalKnown).toBe(false);
+    expect(recData.viewers.emi.total).toBeUndefined();
+    expect(recData.viewers.emi.recipes[0]?.slotGranularity).toBe('slots');
 
     // 4. mc_query_item_flow aggregates the data kinds and reports item metadata under viewerInformation
     const flowRes = await rpcCall(handle.url, {
@@ -707,9 +705,7 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
         res.end(
           JSON.stringify({
             ok: true,
-            activeViewers: ['emi', 'rei'],
-            emi: uncountedPage('recipes', [VIEWER_RECIPE]),
-            rei: uncountedPage('recipes', []),
+            viewers: { emi: uncountedPage('recipes', [VIEWER_RECIPE]), rei: uncountedPage('recipes', []) },
           }),
         );
         return;
@@ -727,19 +723,18 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
         return;
       }
       if (url.pathname === '/api/v1/trades/query') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(
-          JSON.stringify(
-            page(
-              'trades',
-              [
-                { profession: 'minecraft:weaponsmith', level: 1, result: { id: 'minecraft:iron_ingot' } },
-                { profession: 'minecraft:weaponsmith', level: 1, result: { id: 'minecraft:emerald' } },
-              ],
-              2,
-            ),
-          ),
+        // Which side of the trade the item is on is the mod's filter; item flow must ask for it.
+        const all = [
+          { profession: 'minecraft:weaponsmith', level: 1, costA: { id: 'minecraft:emerald' }, result: { id: 'minecraft:iron_ingot' } },
+          { profession: 'minecraft:weaponsmith', level: 1, costA: { id: 'minecraft:iron_ingot' }, result: { id: 'minecraft:emerald' } },
+        ];
+        const side = url.searchParams.get('side');
+        const item = url.searchParams.get('item');
+        const selected = all.filter((trade) =>
+          side === 'result' ? trade.result.id === item : side === 'cost' ? trade.costA.id === item : true,
         );
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(page('trades', selected, selected.length)));
         return;
       }
       if (url.pathname === '/api/v1/datamaps/query') {
@@ -779,17 +774,19 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
       ok: boolean;
       partial?: boolean;
       missing?: Array<{ part: string; code: string; error: string }>;
-      recipes?: { emi?: { recipes: Array<{ viewer: string; inputs: unknown[] }>; totalKnown: boolean } };
-      trades?: { trades: Array<{ result?: { id: string }; roleUnverified?: true }> };
+      recipes?: { viewers?: { emi?: { recipes: Array<{ viewer: string; inputs: unknown[] }>; totalKnown: boolean } } };
+      trades?: { total?: number; returned: number; trades: Array<{ result?: { id: string } }> };
     }>(flowRes.body);
     expect(flowPayload.ok).toBe(true);
     expect(flowPayload.partial).toBe(true);
     // Viewer recipes keep their slot-based shapes and the viewer name they came from.
-    expect(flowPayload.recipes?.emi?.totalKnown).toBe(false);
-    expect(flowPayload.recipes?.emi?.recipes[0]?.viewer).toBe('emi');
-    expect(flowPayload.recipes?.emi?.recipes[0]?.inputs).toBeDefined();
-    // The obtain filter keeps only trades producing the item, by exact id.
+    expect(flowPayload.recipes?.viewers?.emi?.totalKnown).toBe(false);
+    expect(flowPayload.recipes?.viewers?.emi?.recipes[0]?.viewer).toBe('emi');
+    expect(flowPayload.recipes?.viewers?.emi?.recipes[0]?.inputs).toBeDefined();
+    // `obtain` asks the mod for trades whose result is the item, so the page count describes them.
     expect(flowPayload.trades?.trades).toHaveLength(1);
+    expect(flowPayload.trades?.total).toBe(1);
+    expect(flowPayload.trades?.returned).toBe(1);
     expect(flowPayload.trades?.trades[0]?.result?.id).toBe('minecraft:iron_ingot');
     // Failures are named with the mod's code, and the registry miss is surfaced rather than swallowed.
     const missingByPart = new Map((flowPayload.missing ?? []).map((entry) => [entry.part, entry]));

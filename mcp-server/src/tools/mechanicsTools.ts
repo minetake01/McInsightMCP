@@ -1,14 +1,14 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { limitBounds } from '../api/endpoints.js';
-import { MissingParts } from '../api/result.js';
+import { MissingParts, ToolError } from '../api/result.js';
 import type { McHttpClient } from '../client/mcClient.js';
 import {
   describeBuiltinParsers,
   enrichRecipesResponse,
   fetchRecipeTypes,
   fetchRecipes,
-  mergeRecipeBuckets,
+  mergeRecipeResponses,
   recipeLimitBounds,
   type EnrichedRecipesResponse,
 } from '../data/recipes.js';
@@ -119,7 +119,7 @@ const QUERY_WORLD_DATA_SCHEMA = z.object({
     .string()
     .optional()
     .describe(
-      'Exact item ResourceLocation or "#tag" for the loot reverse lookup or trade filter. Substrings and display names are rejected; resolve them with mc_search_registry first.',
+      'Exact item ResourceLocation or "#tag": the loot reverse lookup, the trade filter, or the data-map value key (kind=loot/trades/datamaps only). Substrings and display names are rejected; resolve them with mc_search_registry first. A parameter the chosen kind does not read is rejected with INVALID_PARAMETER.',
     ),
   modId: z.string().optional().describe('Filter by mod namespace'),
   registry: z.string().optional().describe('Target registry filter when kind=datamaps (e.g. item, block)'),
@@ -139,6 +139,43 @@ const QUERY_WORLD_DATA_SCHEMA = z.object({
     ),
   offset: z.number().int().min(0).optional().default(0),
 });
+
+type WorldDataKind = z.infer<typeof QUERY_WORLD_DATA_SCHEMA>['kind'];
+
+const WORLDGEN_QUERY_PARAMS = ['query', 'modId', 'searchContent', 'limit', 'offset'] as const;
+
+/** The parameters each kind reads; `includeRaw` is accepted everywhere because retention is universal. */
+const WORLD_DATA_PARAMS: Record<WorldDataKind, readonly string[]> = {
+  worldgen_summary: [],
+  placed_feature: WORLDGEN_QUERY_PARAMS,
+  configured_feature: WORLDGEN_QUERY_PARAMS,
+  biome: [...WORLDGEN_QUERY_PARAMS, 'minTemp', 'maxTemp'],
+  structure: WORLDGEN_QUERY_PARAMS,
+  dimension_type: WORLDGEN_QUERY_PARAMS,
+  biome_modifier: WORLDGEN_QUERY_PARAMS,
+  loot: ['query', 'item', 'modId', 'includeModifiers', 'limit', 'offset'],
+  trades: ['query', 'item', 'modId', 'profession', 'limit', 'offset'],
+  datamaps: ['query', 'item', 'registry', 'modId', 'limit', 'offset'],
+};
+
+/**
+ * Rejects a parameter the selected kind would not read.
+ *
+ * <p>One flat schema serves every kind, so without this a `profession` sent with `kind: 'loot'` would
+ * be dropped and the caller would get an unfiltered answer to a question it did not ask.
+ */
+function rejectInapplicable(kind: WorldDataKind, given: Record<string, unknown>): void {
+  const allowed = WORLD_DATA_PARAMS[kind];
+  const stray = Object.entries(given)
+    .filter(([name, value]) => value !== undefined && !allowed.includes(name))
+    .map(([name]) => name);
+  if (stray.length > 0) {
+    throw new ToolError(
+      'INVALID_PARAMETER',
+      `kind '${kind}' does not read ${stray.join(', ')}; it accepts ${allowed.length > 0 ? allowed.join(', ') : 'no filters'} (plus includeRaw).`,
+    );
+  }
+}
 
 const QUERY_ADVANCEMENTS_SCHEMA = z.object({
   query: z.string().optional().describe('Filter by advancement ID, title, description, icon, or criteria'),
@@ -184,21 +221,29 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
       inputSchema: QUERY_ITEM_FLOW_SCHEMA,
     },
     async ({ item, direction, sources, includeRaw, limit }) => toolResult(async () => {
-      const explicitSources = sources !== undefined;
+      const cleanItem = item.trim();
+      const isTagQuery = cleanItem.startsWith('#');
+      // A source that cannot answer this question is left out by default and rejected when named:
+      // loot only describes obtaining, and a #tag is not a single entry with viewer information.
+      const inapplicable = new Map<ItemFlowSource, string>();
+      if (direction === 'use') inapplicable.set('loot', 'loot tables only describe obtaining items, not uses');
+      if (isTagQuery) inapplicable.set('viewer_info', 'a #tag is not a single registry entry; inspect it with mc_inspect');
+      const named = sources?.filter((source) => inapplicable.has(source)) ?? [];
+      if (named.length > 0) {
+        throw new ToolError(
+          'INVALID_PARAMETER',
+          named.map((source) => `source '${source}' does not apply: ${inapplicable.get(source)}.`).join(' '),
+        );
+      }
       const activeSources = new Set<ItemFlowSource>(
-        sources ??
-          (direction === 'use'
-            ? ['recipes', 'trades', 'datamaps', 'viewer_info']
-            : ['recipes', 'loot', 'trades', 'datamaps', 'viewer_info']),
+        sources ?? ITEM_FLOW_SOURCES.filter((source) => !inapplicable.has(source)),
       );
 
       const missing = new MissingParts();
       const out: Record<string, unknown> = { ok: true, item, direction };
-      const cleanItem = item.trim();
-      const isTagQuery = cleanItem.startsWith('#');
 
       const versionsPromise = activeSources.has('recipes')
-        ? mcClient.tryGetLoadedModVersions()
+        ? mcClient.getLoadedModVersions()
         : Promise.resolve(undefined);
 
       const runSource = async (part: ItemFlowSource, fn: () => Promise<void>) => {
@@ -227,7 +272,7 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
                   includeRaw,
                 ),
               ]);
-              out.recipes = mergeRecipeBuckets(inputs, catalysts);
+              out.recipes = mergeRecipeResponses(inputs, catalysts);
             } else {
               const role = direction === 'obtain' ? 'output' : 'any';
               out.recipes = await queryRecipeRole(mcClient, { item: cleanItem, role, limit }, versions, includeRaw);
@@ -237,29 +282,20 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
       }
 
       if (activeSources.has('loot')) {
-        if (direction === 'use') {
-          if (explicitSources) {
-            out.loot = { skipped: true, reason: 'Loot tables only describe obtaining items, not uses.' };
-          }
-        } else {
-          tasks.push(
-            runSource('loot', async () => {
-              // `includeModifiers` is left out deliberately: the mod includes Global Loot Modifiers
-              // wherever the loader has them, and rejects an explicit request elsewhere.
-              out.loot = await queryLoot(mcClient, { item: cleanItem, limit }, includeRaw);
-            }),
-          );
-        }
+        tasks.push(
+          runSource('loot', async () => {
+            // `includeModifiers` is left out deliberately: the mod includes Global Loot Modifiers
+            // wherever the loader has them, and rejects an explicit request elsewhere.
+            out.loot = await queryLoot(mcClient, { item: cleanItem, limit }, includeRaw);
+          }),
+        );
       }
 
       if (activeSources.has('trades')) {
         tasks.push(
           runSource('trades', async () => {
-            out.trades = await queryTrades(
-              mcClient,
-              { item: cleanItem, limit },
-              direction === 'both' ? undefined : { item: cleanItem, role: direction === 'obtain' ? 'obtain' : 'use' },
-            );
+            const side = direction === 'obtain' ? 'result' : direction === 'use' ? 'cost' : 'any';
+            out.trades = await queryTrades(mcClient, { item: cleanItem, side, limit });
           }),
         );
       }
@@ -267,22 +303,17 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
       if (activeSources.has('datamaps')) {
         tasks.push(
           runSource('datamaps', async () => {
-            out.datamaps = await queryDataMaps(mcClient, { q: cleanItem, limit }, includeRaw);
+            out.datamaps = await queryDataMaps(mcClient, { item: cleanItem, limit }, includeRaw);
           }),
         );
       }
 
       if (activeSources.has('viewer_info')) {
-        if (isTagQuery) {
-          // A tag is not a registry entry; the tag endpoint describes its members instead.
-          out.itemMeta = { skipped: true, reason: 'A #tag is not a single registry entry; inspect it with mc_inspect.' };
-        } else {
-          tasks.push(
-            runSource('viewer_info', async () => {
-              out.itemMeta = await inspectRegistryEntry(mcClient, cleanItem, 'auto');
-            }),
-          );
-        }
+        tasks.push(
+          runSource('viewer_info', async () => {
+            out.itemMeta = await inspectRegistryEntry(mcClient, cleanItem, 'auto');
+          }),
+        );
       }
 
       await Promise.all(tasks);
@@ -303,7 +334,7 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
       if (listTypes) {
         const [data, versions] = await Promise.all([
           fetchRecipeTypes(mcClient),
-          mcClient.tryGetLoadedModVersions(),
+          mcClient.getLoadedModVersions(),
         ]);
         const normMod = modId?.trim().toLowerCase();
         const normType = type?.trim().toLowerCase();
@@ -352,7 +383,7 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
           limit,
           offset,
         }),
-        mcClient.tryGetLoadedModVersions(),
+        mcClient.getLoadedModVersions(),
       ]);
       const enriched = enrichRecipesResponse(rawRes, versions, includeRaw);
       return { ...enriched, limit, offset };
@@ -383,6 +414,19 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
       limit,
       offset,
     }) => toolResult(async () => {
+      rejectInapplicable(kind, {
+        query,
+        item,
+        modId,
+        registry,
+        profession,
+        searchContent: searchContent || undefined,
+        minTemp,
+        maxTemp,
+        includeModifiers,
+        limit,
+        offset: offset || undefined,
+      });
       if (kind === 'worldgen_summary') {
         return fetchWorldgenSummary(mcClient);
       }
@@ -401,7 +445,7 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
       if (kind === 'trades') {
         return {
           kind,
-          ...(await queryTrades(mcClient, { item: item ?? query, profession, mod: modId, limit, offset })),
+          ...(await queryTrades(mcClient, { item, q: query, profession, mod: modId, limit, offset })),
         };
       }
 
@@ -410,7 +454,7 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
           kind,
           ...(await queryDataMaps(
             mcClient,
-            { q: query ?? item, registry, mod: modId, limit, offset },
+            { q: query, item, registry, mod: modId, limit, offset },
             includeRaw,
           )),
         };
@@ -438,7 +482,7 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
     {
       title: 'Query Advancements & Player Progress',
       description:
-        'Query advancement definitions, display titles/descriptions, rewards, and live player completion progress when available. `progressUnavailable` marks an answer whose progress is not part of it, and the `missing` entry for part "progress" carries the reason.',
+        'Query advancement definitions, display titles/descriptions, rewards, and the player\'s completion progress. Every entry carries its progress; when the world owner cannot be asked the call fails with its error code instead of returning definitions alone.',
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: QUERY_ADVANCEMENTS_SCHEMA,
     },

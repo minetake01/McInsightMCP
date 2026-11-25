@@ -1,10 +1,9 @@
 /**
  * The advancements data kind.
  *
- * <p>Advancement definitions come from the datapack and player progress comes from the world owner,
- * so the same response can be definition-only (no player) or progress-carrying. The mod states which
- * it is via `hasPlayerProgress` and, when progress is unavailable, why. Both are passed through
- * untouched: an advancement without progress is still an advancement, and saying so beats guessing.
+ * <p>Definitions and the requesting player's progress both belong to the world owner, so every
+ * entry the mod returns carries its progress; a session without access to the owner fails the
+ * request instead of answering with definitions that would read as "nothing completed".
  */
 
 import { requestEndpoint } from '../api/endpoints.js';
@@ -20,7 +19,7 @@ export interface AdvancementsQueryParams {
   offset?: number;
 }
 
-export async function fetchAdvancements(
+export async function queryAdvancements(
   client: McHttpClient,
   params: AdvancementsQueryParams,
 ): Promise<AdvancementsResponse> {
@@ -32,20 +31,4 @@ export async function fetchAdvancements(
     limit: params.limit,
     offset: params.offset,
   });
-}
-
-/**
- * Advancements need no client-side parsing: the mod already reports display fields, rewards, and
- * per-criterion progress. The data kind exists so callers ask for it by name rather than by URL, and
- * so a future parse step has one place to live.
- */
-export function enrichAdvancementsResponse(raw: AdvancementsResponse): AdvancementsResponse {
-  return raw;
-}
-
-export async function queryAdvancements(
-  client: McHttpClient,
-  params: AdvancementsQueryParams,
-): Promise<AdvancementsResponse> {
-  return enrichAdvancementsResponse(await fetchAdvancements(client, params));
 }

@@ -256,14 +256,13 @@ export interface ViewerCategories {
 }
 
 /**
- * Recipes response: viewer names are keys, plus the always-present `vanilla` bucket when the
- * recipe manager answered. Any registered viewer name may appear.
+ * Recipes response: `vanilla` when the recipe manager was asked, and one page per viewer under
+ * `viewers`, keyed by whatever names the mod's adapters registered.
  */
 export interface RecipesQueryResponse {
   ok: true;
-  activeViewers?: string[];
   vanilla?: PageOf<'recipes', VanillaRecipe>;
-  [viewerName: string]: unknown;
+  viewers?: Record<string, ViewerRecipePage>;
 }
 
 export interface RecipeTypeEntry {
@@ -293,7 +292,7 @@ export interface GuideRow {
   path: string;
 }
 
-export type GuideListResponse = PageOf<'guides', GuideRow>;
+export type GuideListResponse = PageOf<'guides', GuideRow> & PartialResult;
 
 export interface GuideSearchHit extends GuideRow {
   snippet: string;
@@ -301,7 +300,7 @@ export interface GuideSearchHit extends GuideRow {
   key?: string;
 }
 
-export type GuideSearchResponse = PageOf<'hits', GuideSearchHit> & { query: string; lang: string };
+export type GuideSearchResponse = PageOf<'hits', GuideSearchHit> & PartialResult & { query: string; lang: string };
 
 export interface GuidePageResponse extends GuideRow {
   ok: true;
@@ -407,7 +406,7 @@ export interface AdvancementEntry {
   criteriaDetails?: Record<string, unknown>;
   requirements?: string[][];
   rewards?: Record<string, unknown>;
-  progress?: {
+  progress: {
     done: boolean;
     percent: number;
     completedCriteria: string[];
@@ -415,9 +414,7 @@ export interface AdvancementEntry {
   };
 }
 
-export type AdvancementsResponse = PageOf<'advancements', AdvancementEntry> & {
-  progressUnavailable?: boolean;
-};
+export type AdvancementsResponse = PageOf<'advancements', AdvancementEntry>;
 
 /* ------------------------------------------------------------------------- *
  * Class introspection

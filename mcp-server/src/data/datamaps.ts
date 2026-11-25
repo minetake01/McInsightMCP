@@ -29,9 +29,9 @@ export interface EnrichedDataMapsResponse {
 
 export interface DataMapsQueryParams {
   q?: string;
+  item?: string;
   registry?: string;
   mod?: string;
-  includeRaw?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -76,11 +76,12 @@ export async function fetchDataMaps(
 ): Promise<DataMapsResponse> {
   return requestEndpoint(client, 'datamaps_query', {
     q: params.q,
+    item: params.item,
     registry: params.registry,
     mod: params.mod,
     // The mod decides what it returns; asking for raw JSON here keeps the two sides agreed, and the
     // client-side retention rule still applies so an unrequested payload is not echoed back.
-    includeRaw: includeRaw || params.includeRaw,
+    includeRaw,
     limit: params.limit,
     offset: params.offset,
   });

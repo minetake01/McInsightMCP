@@ -2,8 +2,8 @@
  * The recipe data kind.
  *
  * <p>Two sources answer "which recipes involve X": the vanilla `RecipeManager` (structured, counted
- * pages) and recipe viewers (slot-based, uncounted pages). The mod groups them under the viewer name
- * as a key, so any registered viewer appears without this module knowing its name. Parsing and the
+ * pages) and recipe viewers (slot-based, uncounted pages). The mod keys viewer pages by viewer name
+ * under `viewers`, so any registered viewer appears without this module knowing its name. Parsing and the
  * raw-JSON retention rule are applied here once per recipe kind, which is what makes `rawJson`
  * behave identically for a vanilla smelting recipe and a JEI crushing recipe.
  */
@@ -14,16 +14,12 @@ import type {
   RecipesTypesResponse,
   VanillaRecipe,
   ViewerRecipe,
-  ViewerRecipePage,
 } from '../api/types.js';
 import type { McHttpClient } from '../client/mcClient.js';
 import { listBuiltinModParsers, parseWithBuiltinModParser } from '../parsers/modParsers/index.js';
 import type { LoadedModsVersionMap } from '../parsers/modVersion.js';
 import { parseNativeRecipe } from '../parsers/nativeParsers.js';
 import { retainedRawJson } from '../parsers/retention.js';
-
-/** The bucket key the mod uses for `RecipeManager` recipes. */
-export const VANILLA_RECIPE_KEY = 'vanilla';
 
 export interface EnrichedVanillaRecipe extends VanillaRecipe {
   nativeParsed?: NonNullable<ReturnType<typeof parseNativeRecipe>>;
@@ -54,10 +50,9 @@ export interface EnrichedViewerBucket extends EnrichedPage {
 
 export interface EnrichedRecipesResponse {
   ok: true;
-  activeViewers?: string[];
   vanilla?: EnrichedVanillaBucket;
-  /** One entry per viewer name the mod answered with. */
-  [viewerName: string]: unknown;
+  /** One page per viewer the mod answered with, keyed by the viewer's registered name. */
+  viewers?: Record<string, EnrichedViewerBucket>;
 }
 
 export interface RecipeQueryParams {
@@ -68,41 +63,6 @@ export interface RecipeQueryParams {
   source?: 'all' | 'vanilla' | 'viewer' | (string & {});
   limit?: number;
   offset?: number;
-}
-
-const ENVELOPE_KEYS = new Set(['ok', 'activeViewers']);
-
-function recipesOf(value: unknown): Array<VanillaRecipe | ViewerRecipe> | undefined {
-  if (typeof value !== 'object' || value === null) return undefined;
-  const recipes = (value as { recipes?: unknown }).recipes;
-  return Array.isArray(recipes) ? (recipes as Array<VanillaRecipe | ViewerRecipe>) : undefined;
-}
-
-/**
- * The page fields of one bucket.
- *
- * <p>`Page` always reports `offset` and `totalKnown`; the derivation here is only a guard against a
- * truncated response, where assuming a count would be worse than reporting that none was given.
- */
-function readPage(value: unknown): {
-  offset: number;
-  totalKnown: boolean;
-  total?: number;
-  returned: number;
-  hasMore: boolean;
-} | undefined {
-  if (typeof value !== 'object' || value === null) return undefined;
-  const page = value as Record<string, unknown>;
-  if (typeof page.returned !== 'number' || typeof page.hasMore !== 'boolean') return undefined;
-  const totalKnown = page.totalKnown === true;
-  const total = typeof page.total === 'number' ? page.total : undefined;
-  return {
-    offset: typeof page.offset === 'number' ? page.offset : 0,
-    totalKnown: totalKnown || total !== undefined,
-    ...(total !== undefined ? { total } : {}),
-    returned: page.returned,
-    hasMore: page.hasMore,
-  };
 }
 
 /**
@@ -177,18 +137,11 @@ export function enrichViewerRecipe(rec: ViewerRecipe, includeRaw: boolean): Enri
   } as EnrichedViewerRecipe;
 }
 
-/** The viewer names a recipes response carries, excluding the envelope and the vanilla bucket. */
-export function viewerNames(res: RecipesQueryResponse): string[] {
-  return Object.keys(res).filter(
-    (key) => !ENVELOPE_KEYS.has(key) && key !== VANILLA_RECIPE_KEY && recipesOf(res[key]) !== undefined,
-  );
-}
-
 /**
- * Enrich every bucket of a recipes response.
+ * Enrich every page of a recipes response.
  *
- * <p>Buckets are discovered from the response, so a viewer registered later is enriched without a
- * code change here.
+ * <p>Viewer pages are taken from `viewers` under whatever names the mod reported, so a viewer
+ * registered later is enriched without a code change here.
  */
 export function enrichRecipesResponse(
   res: RecipesQueryResponse,
@@ -196,39 +149,19 @@ export function enrichRecipesResponse(
   includeRaw: boolean,
 ): EnrichedRecipesResponse {
   const out: EnrichedRecipesResponse = { ok: true };
-  if (res.activeViewers !== undefined) {
-    out.activeViewers = res.activeViewers;
+  if (res.vanilla) {
+    const { recipes, ...page } = res.vanilla;
+    out.vanilla = { ...page, recipes: recipes.map((rec) => enrichVanillaRecipe(rec, versions, includeRaw)) };
   }
-  for (const key of Object.keys(res)) {
-    if (ENVELOPE_KEYS.has(key)) continue;
-    const recipes = recipesOf(res[key]);
-    const page = readPage(res[key]);
-    if (recipes === undefined || page === undefined) continue;
-    if (key === VANILLA_RECIPE_KEY) {
-      out.vanilla = {
-        ...page,
-        recipes: (recipes as VanillaRecipe[]).map((rec) => enrichVanillaRecipe(rec, versions, includeRaw)),
-      };
-    } else {
-      // A viewer page never carries a count; `Page.uncounted` is the only shape a viewer answers with.
-      out[key] = {
-        offset: page.offset,
-        totalKnown: false,
-        returned: page.returned,
-        hasMore: page.hasMore,
-        recipes: (recipes as ViewerRecipe[]).map((rec) => enrichViewerRecipe(rec, includeRaw)),
-      } satisfies EnrichedViewerBucket;
-    }
+  if (res.viewers) {
+    out.viewers = Object.fromEntries(
+      Object.entries(res.viewers).map(([name, { recipes, ...page }]) => [
+        name,
+        { ...page, recipes: recipes.map((rec) => enrichViewerRecipe(rec, includeRaw)) },
+      ]),
+    );
   }
   return out;
-}
-
-function isBucket(value: unknown): value is EnrichedVanillaBucket | EnrichedViewerBucket {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    Array.isArray((value as { recipes?: unknown }).recipes)
-  );
 }
 
 function recipeIdentity(recipe: EnrichedVanillaRecipe | EnrichedViewerRecipe): string {
@@ -238,39 +171,55 @@ function recipeIdentity(recipe: EnrichedVanillaRecipe | EnrichedViewerRecipe): s
   return `${category}|${recipe.recipeClass ?? ''}`;
 }
 
+function mergePage<P extends EnrichedPage & { recipes: R[] }, R extends EnrichedVanillaRecipe | EnrichedViewerRecipe>(
+  existing: P | undefined,
+  incoming: P,
+): P {
+  if (!existing) return incoming;
+  const seen = new Set(existing.recipes.map(recipeIdentity));
+  const recipes = [...existing.recipes];
+  for (const recipe of incoming.recipes) {
+    const identity = recipeIdentity(recipe);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    recipes.push(recipe);
+  }
+  // Two pages of different queries were joined, so no single count describes the result.
+  const { total: _total, ...rest } = existing;
+  return {
+    ...rest,
+    totalKnown: false,
+    recipes,
+    returned: recipes.length,
+    hasMore: existing.hasMore || incoming.hasMore,
+  } as P;
+}
+
 /**
- * Merge extra buckets into an already-enriched response.
+ * Merge two answers to related queries (an input search plus a catalyst search).
  *
- * <p>Used when one logical question needs several mod queries (a catalyst search plus an input
- * search). Recipes are merged by id — falling back to category + class for viewers that report no
- * id — so a recipe matching both roles appears once.
+ * <p>Recipes are merged by id — falling back to category + class for viewers that report no id — so
+ * a recipe matching both roles appears once.
  */
-export function mergeRecipeBuckets(
+export function mergeRecipeResponses(
   target: EnrichedRecipesResponse,
   extra: EnrichedRecipesResponse,
 ): EnrichedRecipesResponse {
-  for (const key of Object.keys(extra)) {
-    if (ENVELOPE_KEYS.has(key)) continue;
-    const incoming = extra[key];
-    if (!isBucket(incoming)) continue;
-    const existing = target[key];
-    if (!isBucket(existing)) {
-      target[key] = incoming;
-      continue;
-    }
-    const seen = new Set(existing.recipes.map(recipeIdentity));
-    for (const recipe of incoming.recipes) {
-      const identity = recipeIdentity(recipe);
-      if (seen.has(identity)) continue;
-      seen.add(identity);
-      existing.recipes.push(recipe as never);
-    }
-    existing.returned = existing.recipes.length;
-    existing.hasMore = existing.hasMore || incoming.hasMore;
+  const out: EnrichedRecipesResponse = { ok: true };
+  if (target.vanilla || extra.vanilla) {
+    out.vanilla = extra.vanilla ? mergePage(target.vanilla, extra.vanilla) : target.vanilla;
   }
-  return target;
+  const names = new Set([...Object.keys(target.viewers ?? {}), ...Object.keys(extra.viewers ?? {})]);
+  if (names.size > 0) {
+    out.viewers = {};
+    for (const name of names) {
+      const incoming = extra.viewers?.[name];
+      const existing = target.viewers?.[name];
+      out.viewers[name] = incoming ? mergePage(existing, incoming) : (existing as EnrichedViewerBucket);
+    }
+  }
+  return out;
 }
-
 /* ------------------------------------------------------------------------- *
  * Transport
  * ------------------------------------------------------------------------- */
@@ -301,4 +250,3 @@ export function describeBuiltinParsers(versions: LoadedModsVersionMap | undefine
   return listBuiltinModParsers(versions);
 }
 
-export type { ViewerRecipePage };
