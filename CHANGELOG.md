@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `mc_query_world_data` rejects a parameter the chosen `kind` does not read, and `mc_query_item_flow` rejects a named source that cannot answer (`loot` with `direction: use`, `viewer_info` for a `#tag`) instead of returning a `{skipped}` placeholder
 - Guide list/search answers report `missing: [{part: "datapack_guides"}]` when datapack-shipped books are unreadable in the session
 - Bridged requests wait the endpoint budget plus a transport margin, so a host that answers at its deadline is still heard
+- Packet transport moved out of the platform helper into `InsightNetworking`, which both loaders bind once; the client keeps the endpoint set the host announces and fails `SERVER_MOD_REQUIRED` for one the host does not serve
+- `status` always reports `languageCode` (the client's language) and no longer reports `isSingleplayer`, which was identical to `serverActive`
 - Trade listings report `sampled` for a randomized offer and a reflected `listing` object for one that cannot be materialized, so both facts are named after what the mod actually emits
 - `loot_query` pages only its loot tables: `entries` carries the `offset`/`totalKnown`/`total`/`returned`/`hasMore` envelope, while `lootModifiers` is returned whole with `totalModifiers` (the active modifier set is the small list the pack layers name, so slicing it with the table page's offset would make paging tables shift the modifier window)
 - `mc_query_item_flow` runs each source through a handler whose failure becomes a `missing` entry (`partial: true` with the mod's code), so a failed part is reported rather than omitted and a successful part is never dropped
