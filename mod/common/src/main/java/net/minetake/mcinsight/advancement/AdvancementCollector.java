@@ -13,11 +13,8 @@ import net.minetake.mcinsight.api.InsightError;
 import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.api.Page;
 import net.minetake.mcinsight.api.Params;
-import net.minetake.mcinsight.api.PartialData;
 import net.minetake.mcinsight.api.RequestContext;
-import net.minetake.mcinsight.client.ClientStateAccessor;
 import net.minetake.mcinsight.game.GameAccess;
-import net.minetake.mcinsight.platform.Services;
 import net.minetake.mcinsight.serial.JsonCodec;
 import net.minecraft.advancements.Advancement;
 import net.minecraft.advancements.AdvancementHolder;
@@ -36,11 +33,10 @@ import net.minecraft.world.entity.player.Player;
  * Answers {@code advancements_query}: advancement definitions and, when the world owner is
  * reachable, the requesting player's own completion progress.
  *
- * <p>Definitions and progress are captured together on the game thread, so completion is reported
- * against the same reload the definitions came from. Progress belongs to the world owner and is
- * therefore unavailable to a client whose server does not run this mod: that absence is reported as
- * a missing part, and a request that could only be answered from progress fails instead of
- * returning an empty page that looks like "nothing completed".
+ * <p>Definitions and progress are captured together on the server thread, so completion is
+ * reported against the same reload the definitions came from. Both belong to the world owner, which
+ * is why the dispatcher routes this endpoint there; a server without this mod fails the request
+ * rather than letting a definitions-only page pass for "nothing completed".
  */
 public final class AdvancementCollector {
 
@@ -53,14 +49,11 @@ public final class AdvancementCollector {
     private record Sample(
         ResourceLocation id,
         Advancement advancement,
-        boolean hasProgress,
         boolean done,
         float percent,
         List<String> completedCriteria,
         List<String> remainingCriteria
     ) {}
-
-    private record Capture(boolean hasPlayerProgress, List<Sample> samples) {}
 
     public static JsonObject query(RequestContext ctx, Params p) throws Exception {
         int limit = InsightEndpoint.ADVANCEMENTS_QUERY.limit(p);
@@ -70,26 +63,11 @@ public final class AdvancementCollector {
         boolean includeRecipes = p.bool("includeRecipes", false);
         Status status = Status.parse(p.string("status"));
 
-        Capture capture = capture(ctx);
-        PartialData partial = new PartialData();
-        if (!capture.hasPlayerProgress()) {
-            partial.add(
-                "progress",
-                InsightError.SERVER_MOD_REQUIRED,
-                "Advancement completion is tracked by the world owner, and the connected server does not run McInsight."
-            );
-        }
-
-        if (status != Status.ALL && !capture.hasPlayerProgress()) {
-            throw new InsightException(
-                InsightError.DATA_UNAVAILABLE,
-                "Filtering by '" + status.label + "' needs advancement progress, which is unavailable in this session."
-            );
-        }
+        List<Sample> samples = capture(ctx);
 
         JsonArray entries = new JsonArray();
         int total = 0;
-        for (Sample sample : capture.samples()) {
+        for (Sample sample : samples) {
             if (!includeRecipes && sample.id().getPath().startsWith("recipes/")) {
                 continue;
             }
@@ -109,12 +87,8 @@ public final class AdvancementCollector {
             total++;
         }
 
-        JsonObject out = Page.of("advancements", entries, offset, total);
-        // One flag, and the reason when it is true: "no progress" is a property of the answer, not
-        // a second boolean saying the same thing the other way round.
-        out.addProperty("progressUnavailable", !capture.hasPlayerProgress());
-        partial.applyTo(out);
-        return out;
+        return Page.of("advancements", entries, offset, total);
+
     }
 
     /** The status filter, parsed once so both the query and the error message agree on its name. */
@@ -148,49 +122,42 @@ public final class AdvancementCollector {
         boolean accepts(Sample sample) {
             return switch (this) {
                 case ALL -> true;
-                case COMPLETED -> sample.hasProgress() && sample.done();
-                case INCOMPLETE -> sample.hasProgress() && !sample.done();
+                case COMPLETED -> sample.done();
+                case INCOMPLETE -> !sample.done();
             };
         }
     }
 
     /**
-     * Copies the advancement tree and one player's progress out of the game.
+     * Copies the advancement tree and the requesting player's progress out of the world owner.
      *
-     * <p>The integrated server is the world owner and knows the requester's progress. Without one,
-     * definitions still come from the client's synced tree, but progress does not exist here at all.
+     * <p>The dispatcher only lets this run where a server is active (integrated, or the host
+     * answering a bridged request), so definitions and progress always come from the same owner.
      */
-    private static Capture capture(RequestContext ctx) throws Exception {
+    private static List<Sample> capture(RequestContext ctx) throws Exception {
         MinecraftServer server = ctx.executor().getActiveServer();
-        if (server != null) {
-            return WorldCapture.onServer(ctx, () -> {
+        try {
+            return ctx.executor().supplyOnServerThread(() -> {
                 ServerPlayer player = player(ctx, server);
-                Collection<AdvancementHolder> all = server.getAdvancements().getAllAdvancements();
-                return build(all, player);
-            });
-        }
-        if (!Services.PLATFORM.isClientSide()) {
+                return build(server.getAdvancements().getAllAdvancements(), player);
+            }, CAPTURE_TIMEOUT_MS);
+        } catch (InsightException e) {
+            throw e;
+        } catch (java.util.concurrent.ExecutionException e) {
+            if (e.getCause() instanceof InsightException insightException) {
+                throw insightException;
+            }
             throw new InsightException(
                 InsightError.DATA_UNAVAILABLE,
-                "Advancements are only readable on a client or on the world owner."
+                "The advancement state could not be read: " + e.getCause()
+            );
+        } catch (java.util.concurrent.TimeoutException e) {
+            throw new InsightException(
+                InsightError.DATA_UNAVAILABLE,
+                "The server did not hand over the advancement state within " + CAPTURE_TIMEOUT_MS + " ms."
             );
         }
-        return WorldCapture.onClient(ctx, () -> {
-            List<AdvancementHolder> holders = ClientStateAccessor.captureClientAdvancements();
-            if (holders.isEmpty()) {
-                throw new InsightException(
-                    InsightError.DATA_UNAVAILABLE,
-                    "No advancement tree is loaded in this session."
-                );
-            }
-            List<Sample> samples = new ArrayList<>(holders.size());
-            for (AdvancementHolder holder : holders) {
-                samples.add(new Sample(holder.id(), holder.value(), false, false, 0.0F, List.of(), List.of()));
-            }
-            return new Capture(false, List.copyOf(samples));
-        });
     }
-
     /**
      * The player whose progress is reported.
      *
@@ -216,14 +183,10 @@ public final class AdvancementCollector {
         return resolved;
     }
 
-    private static Capture build(Collection<AdvancementHolder> all, ServerPlayer player) {
-        PlayerAdvancements progress = player != null ? player.getAdvancements() : null;
+    private static List<Sample> build(Collection<AdvancementHolder> all, ServerPlayer player) {
+        PlayerAdvancements progress = player.getAdvancements();
         List<Sample> samples = new ArrayList<>(all.size());
         for (AdvancementHolder holder : all) {
-            if (progress == null) {
-                samples.add(new Sample(holder.id(), holder.value(), false, false, 0.0F, List.of(), List.of()));
-                continue;
-            }
             AdvancementProgress advancementProgress = progress.getOrStartProgress(holder);
             List<String> completed = new ArrayList<>();
             for (String criterion : advancementProgress.getCompletedCriteria()) {
@@ -236,14 +199,13 @@ public final class AdvancementCollector {
             samples.add(new Sample(
                 holder.id(),
                 holder.value(),
-                true,
                 advancementProgress.isDone(),
                 advancementProgress.getPercent(),
                 List.copyOf(completed),
                 List.copyOf(remaining)
             ));
         }
-        return new Capture(progress != null, List.copyOf(samples));
+        return List.copyOf(samples);
     }
 
     // -------------------------------------------------------------- describe
@@ -280,9 +242,7 @@ public final class AdvancementCollector {
             out.add("rewards", rewards);
         }
 
-        if (sample.hasProgress()) {
-            out.add("progress", describeProgress(sample));
-        }
+        out.add("progress", describeProgress(sample));
         return out;
     }
 
@@ -403,42 +363,5 @@ public final class AdvancementCollector {
 
     private static String lower(String value) {
         return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
-    }
-
-    /** Thread hand-off with typed failures, shared by both capture paths. */
-    private static final class WorldCapture {
-
-        private WorldCapture() {}
-
-        static Capture onServer(RequestContext ctx, java.util.function.Supplier<Capture> capture) throws Exception {
-            return run(() -> ctx.executor().supplyOnServerThread(capture, CAPTURE_TIMEOUT_MS), "server");
-        }
-
-        static Capture onClient(RequestContext ctx, java.util.function.Supplier<Capture> capture) throws Exception {
-            return run(() -> ctx.executor().supplyOnClientThread(capture, CAPTURE_TIMEOUT_MS), "client");
-        }
-
-        private static Capture run(java.util.concurrent.Callable<Capture> capture, String side) throws Exception {
-            try {
-                return capture.call();
-            } catch (InsightException e) {
-                throw e;
-            } catch (java.util.concurrent.ExecutionException e) {
-                Throwable cause = e.getCause();
-                if (cause instanceof InsightException insightException) {
-                    throw insightException;
-                }
-                throw new InsightException(
-                    InsightError.DATA_UNAVAILABLE,
-                    "The " + side + "-side advancement state could not be read: "
-                        + (cause != null && cause.getMessage() != null ? cause.getMessage() : "unknown cause")
-                );
-            } catch (java.util.concurrent.TimeoutException e) {
-                throw new InsightException(
-                    InsightError.DATA_UNAVAILABLE,
-                    "The " + side + " did not hand over the advancement state within " + CAPTURE_TIMEOUT_MS + " ms."
-                );
-            }
-        }
     }
 }

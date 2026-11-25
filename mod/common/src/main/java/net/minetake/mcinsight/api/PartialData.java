@@ -23,14 +23,6 @@ public final class PartialData {
         missing.add(entry);
     }
 
-    public void add(String part, String code, String detail) {
-        JsonObject entry = new JsonObject();
-        entry.addProperty("part", part);
-        entry.addProperty("code", code);
-        entry.addProperty("error", detail != null ? detail : "");
-        missing.add(entry);
-    }
-
     public boolean isEmpty() {
         return missing.isEmpty();
     }
