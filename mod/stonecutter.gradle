@@ -5,6 +5,10 @@ plugins {
     id 'net.fabricmc.fabric-loom' apply false
 }
 
+// The base version: the node the sources are written in, and the one a fresh checkout opens on. It is
+// a literal because Stonecutter's switch tasks rewrite this exact line to change the active project.
+// The tree's VCS version is derived from the first branch's first node, which is this same node as
+// long as `minecraft_versions` stays oldest first, so nothing else names it.
 stonecutter.active '1.21.1'
 
 stonecutter.parameters {

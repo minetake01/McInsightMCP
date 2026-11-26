@@ -52,7 +52,11 @@ stonecutter {
                 }
             }
         }
-        vcsVersion = minecraftVersions.first()
+        // No `vcsVersion`: Stonecutter defaults it to the tree's first node, which is `common` built
+        // for the first entry of `minecraft_versions` because `common` is declared first and the
+        // versions are oldest first. That node is the one the sources are written in (see
+        // `mcinsight.node`) and the one `stonecutter.gradle` opens, so naming it again here would be
+        // a second declaration of the same version.
     }
 }
 
