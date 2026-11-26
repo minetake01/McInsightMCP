@@ -112,7 +112,11 @@ const VIEWER_RECIPE = {
   workstations: [],
 };
 
-describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
+/** A 1x1 PNG; the tests only need bytes the image block can carry verbatim. */
+const TINY_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+describe('MCP 2026-07-28 Stateless Streamable HTTP (12 Semantic Tools)', () => {
   const cleanups: Array<() => Promise<void>> = [];
 
   afterEach(async () => {
@@ -122,7 +126,7 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
     cleanups.length = 0;
   });
 
-  it('exposes the 11 semantic tools, handles item flow, world data includeRaw, and code/guide dispatch', async () => {
+  it('exposes the 12 semantic tools, handles item flow, world data includeRaw, and code/guide dispatch', async () => {
     const mockMc: Server = createServer((req, res) => {
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -242,6 +246,32 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
                 ],
               },
             },
+          }),
+        );
+        return;
+      }
+
+      if (url.pathname === '/api/v1/recipes/render') {
+        res.end(
+          JSON.stringify({
+            ok: true,
+            offset: 0,
+            totalKnown: false,
+            returned: 1,
+            hasMore: false,
+            format: 'png',
+            scale: 2,
+            images: [
+              {
+                viewer: 'emi',
+                categoryUid: 'minecraft:crafting',
+                categoryTitle: 'Crafting',
+                recipeId: 'minecraft:oak_planks',
+                width: 116,
+                height: 54,
+                png: TINY_PNG_BASE64,
+              },
+            ],
           }),
         );
         return;
@@ -491,7 +521,7 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
     const pkg = await import('../package.json', { with: { type: 'json' } });
     expect(discoverBody.result._meta['io.modelcontextprotocol/serverInfo']?.version).toBe(pkg.default.version);
 
-    // 2. Verify exactly 11 semantic tools are registered
+    // 2. Verify exactly 12 semantic tools are registered
     const listRes = await rpcCall(handle.url, {
       jsonrpc: '2.0',
       id: 1,
@@ -512,6 +542,7 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
       'mc_query_item_flow',
       'mc_query_recipes',
       'mc_query_world_data',
+      'mc_render_recipe',
       'mc_search_registry',
       'mc_status',
     ]);
@@ -558,6 +589,38 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (11 Semantic Tools)', () => {
     expect(recData.viewers.emi.totalKnown).toBe(false);
     expect(recData.viewers.emi.total).toBeUndefined();
     expect(recData.viewers.emi.recipes[0]?.slotGranularity).toBe('slots');
+
+    // 3b. mc_render_recipe answers the same JSON envelope in text and one MCP image block per
+    //     recipe; the picture bytes appear only in the image block, never twice.
+    const renderRes = await rpcCall(handle.url, {
+      jsonrpc: '2.0',
+      id: 21,
+      method: 'tools/call',
+      params: { name: 'mc_render_recipe', arguments: { item: 'minecraft:oak_planks' } },
+    });
+    const renderBody = JSON.parse(renderRes.body) as { result: { content: Array<Record<string, unknown>> } };
+    expect(renderBody.result.content).toHaveLength(2);
+    const renderText = JSON.parse(String(renderBody.result.content[0]!.text)) as {
+      ok: boolean;
+      returned: number;
+      totalKnown: boolean;
+      images: Array<Record<string, unknown>>;
+    };
+    expect(renderText.ok).toBe(true);
+    expect(renderText.returned).toBe(1);
+    expect(renderText.totalKnown).toBe(false);
+    expect(renderText.images[0]).toMatchObject({
+      viewer: 'emi',
+      categoryUid: 'minecraft:crafting',
+      width: 116,
+      height: 54,
+    });
+    expect(renderText.images[0]!.png).toBeUndefined();
+    expect(renderBody.result.content[1]).toMatchObject({
+      type: 'image',
+      mimeType: 'image/png',
+      data: TINY_PNG_BASE64,
+    });
 
     // 4. mc_query_item_flow aggregates the data kinds and reports item metadata under viewerInformation
     const flowRes = await rpcCall(handle.url, {

@@ -145,7 +145,7 @@ mod/common/src/main/java/net/minetake/mcinsight/
 ├── client/       # Client-only accessor (level, player, screen, language, resources)
 ├── config/       # mcinsight.json model and the resolved operator caps (Limits)
 ├── platform/     # Loader abstraction used by the common code
-├── recipe/       # Recipe manager index, viewer query semantics, viewer JSON
+├── recipe/       # Recipe manager index, viewer query semantics, viewer JSON, image rendering
 ├── registry/     # Registry index, search, inspect, tags, display names
 ├── guides/       # Guide/quest/lang index and queries
 ├── worldgen/     # Worldgen definitions and queries
@@ -157,6 +157,7 @@ mod/common/src/main/java/net/minetake/mcinsight/
 ├── status/       # Status, mods, metrics answers
 ├── player/       # Player state
 ├── reflect/      # Runtime class introspection
+├── render/       # Recipe drawing: an off-screen target on 1.21.x, the main target as scratch on 26.x
 ├── InsightHandlers.java  # Endpoint -> handler binding
 ├── McInsightCommon.java  # Lifecycle: HTTP start, cache generations, server attach/detach
 └── McInsightConstants.java
@@ -214,6 +215,7 @@ declares page bounds.
 | `registry_tag` | `/api/v1/registry/tag` | `kind`, `id`, `limit`, `offset` | LOCAL | NONE | 200 / 500 |
 | `recipes_types` | `/api/v1/recipes/types` | — | LOCAL | NONE | — |
 | `recipes_query` | `/api/v1/recipes/query` | `item`, `role`, `type`, `mod`, `source`, `limit`, `offset` | LOCAL | NONE | 40 / 100 |
+| `recipes_render` | `/api/v1/recipes/render` | `item`, `role`, `type`, `source`, `limit`, `offset`, `scale` | LOCAL | NONE | 1 / 8 |
 | `guides_list` | `/api/v1/guides/list` | `source`, `mod`, `limit`, `offset` | LOCAL | NONE | 50 / 500 |
 | `guides_search` | `/api/v1/guides/search` | `q`, `source`, `mod`, `lang`, `includeAllLang`, `limit`, `offset` | LOCAL | NONE | 20 / 50 |
 | `guides_page` | `/api/v1/guides/page` | `id` | LOCAL | NONE | — |
@@ -453,8 +455,41 @@ optional `description[]`, and `rawJson` or `pojoSnapshot`. Ingredient `type` is 
 recipes carry `recipeId`, `recipeType`, `modId`, `recipeClass`, optional `serializer`, `rawJson` or
 `pojoSnapshot`, and `resultPreview`.
 
-**`worldgen_summary`** — `hasDynamicRegistries`, `hasDataResources`, `counts` keyed by kind
-(`placed_feature`, `configured_feature`, `biome`, `structure`, `dimension_type`, `biome_modifier`).
+**`recipes_render`** — draws the recipes that match one exact `item` the way the viewer's own screen
+draws them. `role` defaults to `output` (the recipes that make the item); `type` restricts the
+search to one viewer category uid; `source` is `viewer` (default, every active viewer that can
+paint) or a viewer name, and `vanilla` is `DATA_UNAVAILABLE` because the recipe manager has no GUI
+layout to draw. `scale` is the pixel scale, `1..3` (default `2`). The answer is the uncounted page
+shape with key `images` (`totalKnown: false`, so no `total`), plus `format: "png"` and `scale`; each
+row is `viewer`, `categoryUid`, optional `categoryTitle`/`recipeId`, `width`/`height` in GUI units,
+and `png` (base64 PNG bytes). `width`/`height` are the layout size; the image is
+`width*scale` by `height*scale`. A category the viewer cannot paint is a `missing` entry, and when
+nothing at all could be drawn the first failure is returned as the response error — an empty
+`images` page must mean "no recipe matched", never "rendering is broken".
+
+The image is produced without reading the player's screen. On `1.21.x` the GUI is drawn immediately,
+so the viewer paints into a dedicated off-screen target and only that target's colour texture is
+read. On `26.x` the GUI is recorded into a render state and drawn by the engine's `GuiRenderer`,
+which only targets the main render target: that target is cleared and used as a scratch surface
+between frames, the recipe is drawn at its top-left, only that rectangle is copied out, and the next
+frame clears the target again before it draws. Nothing is read before it has been cleared and
+painted, so the result is exactly the recipe rectangle and never the player's frame.
+
+The request never blocks the client render thread on the answer. Each drawing is started by one
+short client-thread task, one drawing per frame: prepare the viewer layout, record it, and issue the
+read-back. The copy is the engine's fenced read-back, so it completes asynchronously; the thread
+answering the request waits for the pixels, then resizes and PNG-encodes them off the render thread.
+The residual render-thread cost per requested image is the layout preparation plus the fenced copy
+of the recipe rectangle (a few milliseconds, only while an image is being requested); a request for
+several images is spread across frames so no frame carries all of them. `REI` painting is `1.21.x`
+only: its `26.x` display-renderer API is not on this build's classpath, so a `26.x` REI client lists
+recipes normally but does not draw them.
+
+This is a client-only operation (the loopback server exists only on a client, and a dedicated server
+never starts it), which is why the endpoint is `LOCAL`; the player's GUI scale does not affect the
+output, because the image is resampled to the requested scale.
+
+**`worldgen_summary`** — `hasDynamicRegistries`, `hasDataResources`, `counts` keyed by kind(`placed_feature`, `configured_feature`, `biome`, `structure`, `dimension_type`, `biome_modifier`).
 Registry-backed kinds are counted only when the session has dynamic registries, and `biome_modifier`
 only when it has datapack resources on a loader that defines biome modifiers; a kind that cannot be
 counted here is absent from `counts` instead of appearing as `0`.
@@ -548,6 +583,11 @@ JEI, EMI, and REI are adapters over `ViewerModel`:
 - An adapter is compiled only into the versions whose build pins its dependency: EMI has no `26.x`
   release, so those builds carry no EMI bridge and no EMI entrypoint. Adding a `deps.emi` pin for a
   version is what brings it back — nothing about the adapter is version-conditional in the source.
+- An adapter may also implement `painter()`: it returns the viewer's own way of drawing a recipe
+  (`createRecipeLayoutDrawable` for JEI, `addWidgets` for EMI, `getDisplayRenderer` for REI), or
+  `null` when that viewer cannot draw. The recipe model keeps the viewer's own recipe object as an
+  unlisted `nativeRecipe` field purely so the adapter that produced it can find it again; it is never
+  serialized. `ViewerJson` and the query semantics know nothing about painting.
 
 ---
 
@@ -700,7 +740,7 @@ Parser tiers:
   decompilation (Vineflower is downloaded into a tools directory and verified by SHA-256), and JVM
   class reflection through the mod's `introspect_class`.
 
-The 11 tools (names unchanged):
+The 12 tools (names unchanged):
 
 | Tool | Purpose |
 |---|---|
@@ -711,6 +751,7 @@ The 11 tools (names unchanged):
 | `mc_inspect` | Registry entry metadata (`defaultComponents`, `foodProperties`, `blockInfo`, `viewerInformation`) or a tag's members |
 | `mc_query_item_flow` | Cross-query recipes (input/output/catalyst roles), loot, trades, data maps, and registry metadata for one exact id; unreadable parts appear under `missing` with `partial: true` |
 | `mc_query_recipes` | List recipe types/viewer categories/built-in parsers (`listTypes=true`), or query recipes by exact item, role, type, mod, and source |
+| `mc_render_recipe` | Draw the recipes that make an exact item, as the viewer draws them, and return one MCP image block per recipe beside the same answer as text |
 | `mc_query_world_data` | Worldgen kinds (with biome temperature filters), loot, trades, and NeoForge data maps |
 | `mc_query_advancements` | Advancement definitions, triggers, rewards, and live progress when the world owner allows it |
 | `mc_guides` | Search, list, or read Patchouli/GuideME/FTB Quests/Ponder/Oracle/lang documents |
@@ -719,6 +760,9 @@ The 11 tools (names unchanged):
 Tool arguments are MCP-facing names (`query`, `modId`, `target`, `direction`, …); each data module maps
 them to the endpoint's parameter names (`q`, `mod`, `id`, …). A tool result is always a JSON object
 with `ok`; failures are `{ok: false, code, error}` with the mod's code when the mod answered.
+`mc_render_recipe` is the one tool whose result also carries MCP image blocks: the text block keeps
+the same JSON envelope (with the picture bytes removed), and each image block is the same answer
+drawn. A client that does not render images therefore loses nothing but the picture.
 
 ---
 
@@ -816,7 +860,8 @@ server over Streamable HTTP, the way an agent would.
   (every Minecraft version, loader and scenario). `--version`, `--loader` and `--list` narrow or print them.
 - **Mod set.** By default the runs load only McInsight, the harness, and JEI (the viewer the real game
   would have), so a run is deterministic. `--extra-mods <dir>` adds every jar in that directory to the
-  e2e runs for a local experiment; it is refused under `CI`.
+  e2e runs for a local experiment; it is refused under `CI`. A run whose extra mods replace the
+  viewer sets `MCINSIGHT_E2E_VIEWERS` (comma-separated) so the startup wait expects what it loaded.
 - **JEI version.** Both loaders' e2e runs load the JEI build the mod compiles against (`jei` in
   `mod/stonecutter.properties.toml`), so the bridge is exercised against the API it was written for.
 - **CI.** `.github/workflows/e2e.yml` runs the `quick` preset on pull requests and pushes. A

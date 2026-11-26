@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `recipes_render` (`GET /api/v1/recipes/render`) and the `mc_render_recipe` tool: the mod draws a recipe with the viewer's own renderer (JEI's recipe layout drawable, EMI's widgets, REI's display renderer) into an off-screen target and answers a base64 PNG, so an assistant can show the machine or crafting GUI instead of only listing its slots. The MCP result carries one image block per recipe beside the same JSON envelope (the picture bytes appear only in the image block), bounded by `limit` (`1..8`) and `scale` (`1..3`); a category the viewer cannot draw is reported per recipe under `missing`, and nothing drawable is an error rather than an empty success
+- `ViewerModel.Recipe` keeps the viewer's own recipe object (`nativeRecipe`) so the adapter that produced a recipe can paint it; it is never serialized and no query semantics read it
+- E2E: the rendered PNG is written to the scenario's run directory, and every active viewer must draw through its own category
+
+### Changed
+- The MCP server exposes twelve tools; the other `mc_*` names are unchanged
+- The README's "no screen capture" claim still holds and now says why: the diagram is drawn from the recipe layout, never cropped from the display. On `26.x`, where the engine's GUI renderer only targets the main render target, that target is cleared and used as a scratch surface between frames: only the recipe rectangle is read, and the frame that follows clears it before drawing. Each requested image costs one short client-thread task (one drawing per frame, PNG encoding off the render thread), so several images never land on one frame
+- REI painting is `1.21.x` only: its `26.x` display-renderer API is not on this build's classpath, so a `26.x` REI client lists recipes but does not draw them
+
+## [Unreleased]
+
 ### Changed
 - The e2e runner runs scenarios in parallel (`--jobs`, default one per four hardware threads, at most four), prints each job's checks under a `<version>/<loader>/<scenario>` prefix, and reports how long each scenario and the whole run took
 - The e2e runner no longer waits 30 s for a client that ignores `stop`: it closes the client's window (a `WM_CLOSE` on Windows, `SIGTERM` elsewhere) and only kills what outlives its deadline, so every scenario ends in a second or two

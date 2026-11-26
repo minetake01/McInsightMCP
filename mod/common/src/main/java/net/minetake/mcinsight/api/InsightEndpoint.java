@@ -32,6 +32,8 @@ public enum InsightEndpoint {
     RECIPES_TYPES("recipes_types", "/api/v1/recipes/types", DataScope.LOCAL, PlayerScope.NONE, 10_000, Set.of()),
     RECIPES_QUERY("recipes_query", "/api/v1/recipes/query", DataScope.LOCAL, PlayerScope.NONE, 10_000,
         Set.of("item", "role", "type", "mod", "source", "limit", "offset"), 40, 100),
+    RECIPES_RENDER("recipes_render", "/api/v1/recipes/render", DataScope.LOCAL, PlayerScope.NONE, 20_000,
+        Set.of("item", "role", "type", "source", "limit", "offset", "scale"), 1, 8),
 
     GUIDES_LIST("guides_list", "/api/v1/guides/list", DataScope.LOCAL, PlayerScope.NONE, 5_000,
         Set.of("source", "mod", "limit", "offset"), 50, 500),

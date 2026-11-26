@@ -33,10 +33,13 @@ import mezz.jei.api.runtime.IJeiRuntime;
 import net.minetake.mcinsight.api.InsightError;
 import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.client.ClientStateAccessor;
+import net.minetake.mcinsight.compat.IRecipePainter;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
+import net.minetake.mcinsight.compat.RecipeGraphics;
 import net.minetake.mcinsight.compat.ViewerModel;
 import net.minetake.mcinsight.game.Versioned;
 import net.minetake.mcinsight.serial.JsonCodec;
+import net.minecraft.client.renderer.Rect2i;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.FormattedText;
 import net.minecraft.resources.RegistryOps;
@@ -117,6 +120,11 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
             : workstations(resolved);
         RegistryOps<JsonElement> ops = jsonOps();
         return recipesOf(resolved, workstations, ops);
+    }
+
+    @Override
+    public IRecipePainter painter() {
+        return this::prepare;
     }
 
     @Override
@@ -238,8 +246,71 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
             rawJson,
             rawJson == null ? JsonCodec.snapshotObject(recipe, 3, ops) : null,
             description,
-            slots.granularity()
+            slots.granularity(),
+            handle(category, recipe)
         );
+    }
+
+    /**
+     * The pair a painting needs: the category knows how to draw, the recipe object knows what.
+     *
+     * <p>The generic parameter is erased either way; keeping the pair in one handle is what lets a
+     * {@link ViewerModel.Recipe} be painted by the adapter that produced it.
+     */
+    @SuppressWarnings("unchecked")
+    private static <T> RecipeHandle handle(IRecipeCategory<T> category, T recipe) {
+        return new RecipeHandle((IRecipeCategory<Object>) category, recipe);
+    }
+
+    private record RecipeHandle(IRecipeCategory<Object> category, Object recipe) {}
+
+    /**
+     * Builds the drawable JEI would show and measures it.
+     *
+     * <p>This must run on the client render thread: JEI's layout creation is not guaranteed to be
+     * usable anywhere else, and the caller measures before allocating the target.
+     */
+    private IRecipePainter.Painting prepare(ViewerModel.Recipe recipe) {
+        if (!(recipe.nativeRecipe() instanceof RecipeHandle handle)) {
+            return null;
+        }
+        return prepareTyped(handle.category(), handle.recipe());
+    }
+
+    private <T> IRecipePainter.Painting prepareTyped(IRecipeCategory<T> category, T recipe) {
+        IFocusGroup focuses = requireRuntime().getJeiHelpers().getFocusFactory().getEmptyFocusGroup();
+        Optional<IRecipeLayoutDrawable<T>> layout =
+            requireRuntime().getRecipeManager().createRecipeLayoutDrawable(category, recipe, focuses);
+        if (layout.isEmpty()) {
+            return null;
+        }
+        IRecipeLayoutDrawable<T> drawable = layout.get();
+        Rect2i rect = drawable.getRect();
+        int width = Math.max(1, rect.getWidth());
+        int height = Math.max(1, rect.getHeight());
+        return new IRecipePainter.Painting() {
+            @Override
+            public int width() {
+                return width;
+            }
+
+            @Override
+            public int height() {
+                return height;
+            }
+
+            @Override
+            public void paint(RecipeGraphics graphics) {
+                drawable.setPosition(0, 0);
+                //? if >=26.1 {
+                /*drawable.drawRecipe(graphics.extractor(), -1, -1);
+                drawable.drawOverlays(graphics.extractor(), -1, -1);
+                *///? } else {
+                drawable.drawRecipe(graphics.gui(), -1, -1);
+                drawable.drawOverlays(graphics.gui(), -1, -1);
+                //? }
+            }
+        };
     }
 
     private static <T> ResourceLocation registeredName(IRecipeCategory<T> category, T recipe) {

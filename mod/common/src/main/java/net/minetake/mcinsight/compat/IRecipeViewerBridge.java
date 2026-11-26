@@ -21,4 +21,12 @@ public interface IRecipeViewerBridge {
     List<ViewerModel.Recipe> recipesOf(ViewerModel.Category category);
 
     List<String> getIngredientInfo(String ingredientId);
+
+    /**
+     * The viewer's ability to draw a recipe the way its own screen does, or {@code null} when this
+     * viewer cannot paint. A viewer that cannot draw is still a valid source of recipe data.
+     */
+    default IRecipePainter painter() {
+        return null;
+    }
 }

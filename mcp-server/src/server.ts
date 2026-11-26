@@ -4,6 +4,7 @@ import { JarInspector } from './decompiler/jarInspector.js';
 import { registerCodeTools } from './tools/codeTools.js';
 import { registerGuideTools } from './tools/guideTools.js';
 import { registerMechanicsTools } from './tools/mechanicsTools.js';
+import { registerRecipeImageTools } from './tools/recipeImageTools.js';
 import { registerRegistryTools } from './tools/registryTools.js';
 import { registerWorldStateTools } from './tools/worldStateTools.js';
 import { readPackageVersion } from './version.js';
@@ -24,6 +25,7 @@ export function createMcInsightServer(deps: ServerDeps): McpServer {
   registerWorldStateTools(server, deps.mcClient);
   registerRegistryTools(server, deps.mcClient);
   registerMechanicsTools(server, deps.mcClient);
+  registerRecipeImageTools(server, deps.mcClient);
   registerGuideTools(server, deps.mcClient);
   registerCodeTools(server, {
     mcClient: deps.mcClient,

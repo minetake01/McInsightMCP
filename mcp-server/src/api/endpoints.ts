@@ -20,6 +20,7 @@ import type {
   McModsResponse,
   McStatusResponse,
   RecipesQueryResponse,
+  RecipesRenderResponse,
   RecipesTypesResponse,
   RegistryInspectResponse,
   RegistrySearchResponse,
@@ -42,6 +43,7 @@ export type EndpointId =
   | 'registry_tag'
   | 'recipes_types'
   | 'recipes_query'
+  | 'recipes_render'
   | 'guides_list'
   | 'guides_search'
   | 'guides_page'
@@ -143,6 +145,17 @@ export const ENDPOINTS = {
     params: ['item', 'role', 'type', 'mod', 'source', 'limit', 'offset'],
     defaultLimit: 40,
     maxLimit: 100,
+  }),
+  recipes_render: endpoint<
+    'recipes_render',
+    'item' | 'role' | 'type' | 'source' | 'limit' | 'offset' | 'scale',
+    RecipesRenderResponse
+  >({
+    id: 'recipes_render',
+    path: '/api/v1/recipes/render',
+    params: ['item', 'role', 'type', 'source', 'limit', 'offset', 'scale'],
+    defaultLimit: 1,
+    maxLimit: 8,
   }),
   guides_list: endpoint<'guides_list', 'source' | 'mod' | 'limit' | 'offset', GuideListResponse>({
     id: 'guides_list',

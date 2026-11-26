@@ -124,8 +124,15 @@ async function multiplayer(ctx, { serverHasMod }) {
   return { url, client, server };
 }
 
-/** The recipe viewers the e2e runs load (see the e2e dependencies in the loader build scripts). */
-const EXPECTED_VIEWERS = ['jei'];
+/**
+ * The recipe viewers the e2e runs load (see the e2e dependencies in the loader build scripts).
+ *
+ * <p>MCINSIGHT_E2E_VIEWERS overrides the list for a local `--extra-mods` experiment (for example
+ * `rei` when only REI is installed), so the wait matches what that run actually loaded.
+ */
+const EXPECTED_VIEWERS = process.env.MCINSIGHT_E2E_VIEWERS
+  ? process.env.MCINSIGHT_E2E_VIEWERS.split(',').map((name) => name.trim()).filter(Boolean)
+  : ['jei'];
 
 /**
  * Waits until the recipe viewers the run loads are active.
@@ -202,7 +209,7 @@ export async function runScenario({ name, loader, specs, workRoot, entry, suites
     const reports = [];
     for (const suite of suites) {
       reports.push(
-        await runSuite(suite, { mcp: mcp.client, url: started.url, loader, scenario: name, server: started.server, log }),
+        await runSuite(suite, { mcp: mcp.client, url: started.url, loader, scenario: name, server: started.server, workDir, log }),
       );
     }
     return { workDir, reports };

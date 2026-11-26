@@ -59,7 +59,13 @@ public final class ViewerModel {
         JsonElement rawJson,
         JsonElement pojoSnapshot,
         List<String> description,
-        SlotGranularity slotGranularity
+        SlotGranularity slotGranularity,
+        /**
+         * The viewer's own recipe object, so that viewer can paint the recipe the way its screen
+         * does. It is an implementation handle, never serialized, and must be treated as owned by
+         * the adapter that produced it.
+         */
+        Object nativeRecipe
     ) {}
 
     /**

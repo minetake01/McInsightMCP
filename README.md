@@ -11,6 +11,7 @@ McInsightMCP connects MCP-compatible AI assistants (Claude Desktop, Cursor, Clau
 ## What You Can Ask
 
 - *"How do I craft `mekanism:atomic_alloy` in this modpack, and do I have the materials in my inventory?"*
+- *"Show me the crafting recipe for `minecraft:oak_planks` as a picture."*
 - *"What is this machine I'm looking at, and why isn't it running?"*
 - *"At what Y-level and in which biomes does osmium or platinum ore generate in this pack?"*
 - *"Search Patchouli, FTB Quests, Create Ponder, or GuideME for how to automate this resource."*
@@ -19,8 +20,9 @@ McInsightMCP connects MCP-compatible AI assistants (Claude Desktop, Cursor, Clau
 ## Features
 
 - **Accurate to Your Modpack**: Reads live recipes, KubeJS and datapack overrides, ore generation, loot tables, villager trades, and advancements straight from your running game.
+- **Recipe Diagrams**: Draws a recipe the way its in-game viewer draws it—the machine or crafting GUI, its slots, and its arrows—and returns the image, so the assistant can show the recipe instead of describing it (JEI on every supported version; EMI and REI on `1.21.1`).
 - **Read-Only and Safe**: Never breaks or places blocks, edits your world, moves your player, or runs commands.
-- **Local-Only and Private**: Communicates strictly over `127.0.0.1` on your machine—no external servers, no telemetry, and no screen capture.
+- **Local-Only and Private**: Communicates strictly over `127.0.0.1` on your machine—no external servers, no telemetry, and no screen capture. Recipe diagrams are drawn off-screen from the recipe layout, never cropped from your display.
 - **Singleplayer and Multiplayer**: Works client-only on multiplayer servers for recipes, inventory, what you are looking at, and guides. In singleplayer—or when the server also has McInsight installed—it also reads server-side data such as ore/world generation, loot tables, villager trades, advancement progress, NeoForge data maps, and block-entity contents (chests and machines).
 - **Works With Any Modpack**: Automatically integrates with supported recipe viewers and guide mods, and can inspect mod resources or decompile mod classes when docs are missing.
 

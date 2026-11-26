@@ -21,6 +21,7 @@ import me.shedaniel.rei.plugin.common.displays.DefaultInformationDisplay;
 import net.minetake.mcinsight.api.InsightError;
 import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.client.ClientStateAccessor;
+import net.minetake.mcinsight.compat.IRecipePainter;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
 import net.minetake.mcinsight.compat.ViewerModel;
 import net.minetake.mcinsight.game.Versioned;
@@ -113,13 +114,26 @@ public final class ReiBridgeImpl implements IRecipeViewerBridge {
         List<ViewerModel.Recipe> out = new ArrayList<>();
         for (Display display : displays) {
             try {
-                out.add(translate(displayRegistry, uid, categoryTitle, display, workstations, ops));
+                out.add(translate(displayRegistry, uid, categoryTitle, configuration, display, workstations, ops));
             } catch (Exception ignored) {
                 // One unreadable display must not remove the rest of the category.
             }
         }
         return List.copyOf(out);
     }
+
+    //? if >=26.1 {
+    /*@Override
+    public IRecipePainter painter() {
+        // REI's 26.x display-renderer API is not on this build's classpath; painting stays on 1.21.x.
+        return null;
+    }
+    *///? } else {
+    @Override
+    public IRecipePainter painter() {
+        return ReiPainter.INSTANCE;
+    }
+    //? }
 
     @Override
     public List<String> getIngredientInfo(String ingredientId) {
@@ -218,6 +232,7 @@ public final class ReiBridgeImpl implements IRecipeViewerBridge {
         DisplayRegistry displayRegistry,
         ResourceLocation categoryUid,
         String categoryTitle,
+        CategoryRegistry.CategoryConfiguration<?> configuration,
         Display display,
         List<ViewerModel.Ingredient> workstations,
         RegistryOps<JsonElement> ops
@@ -246,7 +261,12 @@ public final class ReiBridgeImpl implements IRecipeViewerBridge {
             rawJson,
             rawJson == null ? JsonCodec.snapshotObject(display, 3, ops) : null,
             description,
-            ViewerModel.SlotGranularity.SLOTS
+            ViewerModel.SlotGranularity.SLOTS,
+            //? if >=26.1 {
+            /*null
+            *///? } else {
+            ReiPainter.handle(configuration, display)
+            //? }
         );
     }
 

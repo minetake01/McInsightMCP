@@ -10,6 +10,8 @@ import dev.emi.emi.api.recipe.EmiRecipeCategory;
 import dev.emi.emi.api.recipe.EmiRecipeManager;
 import dev.emi.emi.api.stack.EmiIngredient;
 import dev.emi.emi.api.stack.EmiStack;
+import dev.emi.emi.api.widget.Widget;
+import dev.emi.emi.api.widget.WidgetHolder;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -19,7 +21,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import net.minetake.mcinsight.api.InsightError;
 import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.client.ClientStateAccessor;
+import net.minetake.mcinsight.compat.IRecipePainter;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
+import net.minetake.mcinsight.compat.RecipeGraphics;
 import net.minetake.mcinsight.compat.ViewerModel;
 import net.minetake.mcinsight.serial.JsonCodec;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -116,6 +120,11 @@ public final class EmiBridgeImpl implements IRecipeViewerBridge {
     }
 
     @Override
+    public IRecipePainter painter() {
+        return this::prepare;
+    }
+
+    @Override
     public List<String> getIngredientInfo(String ingredientId) {
         if (ingredientId == null || ingredientId.isBlank()) {
             return List.of();
@@ -204,8 +213,65 @@ public final class EmiBridgeImpl implements IRecipeViewerBridge {
             rawJson,
             rawJson == null ? JsonCodec.snapshotObject(recipe, 3, ops) : null,
             description,
-            ViewerModel.SlotGranularity.SLOTS
+            ViewerModel.SlotGranularity.SLOTS,
+            new RecipeHandle(recipe)
         );
+    }
+
+    private record RecipeHandle(EmiRecipe recipe) {}
+
+    /**
+     * Builds the widgets EMI would show and measures the display.
+     *
+     * <p>EMI positions each widget in the recipe's own display coordinates while the recipe adds
+     * them, so a holder that only collects them is enough: rendering a widget paints it where EMI
+     * placed it. Runs on the client render thread.
+     */
+    private IRecipePainter.Painting prepare(ViewerModel.Recipe recipe) {
+        if (!(recipe.nativeRecipe() instanceof RecipeHandle handle)) {
+            return null;
+        }
+        EmiRecipe emi = handle.recipe();
+        int width = Math.max(1, emi.getDisplayWidth());
+        int height = Math.max(1, emi.getDisplayHeight());
+        List<Widget> widgets = new ArrayList<>();
+        WidgetHolder holder = new WidgetHolder() {
+            @Override
+            public int getWidth() {
+                return width;
+            }
+
+            @Override
+            public int getHeight() {
+                return height;
+            }
+
+            @Override
+            public <T extends Widget> T add(T widget) {
+                widgets.add(widget);
+                return widget;
+            }
+        };
+        emi.addWidgets(holder);
+        List<Widget> painted = List.copyOf(widgets);
+        return new IRecipePainter.Painting() {
+            @Override
+            public int width() {
+                return width;
+            }
+
+            @Override
+            public int height() {
+                return height;
+            }
+
+            @Override
+            public void paint(RecipeGraphics graphics) {
+                for (Widget widget : painted) {
+                    widget.render(graphics.gui(), -1, -1, 0.0F);
+                }
+            }
+        };
     }
 
     private static ResourceLocation recipeId(EmiRecipe recipe) {

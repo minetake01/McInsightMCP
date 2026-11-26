@@ -8,6 +8,7 @@ import net.minetake.mcinsight.guides.GuideQuery;
 import net.minetake.mcinsight.loot.LootQuery;
 import net.minetake.mcinsight.player.PlayerStateCollector;
 import net.minetake.mcinsight.recipe.RecipeCollector;
+import net.minetake.mcinsight.recipe.RecipeImageQuery;
 import net.minetake.mcinsight.reflect.ClassIntrospector;
 import net.minetake.mcinsight.registry.EntryInspector;
 import net.minetake.mcinsight.registry.RegistrySearch;
@@ -44,6 +45,7 @@ public final class InsightHandlers {
 
         InsightDispatcher.register(InsightEndpoint.RECIPES_TYPES, RecipeCollector::listTypes);
         InsightDispatcher.register(InsightEndpoint.RECIPES_QUERY, RecipeCollector::query);
+        InsightDispatcher.register(InsightEndpoint.RECIPES_RENDER, RecipeImageQuery::render);
 
         InsightDispatcher.register(InsightEndpoint.GUIDES_LIST, GuideQuery::list);
         InsightDispatcher.register(InsightEndpoint.GUIDES_SEARCH, GuideQuery::search);

@@ -278,6 +278,36 @@ export interface RecipesTypesResponse {
   viewers: Record<string, ViewerCategories>;
 }
 
+/**
+ * One recipe drawn the way its viewer draws it.
+ *
+ * <p>`png` is the base64 PNG the mod produced off-screen; it is the diagram itself, not a
+ * screenshot of the player's screen.
+ */
+export interface RecipeImage {
+  viewer: string;
+  categoryUid: string;
+  categoryTitle?: string;
+  recipeId?: string;
+  width: number;
+  height: number;
+  png: string;
+}
+
+/** Recipes rendered to images (`RecipeImageQuery`). A page whose images are the rows. */
+export interface RecipesRenderResponse {
+  ok: true;
+  offset: number;
+  totalKnown: false;
+  returned: number;
+  hasMore: boolean;
+  format: 'png';
+  scale: number;
+  images: RecipeImage[];
+  partial?: true;
+  missing?: Array<{ part: string; code: ApiErrorCode; error: string }>;
+}
+
 /* ------------------------------------------------------------------------- *
  * Guides
  * ------------------------------------------------------------------------- */

@@ -6,6 +6,8 @@
  * scenario placed there (see WORLD_SETUP in scenarios.mjs), so they hold on every loader.
  */
 import { Report, eventually, expect, failsWith, ok, page } from './check.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const SUITES = {
   /** What the session is, and that removed fields stay removed. */
@@ -59,8 +61,7 @@ const SUITES = {
   },
 
   /** Recipes from the recipe manager and the viewer, matched by exact id. */
-  async recipes(r, { mcp }) {
-    await r.check('an output query returns only that item', async () => {
+  async recipes(r, { mcp, workDir }) {    await r.check('an output query returns only that item', async () => {
       const res = ok(await mcp.call('mc_query_recipes', { item: 'minecraft:oak_planks', role: 'output', source: 'vanilla', limit: 50 }));
       const v = page(res.vanilla, 'recipes');
       const others = v.recipes.filter((rec) => rec.resultPreview?.id && rec.resultPreview.id !== 'minecraft:oak_planks');
@@ -87,6 +88,59 @@ const SUITES = {
       const res = ok(await mcp.call('mc_query_recipes', { listTypes: true }));
       expect(res.recipeTypes.length > 0, 'no recipe types');
       return `${res.recipeTypes.length} types, viewers=${Object.keys(res.viewers).join(',')}`;
+    });
+    await r.check('a recipe renders to a displayable PNG', async () => {
+      const result = await mcp.rpc('tools/call', {
+        name: 'mc_render_recipe',
+        arguments: { item: 'minecraft:oak_planks', limit: 1 },
+      });
+      const content = result.content ?? [];
+      const envelope = JSON.parse(content.find((part) => part.type === 'text')?.text ?? '{}');
+      ok(envelope);
+      expect(envelope.returned > 0, 'no image was rendered');
+      expect(envelope.totalKnown === false && typeof envelope.offset === 'number', 'not a page of images');
+      const first = envelope.images[0];
+      expect(first.width > 0 && first.height > 0, 'the image has no size');
+      expect(!('png' in first), 'the text block repeats the picture bytes');
+      const image = content.find((part) => part.type === 'image');
+      expect(image, 'no MCP image block');
+      expect(image.mimeType === 'image/png', `mimeType=${image.mimeType}`);
+      const bytes = Buffer.from(image.data, 'base64');
+      const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      expect(bytes.subarray(0, 8).equals(signature), 'the image block does not carry a PNG');
+      // IHDR is the first chunk: width and height are big-endian 32-bit at offsets 16 and 20.
+      const pixelWidth = bytes.readUInt32BE(16);
+      const pixelHeight = bytes.readUInt32BE(20);
+      expect(pixelWidth === first.width * envelope.scale, `PNG width ${pixelWidth} vs ${first.width}x${envelope.scale}`);
+      expect(pixelHeight === first.height * envelope.scale, `PNG height ${pixelHeight} vs ${first.height}x${envelope.scale}`);
+      expect(bytes.length > 200, `the image is degenerate (${bytes.length} bytes)`);
+      // Keep the picture with the run's logs: a diagram no one looked at is not a verified diagram.
+      if (workDir) fs.writeFileSync(path.join(workDir, 'rendered-recipe.png'), bytes);
+      return `${first.categoryUid} ${pixelWidth}x${pixelHeight}, ${bytes.length} bytes`;
+    });
+    await r.check('every active viewer draws through its own category', async () => {
+      const types = ok(await mcp.call('mc_query_recipes', { listTypes: true }));
+      const viewers = types.activeViewers ?? [];
+      expect(viewers.length > 0, 'no viewer is active, so nothing can draw');
+      const drawn = [];
+      for (const viewer of viewers) {
+        const result = await mcp.rpc('tools/call', {
+          name: 'mc_render_recipe',
+          arguments: { item: 'minecraft:oak_planks', limit: 1, source: viewer },
+        });
+        const content = result.content ?? [];
+        const envelope = JSON.parse(content.find((part) => part.type === 'text')?.text ?? '{}');
+        ok(envelope);
+        expect(envelope.returned > 0, `${viewer} drew nothing`);
+        expect(envelope.images[0].viewer === viewer, `${viewer} answered as ${envelope.images[0].viewer}`);
+        const imageBlock = content.find((part) => part.type === 'image');
+        expect(imageBlock, `${viewer} returned no image block`);
+        if (workDir) {
+          fs.writeFileSync(path.join(workDir, `rendered-recipe-${viewer}.png`), Buffer.from(imageBlock.data, 'base64'));
+        }
+        drawn.push(`${viewer}: ${envelope.images[0].width}x${envelope.images[0].height}`);
+      }
+      return drawn.join(', ');
     });
   },
 
@@ -176,9 +230,10 @@ const SUITES = {
 
   /** Contract checks that do not depend on the world. */
   async contract(r, { mcp }) {
-    await r.check('tools/list exposes the 11 tools', async () => {
+    await r.check('tools/list exposes the 12 tools', async () => {
       const res = await mcp.rpc('tools/list');
-      expect(res.tools.length === 11, `got ${res.tools.length}`);
+      expect(res.tools.length === 12, `got ${res.tools.length}`);
+      expect(res.tools.some((tool) => tool.name === 'mc_render_recipe'), 'mc_render_recipe is missing');
     });
     await r.check('a limit above the endpoint maximum is rejected', async () => {
       failsWith(await mcp.call('mc_query_world_data', { kind: 'loot', limit: 500 }), 'INVALID_PARAMETER');

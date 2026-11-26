@@ -23,3 +23,26 @@ export function toolResult(handler: () => Promise<object>) {
     (error: unknown) => jsonText(toFailure(error)),
   );
 }
+
+/**
+ * A result that carries images beside its JSON text.
+ *
+ * <p>The text block keeps the same envelope as every other tool, so a client that does not render
+ * images still receives the answer; the image blocks are the same answer in its visual form, never
+ * a second source of truth. Image data is never repeated in the text block.
+ */
+export function imageResult(
+  summary: object,
+  images: readonly { data: string; mimeType: string }[],
+) {
+  return {
+    content: [
+      { type: 'text' as const, text: JSON.stringify({ ...(summary as Record<string, unknown>), ok: true }) },
+      ...images.map((image) => ({
+        type: 'image' as const,
+        data: image.data,
+        mimeType: image.mimeType,
+      })),
+    ],
+  };
+}
