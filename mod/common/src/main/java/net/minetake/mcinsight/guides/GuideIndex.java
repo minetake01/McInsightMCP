@@ -1,6 +1,8 @@
 package net.minetake.mcinsight.guides;
 
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -43,7 +45,9 @@ public final class GuideIndex {
     private static final int MAX_CACHED_LANG_FILES = 256;
     private static final long MAIN_THREAD_TIMEOUT_MS = 10_000L;
 
-    private static final GenerationalCache<GuideIndex> CACHE = new GenerationalCache<>(CacheGenerations::resource);
+    private static final GenerationalCache<GuideIndex> CACHE = new GenerationalCache<>(GenerationalCache.Scope.BOTH);
+
+    public record ContentRead(String text, boolean truncated) {}
 
     /** Where a document's bytes live. */
     public enum Layout {
@@ -79,7 +83,7 @@ public final class GuideIndex {
     private final String language;
     private final ResourceManager assetResources;
     private final ResourceManager dataResources;
-    private final Map<String, String> contentCache = newLru(MAX_CACHED_PAGES);
+    private final Map<String, ContentRead> contentCache = newLru(MAX_CACHED_PAGES);
     private final Map<String, String> lowerContentCache = newLru(MAX_CACHED_PAGES);
     private final Map<String, List<LangEntries.Entry>> langCache = newLru(MAX_CACHED_LANG_FILES);
     private final Map<String, List<LangEntries.Entry>> allLangCache = newLru(MAX_CACHED_LANG_FILES);
@@ -140,13 +144,19 @@ public final class GuideIndex {
 
     /** The raw text of one document, or {@code null} when it cannot be read. */
     public String content(Entry entry) {
+        ContentRead read = readContent(entry);
+        return read != null ? read.text() : null;
+    }
+
+    /** The raw text plus truncation status of one document, or {@code null} when unreadable. */
+    public ContentRead readContent(Entry entry) {
         if (!entry.isLang()) {
-            String cached = contentCache.get(entry.id());
+            ContentRead cached = contentCache.get(entry.id());
             if (cached != null) {
                 return cached;
             }
         }
-        String loaded = read(entry);
+        ContentRead loaded = read(entry);
         if (!entry.isLang() && loaded != null) {
             contentCache.put(entry.id(), loaded);
         }
@@ -318,7 +328,7 @@ public final class GuideIndex {
         return List.copyOf(found.values());
     }
 
-    private String read(Entry entry) {
+    private ContentRead read(Entry entry) {
         try {
             if (entry.layout() == Layout.FILE && entry.file() != null) {
                 try (BufferedReader reader = Files.newBufferedReader(entry.file(), StandardCharsets.UTF_8)) {
@@ -329,14 +339,40 @@ public final class GuideIndex {
             if (resources == null || entry.location() == null) {
                 return null;
             }
+            if (entry.isLang()) {
+                List<Resource> stack = resources.getResourceStack(entry.location());
+                if (stack.isEmpty()) {
+                    return null;
+                }
+                if (stack.size() == 1) {
+                    try (InputStream stream = stack.getFirst().open();
+                         BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                        return readBounded(reader, MAX_LANG_CHARS, entry.id());
+                    }
+                }
+                JsonObject merged = new JsonObject();
+                for (Resource layer : stack) {
+                    try (InputStream stream = layer.open();
+                         BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                        JsonElement parsed = JsonParser.parseReader(reader);
+                        if (parsed != null && parsed.isJsonObject()) {
+                            for (Map.Entry<String, JsonElement> kv : parsed.getAsJsonObject().entrySet()) {
+                                merged.add(kv.getKey(), kv.getValue());
+                            }
+                        }
+                    } catch (Exception ignored) {
+                        // A malformed override layer must not drop lower-priority translations.
+                    }
+                }
+                return new ContentRead(merged.toString(), false);
+            }
             Optional<Resource> resource = resources.getResource(entry.location());
             if (resource.isEmpty()) {
                 return null;
             }
-            int maxChars = entry.isLang() ? MAX_LANG_CHARS : MAX_PAGE_CHARS;
             try (InputStream stream = resource.get().open();
                  BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
-                return readBounded(reader, maxChars, entry.id());
+                return readBounded(reader, MAX_PAGE_CHARS, entry.id());
             }
         } catch (Exception e) {
             McInsightConstants.LOG.warn("Failed reading guide entry '{}': {}", entry.id(), e.getMessage());
@@ -344,7 +380,7 @@ public final class GuideIndex {
         }
     }
 
-    private static String readBounded(BufferedReader reader, int maxChars, String label) throws Exception {
+    private static ContentRead readBounded(BufferedReader reader, int maxChars, String label) throws Exception {
         StringBuilder builder = new StringBuilder(4096);
         char[] buffer = new char[8192];
         int remaining = maxChars;
@@ -356,10 +392,11 @@ public final class GuideIndex {
             builder.append(buffer, 0, read);
             remaining -= read;
         }
-        if (remaining == 0 && reader.read() != -1) {
+        boolean truncated = remaining == 0 && reader.read() != -1;
+        if (truncated) {
             McInsightConstants.LOG.warn("Guide resource '{}' exceeded {} chars and was truncated.", label, maxChars);
         }
-        return builder.toString();
+        return new ContentRead(builder.toString(), truncated);
     }
 
     private static <V> Map<String, V> newLru(int maxSize) {

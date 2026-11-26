@@ -2,10 +2,15 @@ package net.minetake.mcinsight.reflect;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.RecordComponent;
+import java.lang.reflect.Type;
 import java.security.CodeSource;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import net.minetake.mcinsight.api.InsightError;
 import net.minetake.mcinsight.api.InsightException;
@@ -69,6 +74,9 @@ public final class ClassIntrospector {
         if (type.isEnum()) {
             out.addProperty("isEnum", true);
         }
+        if (type.isRecord()) {
+            out.addProperty("isRecord", true);
+        }
         if (Modifier.isAbstract(type.getModifiers())) {
             out.addProperty("isAbstract", true);
         }
@@ -88,37 +96,134 @@ public final class ClassIntrospector {
             out.add("codeSource", source);
         }
 
-        JsonArray fields = new JsonArray();
-        for (Field field : type.getDeclaredFields()) {
-            if (field.isSynthetic()) {
-                continue;
+        if (type.isEnum()) {
+            Object[] constants = type.getEnumConstants();
+            if (constants != null) {
+                JsonArray enumConstants = new JsonArray();
+                for (Object constant : constants) {
+                    enumConstants.add(constant instanceof Enum<?> e ? e.name() : String.valueOf(constant));
+                }
+                out.add("enumConstants", enumConstants);
             }
-            JsonObject described = new JsonObject();
-            described.addProperty("name", field.getName());
-            described.addProperty("type", field.getType().getName());
-            described.addProperty("modifiers", Modifier.toString(field.getModifiers()));
-            fields.add(described);
+        }
+
+        if (type.isRecord()) {
+            RecordComponent[] components = type.getRecordComponents();
+            if (components != null) {
+                JsonArray recordComponents = new JsonArray();
+                for (RecordComponent component : components) {
+                    JsonObject comp = new JsonObject();
+                    comp.addProperty("name", component.getName());
+                    comp.addProperty("type", component.getType().getName());
+                    Type generic = component.getGenericType();
+                    if (generic != null && !generic.equals(component.getType())) {
+                        comp.addProperty("genericType", generic.getTypeName());
+                    }
+                    recordComponents.add(comp);
+                }
+                out.add("recordComponents", recordComponents);
+            }
+        }
+
+        List<String> memberErrors = new ArrayList<>();
+
+        JsonArray constructors = new JsonArray();
+        try {
+            for (Constructor<?> ctor : type.getDeclaredConstructors()) {
+                if (ctor.isSynthetic()) {
+                    continue;
+                }
+                JsonObject described = new JsonObject();
+                described.addProperty("modifiers", Modifier.toString(ctor.getModifiers()));
+                addParameterTypes(described, ctor.getParameterTypes(), ctor.getGenericParameterTypes());
+                constructors.add(described);
+            }
+        } catch (LinkageError | SecurityException e) {
+            memberErrors.add("declaredConstructors: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+        }
+        out.add("declaredConstructors", constructors);
+
+        JsonArray fields = new JsonArray();
+        try {
+            for (Field field : type.getDeclaredFields()) {
+                if (field.isSynthetic()) {
+                    continue;
+                }
+                JsonObject described = new JsonObject();
+                described.addProperty("name", field.getName());
+                described.addProperty("type", field.getType().getName());
+                try {
+                    Type generic = field.getGenericType();
+                    if (generic != null && !generic.equals(field.getType())) {
+                        described.addProperty("genericType", generic.getTypeName());
+                    }
+                } catch (LinkageError ignored) {
+                    // Generic signature references an unloaded optional dependency.
+                }
+                described.addProperty("modifiers", Modifier.toString(field.getModifiers()));
+                fields.add(described);
+            }
+        } catch (LinkageError | SecurityException e) {
+            memberErrors.add("declaredFields: " + e.getClass().getSimpleName() + ": " + e.getMessage());
         }
         out.add("declaredFields", fields);
 
         JsonArray methods = new JsonArray();
-        for (Method method : type.getDeclaredMethods()) {
-            if (method.isSynthetic()) {
-                continue;
+        try {
+            for (Method method : type.getDeclaredMethods()) {
+                if (method.isSynthetic()) {
+                    continue;
+                }
+                JsonObject described = new JsonObject();
+                described.addProperty("name", method.getName());
+                described.addProperty("returnType", method.getReturnType().getName());
+                try {
+                    Type genericRet = method.getGenericReturnType();
+                    if (genericRet != null && !genericRet.equals(method.getReturnType())) {
+                        described.addProperty("genericReturnType", genericRet.getTypeName());
+                    }
+                } catch (LinkageError ignored) {
+                    // Generic return type references an unloaded optional dependency.
+                }
+                described.addProperty("modifiers", Modifier.toString(method.getModifiers()));
+                Type[] genericParams = null;
+                try {
+                    genericParams = method.getGenericParameterTypes();
+                } catch (LinkageError ignored) {
+                    // Fall back to erased parameter types.
+                }
+                addParameterTypes(described, method.getParameterTypes(), genericParams);
+                methods.add(described);
             }
-            JsonObject described = new JsonObject();
-            described.addProperty("name", method.getName());
-            described.addProperty("returnType", method.getReturnType().getName());
-            described.addProperty("modifiers", Modifier.toString(method.getModifiers()));
-            JsonArray parameters = new JsonArray();
-            for (Class<?> parameter : method.getParameterTypes()) {
-                parameters.add(parameter.getName());
-            }
-            described.add("parameterTypes", parameters);
-            methods.add(described);
+        } catch (LinkageError | SecurityException e) {
+            memberErrors.add("declaredMethods: " + e.getClass().getSimpleName() + ": " + e.getMessage());
         }
         out.add("declaredMethods", methods);
+        if (!memberErrors.isEmpty()) {
+            out.addProperty("memberLoadError", String.join("; ", memberErrors));
+        }
         return out;
+    }
+
+    private static void addParameterTypes(JsonObject out, Class<?>[] erased, Type[] generic) {
+        JsonArray parameters = new JsonArray();
+        JsonArray genericParameters = new JsonArray();
+        boolean hasGenericDiff = false;
+        for (int i = 0; i < erased.length; i++) {
+            parameters.add(erased[i].getName());
+            if (generic != null && i < generic.length) {
+                genericParameters.add(generic[i].getTypeName());
+                if (!generic[i].equals(erased[i])) {
+                    hasGenericDiff = true;
+                }
+            } else {
+                genericParameters.add(erased[i].getName());
+            }
+        }
+        out.add("parameterTypes", parameters);
+        if (hasGenericDiff) {
+            out.add("genericParameterTypes", genericParameters);
+        }
     }
 
     /**

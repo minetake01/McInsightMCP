@@ -64,7 +64,16 @@ public final class RecipeImageQuery {
     }
 
     public static JsonObject render(RequestContext ctx, Params params) throws Exception {
-        ItemFilter item = ItemFilter.of(ItemQuery.parse(params.required("item", InsightError.INVALID_ID)));
+        ItemQuery itemQuery = ItemQuery.optional(params.string("item"));
+        ItemFilter item = itemQuery != null ? ItemFilter.of(itemQuery) : null;
+        String rawRecipeId = params.string("recipeId");
+        String recipeId = rawRecipeId == null || rawRecipeId.trim().isEmpty() ? null : rawRecipeId.trim();
+        if (item == null && recipeId == null) {
+            throw new InsightException(
+                InsightError.INVALID_PARAMETER,
+                "Provide at least one of 'item' or 'recipeId' to render recipes."
+            );
+        }
         ViewerQuery.RoleScope role = roleOf(params.string("role"));
         String type = params.string("type");
         String source = params.stringOr("source", "viewer").toLowerCase(Locale.ROOT);
@@ -85,30 +94,40 @@ public final class RecipeImageQuery {
             );
         }
 
-        List<Candidate> candidates = candidates(bridges, item, role, type, offset, limit);
-        boolean hasMore = candidates.size() == limit;
+        List<Candidate> matched = candidates(bridges, item, recipeId, role, type, offset, limit + 1);
+        boolean hasMore = matched.size() > limit;
+        List<Candidate> candidates = hasMore ? matched.subList(0, limit) : matched;
         Rendered rendered = new Rendered();
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(RENDER_TIMEOUT_MS);
         for (Candidate candidate : candidates) {
+            long rem = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
+            if (rem <= 0L) {
+                record(
+                    rendered,
+                    candidate,
+                    new InsightException(
+                        InsightError.DATA_UNAVAILABLE,
+                        "Recipe image rendering exceeded the " + RENDER_TIMEOUT_MS + " ms time budget."
+                    )
+                );
+                continue;
+            }
             Pending pending;
             try {
-                pending = ctx.executor().supplyOnClientThread(() -> {
-                    try {
-                        return start(candidate);
-                    } catch (Exception e) {
-                        throw new IllegalStateException(e);
-                    }
-                }, remainingMs(deadline));
+                pending = ctx.executor().supplyOnClientThread(() -> start(candidate), rem);
             } catch (Exception e) {
                 record(rendered, candidate, causeOf(e));
                 continue;
             }
             if (pending == null) {
-                rendered.missing.add(
-                    part(candidate),
+                InsightException noLayout = new InsightException(
                     InsightError.DATA_UNAVAILABLE,
                     "The " + candidate.bridge().viewerName() + " category does not expose a drawable layout."
                 );
+                if (rendered.firstFailure == null) {
+                    rendered.firstFailure = noLayout;
+                }
+                rendered.missing.add(part(candidate), InsightError.DATA_UNAVAILABLE, noLayout.getMessage());
                 continue;
             }
             await(pending, rendered, deadline);
@@ -158,12 +177,14 @@ public final class RecipeImageQuery {
     private static List<Candidate> candidates(
         List<IRecipeViewerBridge> bridges,
         ItemFilter item,
+        String recipeId,
         ViewerQuery.RoleScope role,
         String type,
         int offset,
         int limit
     ) {
         String normType = type == null ? "" : type.trim().toLowerCase(Locale.ROOT);
+        String normRecipeId = recipeId == null ? "" : recipeId.trim().toLowerCase(Locale.ROOT);
         List<Candidate> out = new ArrayList<>();
         int matched = 0;
         outer:
@@ -173,7 +194,11 @@ public final class RecipeImageQuery {
                     continue;
                 }
                 for (ViewerModel.Recipe recipe : bridge.recipesOf(category)) {
-                    if (!ViewerQuery.matches(recipe, item, role)) {
+                    if (item != null && !ViewerQuery.matches(recipe, item, role)) {
+                        continue;
+                    }
+                    if (!normRecipeId.isEmpty()
+                        && (recipe.recipeId() == null || !recipe.recipeId().toLowerCase(Locale.ROOT).equals(normRecipeId))) {
                         continue;
                     }
                     if (matched < offset) {
@@ -196,7 +221,7 @@ public final class RecipeImageQuery {
      * <p>Returns {@code null} when the viewer has no drawable layout for the recipe; the caller turns
      * that into a {@code missing} entry.
      */
-    private static Pending start(Candidate candidate) throws Exception {
+    private static Pending start(Candidate candidate) {
         IRecipePainter.Painting painting = candidate.bridge().painter().prepare(candidate.recipe());
         if (painting == null) {
             return null;
@@ -205,6 +230,10 @@ public final class RecipeImageQuery {
             int width = painting.width();
             int height = painting.height();
             return new Pending(candidate, width, height, RecipeCanvas.capture(width, height, RENDER_SCALE, painting::paint));
+        } catch (InsightException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
         } finally {
             painting.close();
         }
@@ -216,11 +245,14 @@ public final class RecipeImageQuery {
             CapturedImage captured = pending.pixels().get(remainingMs(deadline), TimeUnit.MILLISECONDS);
             byte[] png = PngEncoder.encode(captured, pending.width() * RENDER_SCALE, pending.height() * RENDER_SCALE);
             if (png.length > MAX_IMAGE_BYTES) {
-                rendered.missing.add(
-                    part(pending.candidate()),
+                InsightException tooLarge = new InsightException(
                     InsightError.DATA_UNAVAILABLE,
                     "The rendered image is " + png.length + " bytes, above the " + MAX_IMAGE_BYTES + " byte limit."
                 );
+                if (rendered.firstFailure == null) {
+                    rendered.firstFailure = tooLarge;
+                }
+                rendered.missing.add(part(pending.candidate()), InsightError.DATA_UNAVAILABLE, tooLarge.getMessage());
                 return;
             }
             rendered.images.add(new Image(
@@ -262,12 +294,19 @@ public final class RecipeImageQuery {
         if (rendered.firstFailure == null) {
             rendered.firstFailure = error;
         }
-        rendered.missing.add(part(candidate), InsightError.DATA_UNAVAILABLE, String.valueOf(cause.getMessage()));
+        rendered.missing.add(part(candidate), error.error(), String.valueOf(error.getMessage()));
     }
 
     /** The failure behind a wrapped client-thread call, or the call's own failure. */
     private static Throwable causeOf(Throwable error) {
-        return error.getCause() != null ? error.getCause() : error;
+        Throwable cursor = error;
+        while (cursor.getCause() != null) {
+            if (cursor instanceof InsightException) {
+                return cursor;
+            }
+            cursor = cursor.getCause();
+        }
+        return cursor;
     }
 
     private static long remainingMs(long deadline) {

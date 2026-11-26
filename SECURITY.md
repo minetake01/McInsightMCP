@@ -4,9 +4,11 @@
 
 McInsightMCP is designed to be local-only and read-only by default:
 
-- **Loopback Binding Only**:
-  - The Minecraft mod binds its `com.sun.net.httpserver.HttpServer` strictly to `127.0.0.1` (default port range `25580..25599`).
-  - The MCP server Streamable HTTP transport binds strictly to `127.0.0.1` and enforces `localhostHostValidation()` and `localhostOriginValidation()` on `/mcp`.
+- **Loopback Binding & Browser Header Checks**:
+  - The Minecraft mod binds its `com.sun.net.httpserver.HttpServer` strictly to `127.0.0.1` (default port range `25580..25599`), validates loopback `Host` headers, rejects `Origin` and cross-site `Sec-Fetch-Site` headers, and compares `authToken` in constant time.
+  - The MCP server Streamable HTTP transport binds strictly to `127.0.0.1` and enforces `localhostHostValidation()` and `localhostOriginValidation()` on both `/mcp` and `/health`.
+- **Filesystem & Archive Containment**:
+  - Mod JAR and pack script inspection paths are derived only from the running mod or startup CLI flags (`--mods-dir`, `--game-dir`), never per-call tool arguments, and enforce `realpath` containment plus ZIP extraction path-traversal guards.
 - **Read-Only API**:
   - The mod HTTP server only accepts `GET` requests and exposes no endpoints that mutate world state, player inventory, or server settings.
 - **Optional Bearer Authentication**:

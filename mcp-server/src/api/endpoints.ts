@@ -62,6 +62,8 @@ export interface EndpointSpec<Id extends EndpointId, Params extends string, Res>
   path: string;
   /** Parameters the mod accepts; anything else is rejected with INVALID_PARAMETER. */
   params: readonly Params[];
+  /** Optional per-endpoint HTTP request timeout override in ms. */
+  timeoutMs?: number;
   /** Page size the mod uses when `limit` is omitted. Undefined when the endpoint is not paginated. */
   defaultLimit?: number;
   /** Largest page size the mod accepts. Undefined when the endpoint is not paginated. */
@@ -148,12 +150,13 @@ export const ENDPOINTS = {
   }),
   recipes_render: endpoint<
     'recipes_render',
-    'item' | 'role' | 'type' | 'source' | 'limit' | 'offset',
+    'item' | 'recipeId' | 'role' | 'type' | 'source' | 'limit' | 'offset',
     RecipesRenderResponse
   >({
     id: 'recipes_render',
     path: '/api/v1/recipes/render',
-    params: ['item', 'role', 'type', 'source', 'limit', 'offset'],
+    params: ['item', 'recipeId', 'role', 'type', 'source', 'limit', 'offset'],
+    timeoutMs: 20_000,
     defaultLimit: 1,
     maxLimit: 8,
   }),
@@ -296,5 +299,5 @@ export async function requestEndpoint<Id extends EndpointId>(
   params: EndpointParams<Id> = {},
 ): Promise<ResponseOf<Id>> {
   const spec = ENDPOINTS[id];
-  return client.get<ResponseOf<Id>>(spec.path, params as Record<string, QueryValue>);
+  return client.get<ResponseOf<Id>>(spec.path, params as Record<string, QueryValue>, spec.timeoutMs);
 }

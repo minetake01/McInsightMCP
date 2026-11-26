@@ -96,20 +96,21 @@ export class McHttpClient {
       );
     }
 
-    try {
-      const winner = await Promise.any(probes);
-      controller.abort();
-      return winner;
-    } catch {
-      if (sawUnauthorized) {
-        throw new McApiError(
-          401,
-          'UNAUTHORIZED',
-          'McInsight mod requires a valid bearer token (--token / MCINSIGHT_TOKEN).',
-        );
+    const results = await Promise.allSettled(probes);
+    for (const res of results) {
+      if (res.status === 'fulfilled') {
+        controller.abort();
+        return res.value;
       }
-      return null;
     }
+    if (sawUnauthorized) {
+      throw new McApiError(
+        401,
+        'UNAUTHORIZED',
+        'McInsight mod requires a valid bearer token (--token / MCINSIGHT_TOKEN).',
+      );
+    }
+    return null;
   }
 
   private async probeBaseUrl(): Promise<string> {
@@ -118,6 +119,11 @@ export class McHttpClient {
     }
     if (this.discoveredUrl) {
       return this.discoveredUrl;
+    }
+    if (this.negativeDiscoveryUntil > Date.now()) {
+      throw new McConnectionError(
+        `Could not find a running McInsight mod on 127.0.0.1:${this.portStart}-${this.portEnd} (cached retry backoff active).`,
+      );
     }
     if (this.probeInFlight) {
       return this.probeInFlight;
@@ -157,6 +163,7 @@ export class McHttpClient {
   async get<T = Record<string, unknown>>(
     endpoint: string,
     query?: Record<string, string | number | boolean | undefined>,
+    timeoutMs: number = this.timeoutMs,
   ): Promise<T> {
     const baseUrl = await this.probeBaseUrl();
     const url = new URL(`${baseUrl}${endpoint}`);
@@ -172,7 +179,7 @@ export class McHttpClient {
     try {
       res = await fetch(url, {
         headers: this.buildHeaders(),
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (err) {
       const isTimeout = err instanceof Error && err.name === 'TimeoutError';
@@ -186,7 +193,7 @@ export class McHttpClient {
         try {
           res = await fetch(retryUrl, {
             headers: this.buildHeaders(),
-            signal: AbortSignal.timeout(this.timeoutMs),
+            signal: AbortSignal.timeout(timeoutMs),
           });
         } catch (retryErr) {
           throw new McConnectionError(
@@ -200,10 +207,18 @@ export class McHttpClient {
       }
     }
 
+    const clearAutoDiscovered = () => {
+      if (!this.explicitUrl && this.discoveredUrl === baseUrl) {
+        this.discoveredUrl = undefined;
+        this.invalidateCache();
+      }
+    };
+
     let parsed: unknown;
     try {
       parsed = await res.json();
     } catch {
+      clearAutoDiscovered();
       throw new McApiError(
         res.status,
         'INVALID_JSON_RESPONSE',
@@ -212,6 +227,7 @@ export class McHttpClient {
     }
 
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      clearAutoDiscovered();
       throw new McApiError(
         res.status,
         'INVALID_JSON_RESPONSE',
@@ -230,6 +246,7 @@ export class McHttpClient {
       );
     }
     if (body.ok !== true) {
+      clearAutoDiscovered();
       throw new McApiError(
         res.status,
         'INVALID_RESPONSE',

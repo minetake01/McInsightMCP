@@ -22,7 +22,7 @@ import net.minetake.mcinsight.data.DataPackView;
 public final class WorldgenQuery {
 
     private static final GenerationalCache<JsonObject> SUMMARY =
-        new GenerationalCache<>(CacheGenerations::data);
+        new GenerationalCache<>(GenerationalCache.Scope.DATA);
 
     private WorldgenQuery() {}
 
@@ -111,7 +111,7 @@ public final class WorldgenQuery {
         JsonObject counts = new JsonObject();
         for (WorldgenData.Kind kind : WorldgenData.Kind.values()) {
             boolean registryKind = kind != WorldgenData.Kind.BIOME_MODIFIER;
-            if (registryKind && !view.hasRegistries()) {
+            if (registryKind && !view.hasRegistries() && !view.hasDataResources()) {
                 continue;
             }
             if (!registryKind && (!view.hasDataResources() || !WorldgenData.biomeModifiersSupported())) {

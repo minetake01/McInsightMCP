@@ -28,8 +28,7 @@ public final class InsightDispatcher {
 
     /** Whether an endpoint may be served to another player over the packet bridge. */
     public static boolean exposedToRemoteClients(InsightEndpoint endpoint) {
-        return endpoint.dataScope() != InsightEndpoint.DataScope.LOCAL
-            || endpoint.playerScope() == InsightEndpoint.PlayerScope.REQUESTER;
+        return endpoint.dataScope() == InsightEndpoint.DataScope.SERVER_DATA;
     }
 
     /**

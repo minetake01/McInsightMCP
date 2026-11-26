@@ -26,6 +26,12 @@ final class OffscreenCanvas {
     private OffscreenCanvas() {}
 
     static CapturedImage capture(int width, int height, int scale, Consumer<RecipeGraphics> painter) throws Exception {
+        if (width <= 0 || height <= 0) {
+            throw new net.minetake.mcinsight.api.InsightException(
+                net.minetake.mcinsight.api.InsightError.DATA_UNAVAILABLE,
+                "Invalid recipe layout dimensions: " + width + "x" + height + "."
+            );
+        }
         Minecraft minecraft = Minecraft.getInstance();
         int pixelWidth = width * scale;
         int pixelHeight = height * scale;
@@ -41,29 +47,34 @@ final class OffscreenCanvas {
             target.clear(Minecraft.ON_OSX);
             target.bindWrite(true);
 
-            Matrix4f projection = new Matrix4f()
-                .setOrtho(0.0F, pixelWidth, pixelHeight, 0.0F, GUI_NEAR_PLANE, GUI_FAR_PLANE);
-            RenderSystem.setProjectionMatrix(projection, VertexSorting.ORTHOGRAPHIC_Z);
-            Matrix4fStack modelView = RenderSystem.getModelViewStack();
-            modelView.pushMatrix();
-            modelView.translation(0.0F, 0.0F, 10000.0F - GUI_FAR_PLANE);
-            RenderSystem.applyModelViewMatrix();
+            RenderSystem.backupProjectionMatrix();
             try {
-                Lighting.setupFor3DItems();
-                RenderSystem.enableBlend();
-                RenderSystem.defaultBlendFunc();
-                RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
-                RenderSystem.disableScissor();
-                GuiGraphics graphics = new GuiGraphics(minecraft, minecraft.renderBuffers().bufferSource());
-                graphics.pose().scale(scale, scale, 1.0F);
+                Matrix4f projection = new Matrix4f()
+                    .setOrtho(0.0F, pixelWidth, pixelHeight, 0.0F, GUI_NEAR_PLANE, GUI_FAR_PLANE);
+                RenderSystem.setProjectionMatrix(projection, VertexSorting.ORTHOGRAPHIC_Z);
+                Matrix4fStack modelView = RenderSystem.getModelViewStack();
+                modelView.pushMatrix();
+                modelView.translation(0.0F, 0.0F, 10000.0F - GUI_FAR_PLANE);
+                RenderSystem.applyModelViewMatrix();
                 try {
-                    painter.accept(new RecipeGraphics(graphics));
+                    Lighting.setupFor3DItems();
+                    RenderSystem.enableBlend();
+                    RenderSystem.defaultBlendFunc();
+                    RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
+                    RenderSystem.disableScissor();
+                    GuiGraphics graphics = new GuiGraphics(minecraft, minecraft.renderBuffers().bufferSource());
+                    graphics.pose().scale(scale, scale, 1.0F);
+                    try {
+                        painter.accept(new RecipeGraphics(graphics));
+                    } finally {
+                        graphics.flush();
+                    }
                 } finally {
-                    graphics.flush();
+                    modelView.popMatrix();
+                    RenderSystem.applyModelViewMatrix();
                 }
             } finally {
-                modelView.popMatrix();
-                RenderSystem.applyModelViewMatrix();
+                RenderSystem.restoreProjectionMatrix();
             }
 
             RenderSystem.bindTexture(target.getColorTextureId());

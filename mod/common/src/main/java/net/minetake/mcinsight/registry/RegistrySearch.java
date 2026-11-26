@@ -23,7 +23,18 @@ import net.minetake.mcinsight.registry.RegistryIndex.TagName;
  */
 public final class RegistrySearch {
 
-    private static final Set<String> TAG_KINDS = Set.of("tag", "item_tag", "block_tag", "fluid_tag", "entity_tag");
+    private static final Set<String> TAG_KINDS = Set.of(
+        "tag",
+        "item_tag",
+        "block_tag",
+        "fluid_tag",
+        "entity_tag",
+        "potion_tag",
+        "mob_effect_tag",
+        "attribute_tag",
+        "enchantment_tag",
+        "biome_tag"
+    );
 
     private RegistrySearch() {}
 
@@ -34,8 +45,9 @@ public final class RegistrySearch {
         String query = lower(p.string("q"));
         String modId = lower(p.string("mod"));
 
-        if (TAG_KINDS.contains(kindRaw.trim().toLowerCase(Locale.ROOT))) {
-            return searchTags(tagKinds(kindRaw), query, modId, limit, offset);
+        String normalized = kindRaw.trim().toLowerCase(Locale.ROOT);
+        if (TAG_KINDS.contains(normalized)) {
+            return searchTags(tagKinds(normalized), "tag".equals(normalized), query, modId, limit, offset);
         }
         return searchEntries(Kind.parse(kindRaw), query, modId, limit, offset);
     }
@@ -58,15 +70,32 @@ public final class RegistrySearch {
         return Page.of("results", rows, offset, total);
     }
 
-    private static JsonObject searchTags(List<Kind> kinds, String query, String modId, int limit, int offset) {
+    private static JsonObject searchTags(
+        List<Kind> kinds,
+        boolean ignoreUnavailable,
+        String query,
+        String modId,
+        int limit,
+        int offset
+    ) {
+        String tagQuery = query.startsWith("#") ? query.substring(1) : query;
         JsonArray rows = new JsonArray();
         int total = 0;
         for (Kind kind : kinds) {
-            for (TagName tag : RegistryIndex.tags(kind)) {
+            List<TagName> tags;
+            try {
+                tags = RegistryIndex.tags(kind);
+            } catch (net.minetake.mcinsight.api.InsightException ex) {
+                if (ignoreUnavailable && ex.error() == net.minetake.mcinsight.api.InsightError.DATA_UNAVAILABLE) {
+                    continue;
+                }
+                throw ex;
+            }
+            for (TagName tag : tags) {
                 if (!modId.isEmpty() && !tag.modIdLower().equals(modId)) {
                     continue;
                 }
-                if (!query.isEmpty() && !tag.idLower().contains(query)) {
+                if (!tagQuery.isEmpty() && !tag.idLower().contains(tagQuery)) {
                     continue;
                 }
                 if (total >= offset && rows.size() < limit) {

@@ -11,9 +11,12 @@ import net.minetake.mcinsight.api.Params;
 import net.minetake.mcinsight.api.RequestContext;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 
 /**
@@ -51,14 +54,15 @@ public final class BlockEntityPart {
 
         BlockPos pos = new BlockPos(x, y, z);
         double limitSq = (double) maxSyncBlockRadius() * maxSyncBlockRadius();
-        if (requester.blockPosition().distSqr(pos) > limitSq) {
-            throw new InsightException(
-                InsightError.OUT_OF_RANGE,
-                "The target block is outside the " + maxSyncBlockRadius() + "-block block-entity range."
-            );
-        }
-
-        WorldData.BlockSample sample = WorldData.onServer(ctx.executor(), () -> captureOne(requester, pos));
+        WorldData.BlockSample sample = WorldData.onServer(ctx.executor(), () -> {
+            if (requester.blockPosition().distSqr(pos) > limitSq) {
+                throw new InsightException(
+                    InsightError.OUT_OF_RANGE,
+                    "The target block is outside the " + maxSyncBlockRadius() + "-block block-entity range."
+                );
+            }
+            return captureOne(requester, pos);
+        });
         if (sample == null) {
             throw new InsightException(
                 InsightError.NOT_FOUND,
@@ -166,14 +170,14 @@ public final class BlockEntityPart {
                         || pos.getZ() < chunkMinZ || pos.getZ() > chunkMaxZ) {
                         continue;
                     }
-                    WorldData.BlockSample sample =
-                        WorldData.block(pos, chunk.getBlockState(pos), entry.getValue(), registries);
-                    if (!WorldData.matchesBlockEntityFilter(sample, filter)) {
+                    BlockState state = chunk.getBlockState(pos);
+                    ResourceLocation typeId = BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(entry.getValue().getType());
+                    if (!WorldData.matchesBlockEntityFilter(state, typeId, filter)) {
                         continue;
                     }
                     total++;
                     if (samples.size() < WorldData.MAX_BLOCK_ENTITIES) {
-                        samples.add(sample);
+                        samples.add(WorldData.block(pos, state, entry.getValue(), registries));
                     }
                 }
             }

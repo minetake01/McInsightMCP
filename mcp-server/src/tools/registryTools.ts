@@ -12,7 +12,27 @@ const TAG_LIMITS = limitBounds('registry_tag');
 
 const SEARCH_REGISTRY_SCHEMA = z.object({
   kind: z
-    .enum(['item', 'block', 'fluid', 'entity', 'tag', 'item_tag', 'block_tag', 'fluid_tag', 'entity_tag'])
+    .enum([
+      'item',
+      'block',
+      'fluid',
+      'entity',
+      'potion',
+      'mob_effect',
+      'attribute',
+      'enchantment',
+      'biome',
+      'tag',
+      'item_tag',
+      'block_tag',
+      'fluid_tag',
+      'entity_tag',
+      'potion_tag',
+      'mob_effect_tag',
+      'attribute_tag',
+      'enchantment_tag',
+      'biome_tag',
+    ])
     .optional()
     .default('item')
     .describe('Registry or tag kind to search'),
@@ -37,10 +57,30 @@ const INSPECT_SCHEMA = z.object({
     .min(1)
     .describe('Exact ResourceLocation (e.g. "minecraft:stone") or tag ID (e.g. "#minecraft:planks")'),
   kind: z
-    .enum(['auto', 'item', 'block', 'fluid', 'entity', 'item_tag', 'block_tag', 'fluid_tag', 'entity_tag'])
+    .enum([
+      'auto',
+      'item',
+      'block',
+      'fluid',
+      'entity',
+      'potion',
+      'mob_effect',
+      'attribute',
+      'enchantment',
+      'biome',
+      'item_tag',
+      'block_tag',
+      'fluid_tag',
+      'entity_tag',
+      'potion_tag',
+      'mob_effect_tag',
+      'attribute_tag',
+      'enchantment_tag',
+      'biome_tag',
+    ])
     .optional()
     .default('auto')
-    .describe('auto inspects "#..." as a tag and otherwise resolves across item, block, fluid, and entity registries'),
+    .describe('auto inspects "#..." as a tag and otherwise resolves across item, block, fluid, entity, potion, mob_effect, attribute, enchantment, and biome registries'),
   limit: z
     .number()
     .int()

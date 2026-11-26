@@ -23,7 +23,7 @@ public final class McInsightConfig {
 
     static final int HARD_MAX_SCAN_RADIUS = 32;
     static final int HARD_MAX_SYNC_BLOCK_RADIUS = 16;
-    static final int HARD_MAX_RECIPE_RESULTS = 500;
+    static final int HARD_MAX_RECIPE_RESULTS = 100;
     static final int HARD_MAX_RAYCAST_DISTANCE = 64;
 
     public boolean enabled = true;

@@ -53,21 +53,35 @@ public final class ItemFilter {
         ResourceLocation rl = ResourceLocation.parse(query.id());
         if (query.isTag()) {
             Set<String> members = new LinkedHashSet<>();
-            TagKey<Item> key = TagKey.create(Registries.ITEM, rl);
-            Versioned.tag(BuiltInRegistries.ITEM, key).ifPresent(set -> {
-                for (Holder<Item> holder : set) {
-                    holder.unwrapKey().ifPresent(k -> members.add(Versioned.idOf(k).toString().toLowerCase(Locale.ROOT)));
-                }
-            });
+            collectTagMembers(BuiltInRegistries.ITEM, rl, members);
+            collectTagMembers(BuiltInRegistries.FLUID, rl, members);
+            collectTagMembers(BuiltInRegistries.BLOCK, rl, members);
+            collectTagMembers(BuiltInRegistries.ENTITY_TYPE, rl, members);
             return forTag(query.id(), members);
         }
         Set<String> tagIds = new LinkedHashSet<>();
-        Item item = Versioned.byId(BuiltInRegistries.ITEM, rl);
-        if (item != null) {
-            item.builtInRegistryHolder().tags()
-                .forEach(t -> tagIds.add(t.location().toString().toLowerCase(Locale.ROOT)));
-        }
+        collectEntryTags(BuiltInRegistries.ITEM, rl, tagIds);
+        collectEntryTags(BuiltInRegistries.FLUID, rl, tagIds);
+        collectEntryTags(BuiltInRegistries.BLOCK, rl, tagIds);
+        collectEntryTags(BuiltInRegistries.ENTITY_TYPE, rl, tagIds);
         return forItem(query.id(), tagIds);
+    }
+
+    private static <T> void collectTagMembers(net.minecraft.core.Registry<T> registry, ResourceLocation tagId, Set<String> out) {
+        TagKey<T> key = TagKey.create(registry.key(), tagId);
+        Versioned.tag(registry, key).ifPresent(set -> {
+            for (Holder<T> holder : set) {
+                holder.unwrapKey().ifPresent(k -> out.add(Versioned.idOf(k).toString().toLowerCase(Locale.ROOT)));
+            }
+        });
+    }
+
+    private static <T> void collectEntryTags(net.minecraft.core.Registry<T> registry, ResourceLocation id, Set<String> out) {
+        T value = Versioned.byId(registry, id);
+        if (value != null) {
+            registry.wrapAsHolder(value).tags()
+                .forEach(t -> out.add(t.location().toString().toLowerCase(Locale.ROOT)));
+        }
     }
 
     public boolean isTag() {

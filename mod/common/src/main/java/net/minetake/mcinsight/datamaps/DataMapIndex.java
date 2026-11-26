@@ -24,7 +24,7 @@ public final class DataMapIndex {
     private static final String FOLDER = "data_maps";
 
     private static final GenerationalCache<List<DataMap>> CACHE =
-        new GenerationalCache<>(CacheGenerations::data);
+        new GenerationalCache<>(GenerationalCache.Scope.DATA);
 
     /** One merged data map definition. */
     public record DataMap(
@@ -72,6 +72,9 @@ public final class DataMapIndex {
             return "unknown";
         }
         String[] parts = cleanPath.split("/");
+        if (parts.length >= 3 && "worldgen".equals(parts[0])) {
+            return String.join("/", java.util.Arrays.copyOf(parts, parts.length - 1));
+        }
         if (parts.length >= 3) {
             return parts[0] + ":" + parts[1];
         }
@@ -101,13 +104,44 @@ public final class DataMapIndex {
             }
             if (layer.has("values") && layer.get("values").isJsonObject()) {
                 for (Map.Entry<String, JsonElement> entry : layer.getAsJsonObject("values").entrySet()) {
-                    mergedValues.add(entry.getKey(), entry.getValue().deepCopy());
+                    JsonElement value = entry.getValue();
+                    if (isConditionBlocked(value)) {
+                        continue;
+                    }
+                    mergedValues.add(entry.getKey(), value.deepCopy());
                 }
             }
         }
         JsonObject out = new JsonObject();
         out.add("values", mergedValues);
         return out;
+    }
+
+    private static boolean isConditionBlocked(JsonElement value) {
+        if (!value.isJsonObject()) {
+            return false;
+        }
+        JsonElement conditions = value.getAsJsonObject().get("neoforge:conditions");
+        if (conditions == null || !conditions.isJsonArray()) {
+            return false;
+        }
+        for (JsonElement element : conditions.getAsJsonArray()) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject cond = element.getAsJsonObject();
+            String type = cond.has("type") && cond.get("type").isJsonPrimitive()
+                ? cond.get("type").getAsString()
+                : "";
+            if ("neoforge:mod_loaded".equals(type) && cond.has("modid") && cond.get("modid").isJsonPrimitive()) {
+                if (!net.minetake.mcinsight.platform.Services.PLATFORM.isModLoaded(cond.get("modid").getAsString())) {
+                    return true;
+                }
+            } else if ("neoforge:false".equals(type)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static List<DataMap> build(DataPackView view) {

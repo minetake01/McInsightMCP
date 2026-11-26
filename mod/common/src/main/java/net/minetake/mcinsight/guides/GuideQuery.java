@@ -127,10 +127,19 @@ public final class GuideQuery {
         if (entry == null) {
             throw new InsightException(InsightError.NOT_FOUND, "No guide page is indexed as '" + id + "'.");
         }
-        String content = index.content(entry);
+        GuideIndex.ContentRead read = index.readContent(entry);
+        if (read == null) {
+            throw new InsightException(
+                InsightError.DATA_UNAVAILABLE,
+                "Guide page '" + entry.id() + "' could not be read from the current session's resources."
+            );
+        }
         JsonObject out = GuideIndex.describe(entry);
         out.addProperty("ok", true);
-        out.addProperty("content", content != null ? content : "");
+        out.addProperty("content", read.text());
+        if (read.truncated()) {
+            out.addProperty("truncated", true);
+        }
         return out;
     }
 

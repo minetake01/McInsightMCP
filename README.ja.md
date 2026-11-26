@@ -10,7 +10,7 @@ McInsightMCP を使うと、Claude Desktop、Cursor、Claude Code、VS Code な�
 
 ## AI に聞けることの例
 
-- 「この Modpack で `mekanism:atomic_alloy` を作る手順と、今のインベントリで足りていない素材を教えて」
+- 「この Modpack で `create:precision_mechanism` を作る手順と、今のインベントリで足りていない素材を教えて」
 - 「`minecraft:oak_planks` のクラフトレシピを画像で見せて」
 - 「今見ている機械は何のブロックで、なぜ動いていないのか確認して」
 - 「この環境のオスミウム鉱石やプラチナ鉱石はどの高さとバイオームで生成される？」
@@ -78,7 +78,9 @@ npx -y mcinsight-mcp-server@beta --http --port 3876
 
 通常は設定を変更せずにそのまま使えます。
 
-- Minecraft MOD の設定は初回起動時に `config/mcinsight.json` として生成されます。ローカル API の有効・無効（`enabled`）、開始ポート（`port`、初期値 `25580`）、Bearer トークン（`authToken`）、周辺スキャン・ブロックエンティティ同期・レシピ結果数の上限を変更できます。
+- **組み込みカスタムレシピパーサー**: 構造が特殊な形式（`create:sequenced_assembly`、`ae2:inscriber`、`ars_nouveau:imbuement`、`ars_nouveau:enchanting_apparatus`）のみ厳密な semver 範囲付きで要約し、それ以外の MOD レシピは `rawJson` をそのまま返します。
+- **オフライン用 MCP サーバーアーカイブ**: リリースアーカイブ（`mcinsight-mcp-server-<version>.tar.gz` / `.zip`）には本番 `node_modules/` が同梱されており、展開後そのまま `node dist/index.js` で起動できます。
+- Minecraft MOD の設定は初回起動時に `config/mcinsight.json` として生成されます。ローカル API の有効・無効（`enabled`）、開始ポート（`port`、初期値 `25580`）、Bearer トークン（`authToken`）、周辺スキャン・ブロックエンティティ同期・レシピ結果数（`maxRecipeResults` 最大 `100`）の上限を変更できます。
 - MCP サーバーの起動引数や環境変数では、MOD のポートを変更した場合の `--mc-url`（`MCINSIGHT_URL`）、`authToken` に合わせる `--token`（`MCINSIGHT_TOKEN`）、Minecraft を起動せずに MOD ファイルを調べるときに使う `--mods-dir` と `--game-dir`（`MCINSIGHT_MODS_DIR` / `MCINSIGHT_GAME_DIR`）を指定できます。
 
 すべての設定項目、上限値、CLI フラグは [アーキテクチャ・設定仕様](docs/ARCHITECTURE.md#10-configuration-and-limits) を参照してください。

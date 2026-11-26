@@ -32,6 +32,7 @@ import mezz.jei.api.runtime.IIngredientManager;
 import mezz.jei.api.runtime.IJeiRuntime;
 import net.minetake.mcinsight.api.InsightError;
 import net.minetake.mcinsight.api.InsightException;
+import net.minetake.mcinsight.cache.CacheGenerations;
 import net.minetake.mcinsight.client.ClientStateAccessor;
 import net.minetake.mcinsight.compat.IRecipePainter;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
@@ -52,14 +53,22 @@ import net.minecraft.world.level.material.Fluid;
 
 public final class JeiBridgeImpl implements IRecipeViewerBridge {
 
-    private final IJeiRuntime runtime;
+    private volatile IJeiRuntime runtime;
+    private volatile long cachedGeneration = Long.MIN_VALUE;
     private volatile List<ViewerModel.Category> cachedCategories;
     private final ConcurrentHashMap<String, IRecipeCategory<?>> categoriesByUid = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, List<ViewerModel.Ingredient>> cachedWorkstations =
         new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, List<ViewerModel.Recipe>> cachedRecipes = new ConcurrentHashMap<>();
 
-    public JeiBridgeImpl(IJeiRuntime runtime) {
+    public void attach(IJeiRuntime runtime) {
         this.runtime = runtime;
+        invalidateCache();
+    }
+
+    public void detach() {
+        this.runtime = null;
+        invalidateCache();
     }
 
     @Override
@@ -73,14 +82,23 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
     }
 
     @Override
-    public void invalidateCache() {
+    public synchronized void invalidateCache() {
+        cachedGeneration = CacheGenerations.combined();
         cachedCategories = null;
         categoriesByUid.clear();
         cachedWorkstations.clear();
+        cachedRecipes.clear();
+    }
+
+    private void ensureFreshCache() {
+        if (cachedGeneration != CacheGenerations.combined()) {
+            invalidateCache();
+        }
     }
 
     @Override
     public List<ViewerModel.Category> listCategories() {
+        ensureFreshCache();
         List<ViewerModel.Category> existing = cachedCategories;
         if (existing != null) {
             return existing;
@@ -108,6 +126,11 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
 
     @Override
     public List<ViewerModel.Recipe> recipesOf(ViewerModel.Category category) {
+        ensureFreshCache();
+        List<ViewerModel.Recipe> cached = cachedRecipes.get(category.uid());
+        if (cached != null) {
+            return cached;
+        }
         IRecipeCategory<?> resolved = categoriesByUid.get(category.uid());
         if (resolved == null) {
             resolved = resolveCategory(category.uid());
@@ -115,11 +138,12 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
         if (resolved == null) {
             throw new InsightException(InsightError.NOT_FOUND, "Unknown JEI category: " + category.uid());
         }
+        IRecipeCategory<?> targetCategory = resolved;
         List<ViewerModel.Ingredient> workstations = category.workstations() != null
             ? category.workstations()
-            : workstations(resolved);
+            : workstations(targetCategory);
         RegistryOps<JsonElement> ops = jsonOps();
-        return recipesOf(resolved, workstations, ops);
+        return cachedRecipes.computeIfAbsent(category.uid(), ignored -> recipesOf(targetCategory, workstations, ops));
     }
 
     @Override
@@ -129,25 +153,26 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
 
     @Override
     public List<String> getIngredientInfo(String ingredientId) {
-        if (ingredientId == null || ingredientId.isBlank() || runtime == null) {
+        IJeiRuntime attached = runtime;
+        if (ingredientId == null || ingredientId.isBlank() || attached == null) {
             return List.of();
         }
         ResourceLocation target = ResourceLocation.tryParse(ingredientId.trim());
         if (target == null) {
             return List.of();
         }
-        List<IFocus<?>> focuses = focuses(target);
+        List<IFocus<?>> focuses = focuses(attached, target);
         if (focuses.isEmpty()) {
             return List.of();
         }
-        List<IJeiIngredientInfoRecipe> infoRecipes = runtime.getRecipeManager()
+        List<IJeiIngredientInfoRecipe> infoRecipes = attached.getRecipeManager()
             .createRecipeLookup(RecipeTypes.INFORMATION)
             .limitFocus(focuses)
             .get()
             .toList();
         Set<String> lines = new LinkedHashSet<>();
         for (IJeiIngredientInfoRecipe info : infoRecipes) {
-            if (!mentionsIngredient(info, target)) {
+            if (!mentionsIngredient(attached, info, target)) {
                 continue;
             }
             for (FormattedText text : info.getDescription()) {
@@ -396,7 +421,7 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
     }
 
     private <T> Slots slots(IRecipeCategory<T> category, T recipe, RegistryOps<JsonElement> ops) {
-        IIngredientManager ingredientManager = runtime.getIngredientManager();
+        IIngredientManager ingredientManager = requireRuntime().getIngredientManager();
         IIngredientSupplier supplier = supplierOf(category, recipe);
         List<ViewerModel.Ingredient> catalysts = supplier == null
             ? List.of()
@@ -435,7 +460,7 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
         RegistryOps<JsonElement> ops
     ) {
         try {
-            IFocusGroup focuses = runtime.getJeiHelpers().getFocusFactory().getEmptyFocusGroup();
+            IFocusGroup focuses = requireRuntime().getJeiHelpers().getFocusFactory().getEmptyFocusGroup();
             Optional<IRecipeLayoutDrawable<T>> layout =
                 requireRuntime().getRecipeManager().createRecipeLayoutDrawable(category, recipe, focuses);
             if (layout.isEmpty()) {
@@ -593,9 +618,9 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
         return serialized.has("components") ? serialized.get("components") : null;
     }
 
-    private List<IFocus<?>> focuses(ResourceLocation target) {
-        IFocusFactory focusFactory = runtime.getJeiHelpers().getFocusFactory();
-        IIngredientManager ingredientManager = runtime.getIngredientManager();
+    private List<IFocus<?>> focuses(IJeiRuntime attached, ResourceLocation target) {
+        IFocusFactory focusFactory = attached.getJeiHelpers().getFocusFactory();
+        IIngredientManager ingredientManager = attached.getIngredientManager();
         List<RecipeIngredientRole> roles =
             List.of(RecipeIngredientRole.INPUT, RecipeIngredientRole.OUTPUT, stationRole());
         List<IFocus<?>> focuses = new ArrayList<>();
@@ -639,8 +664,8 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
         }
     }
 
-    private boolean mentionsIngredient(IJeiIngredientInfoRecipe info, ResourceLocation target) {
-        IIngredientManager ingredientManager = runtime.getIngredientManager();
+    private boolean mentionsIngredient(IJeiRuntime attached, IJeiIngredientInfoRecipe info, ResourceLocation target) {
+        IIngredientManager ingredientManager = attached.getIngredientManager();
         for (ITypedIngredient<?> typed : info.getIngredients()) {
             try {
                 if (target.equals(idOf(typed, ingredientManager))) {

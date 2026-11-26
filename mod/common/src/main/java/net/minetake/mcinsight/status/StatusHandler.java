@@ -142,8 +142,8 @@ public final class StatusHandler {
     private static Session capture(RequestContext ctx) {
         try {
             return ctx.executor().supplyOnGameThread(() -> {
-                Level level = GameAccess.getLevel(ctx.executor());
                 boolean serverActive = ctx.executor().getActiveServer() != null;
+                Level level = currentLevel(ctx);
                 if (level == null) {
                     return new Session(serverActive, null, null, 0L, 0L, false, false);
                 }
@@ -163,6 +163,18 @@ public final class StatusHandler {
                 "The game thread did not answer the status request: " + e.getMessage()
             );
         }
+    }
+
+    private static Level currentLevel(RequestContext ctx) {
+        var server = ctx.executor().getActiveServer();
+        var localPlayer = GameAccess.getLocalPlayer(ctx.executor());
+        if (server != null && localPlayer != null) {
+            Level playerLevel = server.getLevel(localPlayer.level().dimension());
+            if (playerLevel != null) {
+                return playerLevel;
+            }
+        }
+        return GameAccess.getLevel(ctx.executor());
     }
 
     private static JsonArray mods() {

@@ -10,7 +10,7 @@ McInsightMCP connects MCP-compatible AI assistants (Claude Desktop, Cursor, Clau
 
 ## What You Can Ask
 
-- *"How do I craft `mekanism:atomic_alloy` in this modpack, and do I have the materials in my inventory?"*
+- *"How do I craft `create:precision_mechanism` in this modpack, and do I have the materials in my inventory?"*
 - *"Show me the crafting recipe for `minecraft:oak_planks` as a picture."*
 - *"What is this machine I'm looking at, and why isn't it running?"*
 - *"At what Y-level and in which biomes does osmium or platinum ore generate in this pack?"*
@@ -78,7 +78,9 @@ Pre-packaged offline archives of the MCP server are also available on [GitHub Re
 
 Most users do not need to change any settings.
 
-- **Minecraft Mod (`config/mcinsight.json`)**: Generated on first launch. Supports `enabled`, `port` (default `25580`), `authToken`, and scan, block-entity sync, and recipe result limits.
+- **Built-in Custom Recipe Parsers**: Summarizes non-obvious custom formats (`create:sequenced_assembly`, `ae2:inscriber`, `ars_nouveau:imbuement`, `ars_nouveau:enchanting_apparatus`) under strict semver bounds and keeps `rawJson` for all other modded recipes.
+- **Offline MCP Server Release Archive**: Extracting `mcinsight-mcp-server-<version>.tar.gz` or `.zip` includes pre-bundled production `node_modules/` so `node dist/index.js` runs without an extra install step.
+- **Minecraft Mod (`config/mcinsight.json`)**: Generated on first launch. Supports `enabled`, `port` (default `25580`), `authToken`, and scan, block-entity sync, and recipe result limits (`maxRecipeResults` max `100`).
 - **MCP Server Flags & Environment Variables**: Use `--mc-url` (`MCINSIGHT_URL`) for a custom mod port, `--token` (`MCINSIGHT_TOKEN`) when `authToken` is set, and `--mods-dir` / `--game-dir` (`MCINSIGHT_MODS_DIR` / `MCINSIGHT_GAME_DIR`) to inspect mod files offline without Minecraft running.
 
 See [Architecture & Full Configuration](docs/ARCHITECTURE.md#10-configuration-and-limits) for all keys, limits, and flags.

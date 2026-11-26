@@ -101,6 +101,8 @@ const WORLDGEN_KINDS = [
   'configured_feature',
   'biome',
   'structure',
+  'structure_set',
+  'level_stem',
   'dimension_type',
   'biome_modifier',
 ] as const;
@@ -108,7 +110,7 @@ const WORLDGEN_KINDS = [
 const QUERY_WORLD_DATA_SCHEMA = z.object({
   kind: z
     .enum([...WORLDGEN_KINDS, 'loot', 'trades', 'datamaps'])
-    .describe('Data system to query: worldgen_summary (counts overview), placed_feature, configured_feature, biome, structure, dimension_type, biome_modifier (NeoForge), loot, trades, or datamaps (NeoForge)'),
+    .describe('Data system to query: worldgen_summary (counts overview), placed_feature, configured_feature, biome, structure, structure_set, level_stem, dimension_type, biome_modifier (NeoForge), loot, trades, or datamaps (NeoForge)'),
   query: z.string().optional().describe('Substring filter on entry ID (or JSON content when searchContent=true)'),
   item: z
     .string()
@@ -142,6 +144,8 @@ const WORLD_DATA_PARAMS: Record<WorldDataKind, readonly string[]> = {
   configured_feature: WORLDGEN_QUERY_PARAMS,
   biome: [...WORLDGEN_QUERY_PARAMS, 'minTemp', 'maxTemp'],
   structure: WORLDGEN_QUERY_PARAMS,
+  structure_set: WORLDGEN_QUERY_PARAMS,
+  level_stem: WORLDGEN_QUERY_PARAMS,
   dimension_type: WORLDGEN_QUERY_PARAMS,
   biome_modifier: WORLDGEN_QUERY_PARAMS,
   loot: ['query', 'item', 'modId', 'includeModifiers', 'limit', 'offset'],

@@ -19,6 +19,7 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.dimension.DimensionType;
+import net.minecraft.world.level.dimension.LevelStem;
 //? if >=26.3 {
 /*import net.minecraft.world.level.levelgen.feature.Feature;
 *///? } else {
@@ -26,6 +27,7 @@ import net.minecraft.world.level.levelgen.feature.ConfiguredFeature;
 //? }
 import net.minecraft.world.level.levelgen.placement.PlacedFeature;
 import net.minecraft.world.level.levelgen.structure.Structure;
+import net.minecraft.world.level.levelgen.structure.StructureSet;
 
 /**
  * Reads worldgen definitions out of the shared datapack view.
@@ -41,7 +43,7 @@ public final class WorldgenData {
     private static final String[] BIOME_MODIFIER_FOLDERS = {"neoforge/biome_modifier", "forge/biome_modifier"};
 
     private static final String[] BIOME_SUMMARY_KEYS = {
-        "temperature", "downfall", "has_precipitation", "temperature_modifier", "spawners"
+        "temperature", "downfall", "has_precipitation", "temperature_modifier", "spawners", "features"
     };
 
     private WorldgenData() {}
@@ -52,7 +54,9 @@ public final class WorldgenData {
         CONFIGURED_FEATURE("configured_feature", "worldgen/configured_feature"),
         BIOME("biome", "worldgen/biome"),
         STRUCTURE("structure", "worldgen/structure"),
+        STRUCTURE_SET("structure_set", "worldgen/structure_set"),
         DIMENSION_TYPE("dimension_type", "dimension_type"),
+        LEVEL_STEM("level_stem", "dimension"),
         /** NeoForge biome modifiers, which exist only as datapack files. */
         BIOME_MODIFIER("biome_modifier", null);
 
@@ -155,14 +159,20 @@ public final class WorldgenData {
     }
 
     public static int count(DataPackView view, Kind kind) {
-        return switch (kind) {
+        int registered = switch (kind) {
             case PLACED_FEATURE -> view.count(Registries.PLACED_FEATURE);
             case CONFIGURED_FEATURE -> configuredFeatureCount(view);
             case BIOME -> view.count(Registries.BIOME);
             case STRUCTURE -> view.count(Registries.STRUCTURE);
+            case STRUCTURE_SET -> view.count(Registries.STRUCTURE_SET);
             case DIMENSION_TYPE -> view.count(Registries.DIMENSION_TYPE);
+            case LEVEL_STEM -> view.count(Registries.LEVEL_STEM);
             case BIOME_MODIFIER -> folderCount(view, BIOME_MODIFIER_FOLDERS);
         };
+        if (registered > 0 || kind == Kind.BIOME_MODIFIER || view.hasRegistries()) {
+            return registered;
+        }
+        return view.hasDataResources() ? folderCount(view, kind.folder()) : 0;
     }
 
     /** How many configured features the registry holds; 26.3 keeps them in {@code feature}. */
@@ -240,7 +250,9 @@ public final class WorldgenData {
             case CONFIGURED_FEATURE -> configuredFeatures(view, kind);
             case BIOME -> biomes(view);
             case STRUCTURE -> encoded(view, kind, Registries.STRUCTURE, Structure.DIRECT_CODEC);
+            case STRUCTURE_SET -> encoded(view, kind, Registries.STRUCTURE_SET, StructureSet.DIRECT_CODEC);
             case DIMENSION_TYPE -> encoded(view, kind, Registries.DIMENSION_TYPE, DimensionType.DIRECT_CODEC);
+            case LEVEL_STEM -> encoded(view, kind, Registries.LEVEL_STEM, LevelStem.CODEC);
             case BIOME_MODIFIER -> List.of();
         };
     }
@@ -290,8 +302,9 @@ public final class WorldgenData {
         for (String folder : folders) {
             for (DataPackView.ResourceRef ref : view.folder(folder)) {
                 String cacheKey = "worldgen:" + kind.id + ":" + ref.id();
+                ResourceLocation logicalId = ResourceLocation.tryParse(ref.id());
                 out.add(definition(
-                    ref.location(),
+                    logicalId != null ? logicalId : ref.location(),
                     cacheKey,
                     () -> view.readJson(ref),
                     () -> temperatureOf(view.readJson(ref))

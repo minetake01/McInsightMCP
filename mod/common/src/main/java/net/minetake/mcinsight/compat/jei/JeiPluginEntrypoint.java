@@ -15,7 +15,11 @@ public final class JeiPluginEntrypoint implements IModPlugin {
         "jei_bridge"
     );
 
-    private static final String VIEWER_NAME = "jei";
+    private static final JeiBridgeImpl BRIDGE = new JeiBridgeImpl();
+
+    static {
+        ViewerRegistry.register(BRIDGE);
+    }
 
     @Override
     public ResourceLocation getPluginUid() {
@@ -24,13 +28,14 @@ public final class JeiPluginEntrypoint implements IModPlugin {
 
     @Override
     public void onRuntimeAvailable(IJeiRuntime jeiRuntime) {
-        ViewerRegistry.register(new JeiBridgeImpl(jeiRuntime));
+        BRIDGE.attach(jeiRuntime);
+        ViewerRegistry.register(BRIDGE);
         McInsightConstants.LOG.info("JEI runtime bridge attached.");
     }
 
     @Override
     public void onRuntimeUnavailable() {
-        ViewerRegistry.unregister(VIEWER_NAME);
+        BRIDGE.detach();
         McInsightConstants.LOG.info("JEI runtime bridge detached.");
     }
 }

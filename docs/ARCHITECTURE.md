@@ -207,15 +207,15 @@ declares page bounds.
 | `status` | `/api/v1/status` | `includeMods` | LOCAL | LOCAL | — |
 | `mods` | `/api/v1/mods` | — | LOCAL | NONE | — |
 | `metrics` | `/api/v1/metrics` | — | LOCAL | NONE | — |
-| `player` | `/api/v1/player` | — | LOCAL | LOCAL | — |
+| `player` | `/api/v1/player` | — | COMPOSITE | LOCAL | — |
 | `looking_at` | `/api/v1/looking-at` | `maxDistance`, `includeFluids` | COMPOSITE | LOCAL | — |
 | `scan` | `/api/v1/scan` | `radius`, `filter` | COMPOSITE | LOCAL | — |
 | `registry_search` | `/api/v1/registry/search` | `kind`, `q`, `mod`, `limit`, `offset` | LOCAL | NONE | 50 / 200 |
 | `registry_inspect` | `/api/v1/registry/inspect` | `kind`, `id` | LOCAL | NONE | — |
 | `registry_tag` | `/api/v1/registry/tag` | `kind`, `id`, `limit`, `offset` | LOCAL | NONE | 200 / 500 |
-| `recipes_types` | `/api/v1/recipes/types` | — | LOCAL | NONE | — |
-| `recipes_query` | `/api/v1/recipes/query` | `item`, `role`, `type`, `mod`, `source`, `limit`, `offset` | LOCAL | NONE | 40 / 100 |
-| `recipes_render` | `/api/v1/recipes/render` | `item`, `role`, `type`, `source`, `limit`, `offset` | LOCAL | NONE | 1 / 8 |
+| `recipes_types` | `/api/v1/recipes/types` | — | COMPOSITE | NONE | — |
+| `recipes_query` | `/api/v1/recipes/query` | `item`, `role`, `type`, `mod`, `source`, `limit`, `offset` | COMPOSITE | NONE | 40 / 100 |
+| `recipes_render` | `/api/v1/recipes/render` | `item`, `recipeId`, `role`, `type`, `source`, `limit`, `offset` | LOCAL | NONE | 1 / 8 |
 | `guides_list` | `/api/v1/guides/list` | `source`, `mod`, `limit`, `offset` | LOCAL | NONE | 50 / 500 |
 | `guides_search` | `/api/v1/guides/search` | `q`, `source`, `mod`, `lang`, `includeAllLang`, `limit`, `offset` | LOCAL | NONE | 20 / 50 |
 | `guides_page` | `/api/v1/guides/page` | `id` | LOCAL | NONE | — |
@@ -341,7 +341,7 @@ Every paginated endpoint answers with one envelope:
 
 `ItemQuery.parse` accepts exactly two forms:
 
-- a full resource id, e.g. `minecraft:stone` or `tofucraft:tofudried`;
+- a full resource id, e.g. `minecraft:stone` or `create:precision_mechanism`;
 - a tag, e.g. `#minecraft:planks`.
 
 Anything else (`stone`, a display name, a partial id) is `INVALID_ID`. Names are resolved first via
@@ -489,7 +489,7 @@ This is a client-only operation (the loopback server exists only on a client, an
 never starts it), which is why the endpoint is `LOCAL`; the player's GUI scale does not affect the
 output, because the image is resampled to the fixed 2x scale.
 
-**`worldgen_summary`** — `hasDynamicRegistries`, `hasDataResources`, `counts` keyed by kind(`placed_feature`, `configured_feature`, `biome`, `structure`, `dimension_type`, `biome_modifier`).
+**`worldgen_summary`** — `hasDynamicRegistries`, `hasDataResources`, `counts` keyed by kind(`placed_feature`, `configured_feature`, `biome`, `structure`, `structure_set`, `level_stem`, `dimension_type`, `biome_modifier`).
 Registry-backed kinds are counted only when the session has dynamic registries, and `biome_modifier`
 only when it has datapack resources on a loader that defines biome modifiers; a kind that cannot be
 counted here is absent from `counts` instead of appearing as `0`.
@@ -727,39 +727,43 @@ Parser tiers:
   recipes (including 1.21 components and compound ingredients), worldgen definitions, biome modifiers,
   loot tables, and Global Loot Modifiers. It does not parse registries or tags: registry data already
   arrives structured from the mod.
-- **Built-in mod tier (`parsers/modParsers/`)** — built-in parsers for Create, Mekanism, AE2, Oritech,
-  Farmer's Delight, Ars Nouveau, and TofuCraftReload. Each declares a `modVersionRange`; when the live
+- **Built-in mod tier (`parsers/modParsers/`)** — built-in parsers for non-obvious custom recipe
+  formats only (`create:sequenced_assembly`, `ae2:inscriber`, `ars_nouveau:imbuement`, and
+  `ars_nouveau:enchanting_apparatus`). Each declares a `modVersionRange`; when the live
   mod version is outside it (or the loaded version map is unavailable), the parser refuses to guess and
-  the record is reported as raw JSON with `parserVersionMismatch`.
+  the record is reported as raw JSON with `parserVersionMismatch`. All other modded recipes return
+  `rawJson` directly without forced machine abstraction.
 - **One retention rule (`parsers/retention.ts`)** — `rawJson` is kept when no parser ran, when the
   parser reported `hasUnparsedFields`, or when the caller asked (`includeRaw`). Otherwise the parsed
   result is the answer. `parsers/shared.ts` and `unparsedRecipeFlag` give both tiers the same way to
   report unexplained input, so "unparsed data is kept verbatim" is a property of the parser layer.
 - **Primary evidence (`jar/`, `bytecode/`, `decompiler/`, `metadata/`)** — JAR and Jar-in-Jar indexing,
-  JAR/pack-script search, `<clinit>`/`ConstantValue` ID tracing, Vineflower 1.12.0 or `javap`
-  decompilation (Vineflower is downloaded into a tools directory and verified by SHA-256), and JVM
-  class reflection through the mod's `introspect_class`.
+  JAR/pack-script/`config/`/`saves/*/serverconfig/`/`.zip` datapack search and file reading,
+  `<clinit>`/`ConstantValue` ID tracing, Vineflower 1.12.0 (with ZIP path-containment check) or
+  `javap` decompilation, line/character range slicing, and JVM class reflection through `introspect_class`.
+  Filesystem roots are resolved only from the running mod or `--mods-dir`/`--game-dir` startup flags,
+  with `realpath` confinement on resolved targets.
 
 The 12 tools (names unchanged):
 
 | Tool | Purpose |
 |---|---|
-| `mc_status` | Connection health, world state, per-viewer availability map, integrations, loaded mod list (`filteredModCount` when a client-side mod filter is applied) |
-| `mc_player_state` | Player position, dimension, biome, environment, vitals, effects, inventory, open screen |
+| `mc_status` | Connection health, world state, per-viewer availability map, integrations, loaded mod list (`filteredModCount`), and optional request/cache `metrics` (`includeMetrics=true`) |
+| `mc_player_state` | Player position, dimension, biome, environment, vitals, rich effects, attributes, inventory, Ender Chest, open screen slots, and container `dataSlots` |
 | `mc_observe_world` | `mode=looking_at` raycast target, or `mode=area` scan of blocks, block entities, and entities |
-| `mc_search_registry` | Resolve an item/block/fluid/entity/tag id by id or localized display name; the resolution step before any exact `item=`/`id=` argument |
-| `mc_inspect` | Registry entry metadata (`defaultComponents`, `foodProperties`, `blockInfo`, `viewerInformation`) or a tag's members |
+| `mc_search_registry` | Resolve an `item`/`block`/`fluid`/`entity`/`potion`/`mob_effect`/`attribute`/`enchantment`/`biome` or `*_tag` id by id or localized display name |
+| `mc_inspect` | Registry entry metadata (`defaultComponents`, `foodProperties`, `blockInfo` with loot table & light/blast properties, entity default attributes & loot table, potion/mob_effect/attribute/enchantment/biome metadata, `viewerInformation`) or a tag's members |
 | `mc_query_item_flow` | Cross-query recipes (input/output/catalyst roles), loot, trades, data maps, and registry metadata for one exact id; unreadable parts appear under `missing` with `partial: true` |
-| `mc_query_recipes` | List recipe types/viewer categories/built-in parsers (`listTypes=true`), or query recipes by exact item, role, type, mod, and source |
-| `mc_render_recipe` | Draw the recipes that make an exact item, as the viewer draws them, and return one MCP image block per recipe beside the same answer as text |
-| `mc_query_world_data` | Worldgen kinds (with biome temperature filters), loot, trades, and NeoForge data maps |
+| `mc_query_recipes` | List recipe types/viewer categories/built-in parsers (`listTypes=true`), or query vanilla (including brewing mixes/`BrewingRecipe`) and viewer recipes by exact item, role, type, mod, and source |
+| `mc_render_recipe` | Draw recipes matching an exact `item` or `recipeId`, as the viewer draws them, returning one MCP image block per recipe beside the same JSON text envelope |
+| `mc_query_world_data` | Worldgen kinds (including `structure_set`, `level_stem`, and biome temperature filters), loot, trades, and NeoForge data maps |
 | `mc_query_advancements` | Advancement definitions, triggers, rewards, and live progress when the world owner allows it |
 | `mc_guides` | Search, list, or read Patchouli/GuideME/FTB Quests/Ponder/Oracle/lang documents |
-| `mc_inspect_code` | ID tracing, JAR/pack-script search, resource reading, decompilation, and JVM class reflection |
+| `mc_inspect_code` | ID tracing, JAR/pack-script search, resource or pack-script/config reading (with line slicing), decompilation (with line slicing), and JVM class reflection |
 
 Tool arguments are MCP-facing names (`query`, `modId`, `target`, `direction`, …); each data module maps
 them to the endpoint's parameter names (`q`, `mod`, `id`, …). A tool result is always a JSON object
-with `ok`; failures are `{ok: false, code, error}` with the mod's code when the mod answered.
+with `ok`; failures are `{ok: false, code, error}` with the mod's code when the mod answered and set MCP `isError: true`.
 `mc_render_recipe` is the one tool whose result also carries MCP image blocks: the text block keeps
 the same JSON envelope (with the picture bytes removed), and each image block is the same answer
 drawn. A client that does not render images therefore loses nothing but the picture.

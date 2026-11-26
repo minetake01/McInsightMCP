@@ -53,7 +53,7 @@ public final class DataPackView {
     private final Map<String, List<ResourceRef>> folderIndex = new ConcurrentHashMap<>();
 
     private static final GenerationalCache<DataPackView> CURRENT =
-        new GenerationalCache<>(CacheGenerations::data);
+        new GenerationalCache<>(GenerationalCache.Scope.DATA);
 
     private DataPackView(HolderLookup.Provider registries, ResourceManagerAccess dataResources) {
         this.registries = registries;
@@ -82,7 +82,7 @@ public final class DataPackView {
                     GameAccess.getRegistryAccess(executor)
                 ), 10_000);
             } catch (Exception e) {
-                throw new InsightException(InsightError.INTERNAL_ERROR, e.getMessage());
+                throw MainThreadExecutor.unwrapInsightException(e, InsightError.INTERNAL_ERROR);
             }
         });
     }
@@ -166,7 +166,7 @@ public final class DataPackView {
     }
 
     public JsonElement readJson(ResourceRef ref) {
-        return encodedCache.computeIfAbsent("res:" + ref.id(), k -> dataResources.read(ref.resource()));
+        return encodedCache.computeIfAbsent("res:" + ref.location(), k -> dataResources.read(ref.resource()));
     }
 
     /** Reads merged pack layers for a resource, lowest priority first. */

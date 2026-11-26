@@ -19,8 +19,18 @@ import { jsonText } from './helpers.js';
  */
 export function toolResult(handler: () => Promise<object>) {
   return handler().then(
-    (value) => jsonText({ ...(value as Record<string, unknown>), ok: true }),
-    (error: unknown) => jsonText(toFailure(error)),
+    (value) => {
+      const payload = { ...(value as Record<string, unknown>), ok: (value as { ok?: unknown }).ok ?? true };
+      const failed = payload.ok === false;
+      return {
+        ...jsonText(payload),
+        ...(failed ? { isError: true } : {}),
+      };
+    },
+    (error: unknown) => ({
+      ...jsonText(toFailure(error)),
+      isError: true,
+    }),
   );
 }
 

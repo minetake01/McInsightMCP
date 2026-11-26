@@ -35,7 +35,7 @@ public final class DisplayNames {
      * so the resource generation is also the language's invalidation signal and the code is read
      * once per reload rather than once per lookup.
      */
-    private static final GenerationalCache<String> LANGUAGE = new GenerationalCache<>(CacheGenerations::resource);
+    private static final GenerationalCache<String> LANGUAGE = new GenerationalCache<>(GenerationalCache.Scope.RESOURCE);
 
     /** One table per kind and language, so a search over items does not name every fluid too. */
     private static final Map<String, GenerationalCache<Map<String, String>>> TABLES = new ConcurrentHashMap<>();
@@ -53,7 +53,7 @@ public final class DisplayNames {
     private static Map<String, String> table(RegistryIndex.Kind kind) {
         String key = kind.id() + ":" + language();
         return TABLES
-            .computeIfAbsent(key, ignored -> new GenerationalCache<>(CacheGenerations::resource))
+            .computeIfAbsent(key, ignored -> new GenerationalCache<>(GenerationalCache.Scope.RESOURCE))
             .get(() -> build(kind));
     }
 
@@ -78,6 +78,11 @@ public final class DisplayNames {
             case BLOCK -> blockName(Versioned.byId(BuiltInRegistries.BLOCK, id));
             case FLUID -> fluidName(Versioned.byId(BuiltInRegistries.FLUID, id), id);
             case ENTITY -> entityName(Versioned.byId(BuiltInRegistries.ENTITY_TYPE, id));
+            case POTION -> potionName(id);
+            case MOB_EFFECT -> mobEffectName(Versioned.byId(BuiltInRegistries.MOB_EFFECT, id));
+            case ATTRIBUTE -> attributeName(Versioned.byId(BuiltInRegistries.ATTRIBUTE, id));
+            case ENCHANTMENT -> enchantmentName(id);
+            case BIOME -> Component.translatable("biome." + id.getNamespace() + "." + id.getPath()).getString();
         };
     }
 
@@ -99,6 +104,41 @@ public final class DisplayNames {
         return type != null ? type.getDescription().getString() : null;
     }
 
+    private static String potionName(ResourceLocation id) {
+        return Versioned.potionDisplayName(Versioned.byId(BuiltInRegistries.POTION, id));
+    }
+
+    private static String mobEffectName(net.minecraft.world.effect.MobEffect effect) {
+        return effect != null ? effect.getDisplayName().getString() : null;
+    }
+
+    private static String attributeName(net.minecraft.world.entity.ai.attributes.Attribute attr) {
+        return attr != null ? Component.translatable(attr.getDescriptionId()).getString() : null;
+    }
+
+    private static String enchantmentName(ResourceLocation id) {
+        var executor = net.minetake.mcinsight.McInsightCommon.getExecutor();
+        if (executor == null) {
+            return null;
+        }
+        try {
+            net.minecraft.core.HolderLookup.Provider access = executor.supplyOnGameThread(
+                () -> net.minetake.mcinsight.game.GameAccess.getRegistryAccess(executor),
+                5_000L
+            );
+            if (access == null) {
+                return null;
+            }
+            var key = net.minecraft.resources.ResourceKey.create(net.minecraft.core.registries.Registries.ENCHANTMENT, id);
+            return access.lookup(net.minecraft.core.registries.Registries.ENCHANTMENT)
+                .flatMap(reg -> reg.get(key))
+                .map(holder -> holder.value().description().getString())
+                .orElse(null);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private static String fluidName(Fluid fluid, ResourceLocation id) {
         if (fluid == null) {
             return null;
@@ -116,6 +156,11 @@ public final class DisplayNames {
         String translatedFluid = Component.translatable(fluidKey).getString();
         if (!translatedFluid.equals(fluidKey)) {
             return translatedFluid;
+        }
+        String fluidTypeKey = Util.makeDescriptionId("fluid_type", id);
+        String translatedFluidType = Component.translatable(fluidTypeKey).getString();
+        if (!translatedFluidType.equals(fluidTypeKey)) {
+            return translatedFluidType;
         }
         return null;
     }

@@ -27,6 +27,11 @@ const SUITES = {
       }
       return `loader=${s.loader} viewers=${JSON.stringify(s.integrations.activeRecipeViewers)}`;
     });
+    await r.check('mc_status with includeMetrics returns metrics', async () => {
+      const s = ok(await mcp.call('mc_status', { includeMetrics: true }));
+      expect(s.metrics && typeof s.metrics === 'object', 'metrics missing');
+      return 'metrics present';
+    });
     await r.check('mc_player_state reads the player at this client', async () => {
       // The setup's /give reaches the client in a later inventory packet; read until it lands.
       const p = await eventually(async () => {
@@ -35,6 +40,10 @@ const SUITES = {
         return held ? state : undefined;
       }, 'the planks given by the world setup never reached the client inventory');
       expect(p.name === 'E2E', `name=${p.name}`);
+      expect(Array.isArray(p.attributes) && p.attributes.length > 0, 'player attributes missing');
+      if (scenario !== 'multiplayer-nomod') {
+        expect(p.enderChest && typeof p.enderChest.size === 'number', 'player enderChest missing');
+      }
       return `pos=${Math.round(p.pos.x)},${Math.round(p.pos.y)},${Math.round(p.pos.z)}`;
     });
   },
@@ -46,9 +55,13 @@ const SUITES = {
       expect(res.results.every((e) => e.id.includes(':')), 'ids must be namespaced');
       return `${res.returned}/${res.total}`;
     });
-    await r.check('inspect describes an item without legacy fields', async () => {
+    await r.check('inspect describes block and potion metadata without legacy fields', async () => {
       const res = ok(await mcp.call('mc_inspect', { target: 'minecraft:furnace' }));
       expect(!('jeiInformation' in res), 'jeiInformation is back');
+      expect(typeof res.blockInfo?.explosionResistance === 'number', 'explosionResistance missing');
+      expect(typeof res.blockInfo?.lightEmission === 'number', 'lightEmission missing');
+      const potion = ok(await mcp.call('mc_inspect', { target: 'minecraft:night_vision', kind: 'potion' }));
+      expect(Array.isArray(potion.effects) && potion.effects.length > 0, 'potion effects missing');
       return `kind=${res.kind}`;
     });
     await r.check('a tag lists its members', async () => {
@@ -189,10 +202,12 @@ const SUITES = {
       expect(wrong.length === 0, `non-emerald results: ${[...new Set(wrong.map((x) => x.result?.id))].join(', ')}`);
       return `${t.total} trades`;
     });
-    await r.check('worldgen registries are counted', async () => {
+    await r.check('worldgen registries are counted and structure_set is queryable', async () => {
       const res = ok(await mcp.call('mc_query_world_data', { kind: 'worldgen_summary' }));
       expect((res.counts?.biome ?? 0) > 0, JSON.stringify(res.counts));
-      return `biomes=${res.counts.biome}`;
+      const sets = page(ok(await mcp.call('mc_query_world_data', { kind: 'structure_set', limit: 5 })), 'entries');
+      expect(sets.total > 0, 'no structure_set entries');
+      return `biomes=${res.counts.biome}, structureSets=${sets.total}`;
     });
     await r.check('data maps follow the loader', async () => {
       const res = await mcp.call('mc_query_world_data', { kind: 'datamaps', limit: 5 });

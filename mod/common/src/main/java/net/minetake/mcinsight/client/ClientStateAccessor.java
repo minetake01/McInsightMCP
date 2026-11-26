@@ -48,7 +48,8 @@ public final class ClientStateAccessor {
         String screenClass,
         String title,
         String menuClass,
-        List<ScreenSlotSample> slots
+        List<ScreenSlotSample> slots,
+        List<Integer> dataSlots
     ) {}
 
     public static ScreenSnapshot captureOpenScreenSnapshot() {
@@ -77,9 +78,49 @@ public final class ClientStateAccessor {
                     ));
                 }
             }
-            return new ScreenSnapshot(screenClass, title, menu.getClass().getName(), slots);
+            return new ScreenSnapshot(
+                screenClass,
+                title,
+                menu.getClass().getName(),
+                slots,
+                readDataSlots(menu)
+            );
         }
-        return new ScreenSnapshot(screenClass, title, null, List.of());
+        return new ScreenSnapshot(screenClass, title, null, List.of(), List.of());
+    }
+
+    private static List<Integer> readDataSlots(AbstractContainerMenu menu) {
+        List<Integer> values = new ArrayList<>();
+        for (Class<?> cls = menu.getClass(); cls != null && cls != Object.class; cls = cls.getSuperclass()) {
+            for (java.lang.reflect.Field field : cls.getDeclaredFields()) {
+                if (java.lang.reflect.Modifier.isStatic(field.getModifiers())
+                    || !List.class.isAssignableFrom(field.getType())) {
+                    continue;
+                }
+                if (!(field.getGenericType() instanceof java.lang.reflect.ParameterizedType pt)) {
+                    continue;
+                }
+                java.lang.reflect.Type[] args = pt.getActualTypeArguments();
+                if (args.length != 1 || args[0] != net.minecraft.world.inventory.DataSlot.class) {
+                    continue;
+                }
+                try {
+                    field.setAccessible(true);
+                    List<?> raw = (List<?>) field.get(menu);
+                    if (raw != null) {
+                        for (Object slot : raw) {
+                            if (slot instanceof net.minecraft.world.inventory.DataSlot ds) {
+                                values.add(ds.get());
+                            }
+                        }
+                    }
+                    return List.copyOf(values);
+                } catch (ReflectiveOperationException e) {
+                    throw new IllegalStateException("Failed to read container DataSlots", e);
+                }
+            }
+        }
+        return List.of();
     }
 
     public static String getLocalGameMode() {

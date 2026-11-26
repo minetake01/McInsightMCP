@@ -15,7 +15,7 @@ public enum InsightEndpoint {
     STATUS("status", "/api/v1/status", DataScope.LOCAL, PlayerScope.LOCAL, 5_000, Set.of("includeMods")),
     MODS("mods", "/api/v1/mods", DataScope.LOCAL, PlayerScope.NONE, 5_000, Set.of()),
     METRICS("metrics", "/api/v1/metrics", DataScope.LOCAL, PlayerScope.NONE, 5_000, Set.of()),
-    PLAYER("player", "/api/v1/player", DataScope.LOCAL, PlayerScope.LOCAL, 5_000, Set.of()),
+    PLAYER("player", "/api/v1/player", DataScope.COMPOSITE, PlayerScope.LOCAL, 5_000, Set.of()),
 
     LOOKING_AT("looking_at", "/api/v1/looking-at", DataScope.COMPOSITE, PlayerScope.LOCAL, 5_000,
         Set.of("maxDistance", "includeFluids")),
@@ -29,11 +29,11 @@ public enum InsightEndpoint {
     REGISTRY_TAG("registry_tag", "/api/v1/registry/tag", DataScope.LOCAL, PlayerScope.NONE, 5_000,
         Set.of("kind", "id", "limit", "offset"), 200, 500),
 
-    RECIPES_TYPES("recipes_types", "/api/v1/recipes/types", DataScope.LOCAL, PlayerScope.NONE, 10_000, Set.of()),
-    RECIPES_QUERY("recipes_query", "/api/v1/recipes/query", DataScope.LOCAL, PlayerScope.NONE, 10_000,
+    RECIPES_TYPES("recipes_types", "/api/v1/recipes/types", DataScope.COMPOSITE, PlayerScope.NONE, 10_000, Set.of()),
+    RECIPES_QUERY("recipes_query", "/api/v1/recipes/query", DataScope.COMPOSITE, PlayerScope.NONE, 10_000,
         Set.of("item", "role", "type", "mod", "source", "limit", "offset"), 40, 100),
     RECIPES_RENDER("recipes_render", "/api/v1/recipes/render", DataScope.LOCAL, PlayerScope.NONE, 20_000,
-        Set.of("item", "role", "type", "source", "limit", "offset"), 1, 8),
+        Set.of("item", "recipeId", "role", "type", "source", "limit", "offset"), 1, 8),
 
     GUIDES_LIST("guides_list", "/api/v1/guides/list", DataScope.LOCAL, PlayerScope.NONE, 5_000,
         Set.of("source", "mod", "limit", "offset"), 50, 500),
@@ -61,7 +61,12 @@ public enum InsightEndpoint {
     SERVER_LOOKING_AT_BLOCK_ENTITY("server_looking_at_block_entity", null, DataScope.SERVER_DATA,
         PlayerScope.REQUESTER, 5_000, Set.of("x", "y", "z")),
     SERVER_SCAN_BLOCK_ENTITIES("server_scan_block_entities", null, DataScope.SERVER_DATA,
-        PlayerScope.REQUESTER, 5_000, Set.of("radius", "filter"));
+        PlayerScope.REQUESTER, 5_000, Set.of("radius", "filter")),
+    SERVER_RECIPES_TYPES("server_recipes_types", null, DataScope.SERVER_DATA, PlayerScope.NONE, 10_000, Set.of()),
+    SERVER_RECIPES_QUERY("server_recipes_query", null, DataScope.SERVER_DATA, PlayerScope.NONE, 10_000,
+        Set.of("item", "role", "type", "mod", "source", "limit", "offset"), 40, 100),
+    SERVER_PLAYER_ENDER_CHEST("server_player_ender_chest", null, DataScope.SERVER_DATA, PlayerScope.REQUESTER, 5_000,
+        Set.of());
 
     /** Where the authoritative values for an endpoint live. */
     public enum DataScope {
@@ -169,7 +174,8 @@ public enum InsightEndpoint {
         if (!paginated()) {
             throw new IllegalStateException("Endpoint " + id + " is not paginated");
         }
-        return params.limit(defaultLimit, effectiveMaxLimit());
+        int max = effectiveMaxLimit();
+        return params.limit(Math.min(defaultLimit, max), max);
     }
 
     /** The maximum this endpoint will serve in the current session. */

@@ -4,9 +4,11 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import net.minecraft.resources.ResourceLocation;
 import net.minetake.mcinsight.api.InsightDispatcher;
 import net.minetake.mcinsight.api.InsightEndpoint;
 import net.minetake.mcinsight.api.InsightError;
@@ -163,14 +165,18 @@ public final class AreaScanner {
         PartialData partial
     ) {
         if (ctx.executor().getActiveServer() != null) {
+            int syncRadius = BlockEntityPart.maxSyncBlockRadius();
             JsonArray blockEntities = new JsonArray(capture.blockEntities().size());
             for (WorldData.BlockSample sample : capture.blockEntities()) {
-                blockEntities.add(WorldData.blockJson(sample, true, true));
+                blockEntities.add(WorldData.blockJson(sample, false, true));
             }
             out.add("blockEntities", blockEntities);
             out.addProperty("totalBlockEntities", capture.totalBlockEntities());
             if (capture.totalBlockEntities() > blockEntities.size()) {
                 out.addProperty("blockEntitiesTruncated", true);
+            }
+            if (syncRadius < radius) {
+                out.addProperty("blockEntityRadius", syncRadius);
             }
             return;
         }
@@ -243,12 +249,19 @@ public final class AreaScanner {
         int maxZ = center.getZ() + radius;
 
         Map<Block, Integer> counts = new LinkedHashMap<>();
+        Map<Block, Boolean> blockFilterMemo = new IdentityHashMap<>();
         List<WorldData.BlockSample> blockEntities = new ArrayList<>();
         int totalBlockEntities = 0;
         List<WorldData.BlockSample> matchedBlocks = new ArrayList<>();
         int totalMatchedBlocks = 0;
         HolderLookup.Provider registries = level.registryAccess();
-        HolderLookup.Provider contentRegistries = captureBlockEntityContents ? registries : null;
+        int beRadius = Math.min(radius, BlockEntityPart.maxSyncBlockRadius());
+        int beMinX = center.getX() - beRadius;
+        int beMaxX = center.getX() + beRadius;
+        int beMinY = Math.max(minY, center.getY() - beRadius);
+        int beMaxY = Math.min(maxY, center.getY() + beRadius);
+        int beMinZ = center.getZ() - beRadius;
+        int beMaxZ = center.getZ() + beRadius;
 
         var chunkSource = level.getChunkSource();
         for (int chunkX = minX >> 4; chunkX <= (maxX >> 4); chunkX++) {
@@ -265,19 +278,19 @@ public final class AreaScanner {
                 if (captureBlockEntityContents) {
                     for (Map.Entry<BlockPos, BlockEntity> entry : chunk.getBlockEntities().entrySet()) {
                         BlockPos pos = entry.getKey();
-                        if (pos.getX() < chunkMinX || pos.getX() > chunkMaxX
-                            || pos.getY() < minY || pos.getY() > maxY
-                            || pos.getZ() < chunkMinZ || pos.getZ() > chunkMaxZ) {
+                        if (pos.getX() < beMinX || pos.getX() > beMaxX
+                            || pos.getY() < beMinY || pos.getY() > beMaxY
+                            || pos.getZ() < beMinZ || pos.getZ() > beMaxZ) {
                             continue;
                         }
-                        WorldData.BlockSample sample =
-                            WorldData.block(pos, chunk.getBlockState(pos), entry.getValue(), contentRegistries);
-                        if (!WorldData.matchesBlockEntityFilter(sample, filter)) {
+                        BlockState state = chunk.getBlockState(pos);
+                        ResourceLocation typeId = BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(entry.getValue().getType());
+                        if (!WorldData.matchesBlockEntityFilter(state, typeId, filter)) {
                             continue;
                         }
                         totalBlockEntities++;
                         if (blockEntities.size() < WorldData.MAX_BLOCK_ENTITIES) {
-                            blockEntities.add(sample);
+                            blockEntities.add(WorldData.block(pos, state, entry.getValue(), registries));
                         }
                     }
                 }
@@ -301,19 +314,15 @@ public final class AreaScanner {
                                 if (state.isAir()) {
                                     continue;
                                 }
-                                counts.merge(state.getBlock(), 1, Integer::sum);
-                                if (filter.isEmpty() || !WorldData.matchesBlockFilter(state, filter)) {
+                                Block block = state.getBlock();
+                                counts.merge(block, 1, Integer::sum);
+                                if (filter.isEmpty() || !blockFilterMemo.computeIfAbsent(block, b -> WorldData.matchesBlockFilter(state, filter))) {
                                     continue;
                                 }
                                 totalMatchedBlocks++;
                                 if (matchedBlocks.size() < WorldData.MAX_MATCHED_BLOCKS) {
                                     BlockPos pos = new BlockPos(x, y, z);
-                                    matchedBlocks.add(WorldData.block(
-                                        pos,
-                                        state,
-                                        chunk.getBlockEntity(pos),
-                                        contentRegistries
-                                    ));
+                                    matchedBlocks.add(WorldData.block(pos, state, null, null));
                                 }
                             }
                         }

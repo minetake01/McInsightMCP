@@ -232,6 +232,43 @@ describe('JarInspector (synthetic JAR tests)', () => {
     expect(packHits.some((h) => h.relativePath.replace(/\\/g, '/').includes('scripts/recipes.zs'))).toBe(true);
     expect(packHits.some((h) => h.relativePath.replace(/\\/g, '/').includes('defaultconfigs/democonfig.toml'))).toBe(true);
   });
+
+  it('supports config, saves serverconfig, zip datapacks, line slicing, and symlink confinement', async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'mcinsight-pack-'));
+    tmpDirs.push(dir);
+    const outsideDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'mcinsight-outside-'));
+    tmpDirs.push(outsideDir);
+    await fsp.writeFile(path.join(outsideDir, 'secret.toml'), 'token = "escape"\n');
+
+    await fsp.mkdir(path.join(dir, 'config'), { recursive: true });
+    await fsp.writeFile(path.join(dir, 'config', 'main.toml'), 'line1 = true\nline2 = false\nline3 = 99\n');
+    await fsp.mkdir(path.join(dir, 'saves', 'world1', 'serverconfig'), { recursive: true });
+    await fsp.writeFile(path.join(dir, 'saves', 'world1', 'serverconfig', 'world.toml'), 'difficulty = "hard"\n');
+    await fsp.mkdir(path.join(dir, 'saves', 'world1', 'datapacks'), { recursive: true });
+    const dpZip = new AdmZip();
+    dpZip.addFile('data/packmod/recipe/zip_recipe.json', Buffer.from('{"type":"minecraft:smelting","id":"zip_hit"}'));
+    dpZip.writeZip(path.join(dir, 'saves', 'world1', 'datapacks', 'extra.zip'));
+
+    const inspector = new JarInspector(path.join(dir, '.tools'));
+    const hits = await inspector.searchPackFiles(dir, 'zip_hit', 20);
+    expect(hits.some((h) => h.relativePath.includes('extra.zip!data/packmod/recipe/zip_recipe.json'))).toBe(true);
+
+    const listed = await inspector.listPackFiles(dir, '', 50);
+    expect(listed.files.some((f) => f.relativePath === 'config/main.toml')).toBe(true);
+    expect(listed.files.some((f) => f.relativePath === 'saves/world1/serverconfig/world.toml')).toBe(true);
+
+    const sliced = await inspector.readPackFile(dir, 'config/main.toml', { startLine: 2, endLine: 2 });
+    expect(sliced.content).toBe('line2 = false');
+    expect(sliced.startLine).toBe(2);
+    expect(sliced.endLine).toBe(2);
+    expect(sliced.totalLines).toBe(3);
+    expect(sliced.truncated).toBe(true);
+
+    const zipRead = await inspector.readPackFile(dir, 'saves/world1/datapacks/extra.zip!data/packmod/recipe/zip_recipe.json');
+    expect(JSON.parse(zipRead.content)).toMatchObject({ id: 'zip_hit' });
+
+    await expect(inspector.readPackFile(dir, '../outside/secret.toml')).rejects.toThrow(/escapes/i);
+  });
 });
 
 describe.skipIf(!hasRealModpack)('JarInspector (Real Modpack JARs via MCINSIGHT_TEST_MODS_DIR)', () => {

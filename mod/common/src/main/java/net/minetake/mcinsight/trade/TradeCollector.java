@@ -4,10 +4,12 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import net.minetake.mcinsight.api.InsightEndpoint;
@@ -18,7 +20,6 @@ import net.minetake.mcinsight.api.ItemQuery;
 import net.minetake.mcinsight.api.Page;
 import net.minetake.mcinsight.api.Params;
 import net.minetake.mcinsight.api.RequestContext;
-import net.minetake.mcinsight.cache.CacheGenerations;
 import net.minetake.mcinsight.cache.GenerationalCache;
 import net.minetake.mcinsight.game.GameAccess;
 import net.minetake.mcinsight.game.MainThreadExecutor;
@@ -30,12 +31,14 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.RegistryOps;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.entity.npc.VillagerProfession;
 import net.minecraft.world.entity.npc.VillagerType;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.trading.MerchantOffer;
 import net.minecraft.world.level.Level;
 //? if >=26.3 {
@@ -44,6 +47,7 @@ import net.minecraft.world.level.Level;
 //? if >=26.1 {
 /*import net.minecraft.core.HolderSet;
 import net.minecraft.world.item.trading.TradeSet;
+import net.minecraft.world.item.trading.TradeSets;
 import net.minecraft.world.item.trading.VillagerTrade;
 import net.minecraft.world.level.storage.loot.LootContext;
 import net.minecraft.world.level.storage.loot.LootParams;
@@ -83,7 +87,7 @@ public final class TradeCollector {
     private static final long SAMPLE_SEED_B = 4242L;
     private static final String WANDERING_TRADER_ID = "minecraft:wandering_trader";
 
-    private static final GenerationalCache<TradeIndex> INDEX = new GenerationalCache<>(CacheGenerations::data);
+    private static final GenerationalCache<TradeIndex> INDEX = new GenerationalCache<>(GenerationalCache.Scope.DATA);
 
     private TradeCollector() {}
 
@@ -262,6 +266,7 @@ public final class TradeCollector {
 
         if (offer.declaration() != null) {
             json.add("listing", offer.declaration());
+            search.append(offer.declaration()).append(' ');
         } else {
             json.add("costA", stackJson(offer.costA()));
             if (offer.costB() != null) {
@@ -304,7 +309,7 @@ public final class TradeCollector {
 
     // -------------------------------------------------------------- renders
 
-    /** The reported form of a stack: what it is and how many, without its component payload. */
+    /** The reported form of a stack: what it is, how many, and any non-default components. */
     private static JsonObject stackJson(StackRef stack) {
         JsonObject json = new JsonObject();
         if (stack == null) {
@@ -314,12 +319,18 @@ public final class TradeCollector {
         json.addProperty("id", stack.id());
         json.addProperty("displayName", stack.displayName());
         json.addProperty("count", stack.count());
+        if (stack.components() != null) {
+            json.add("components", stack.components());
+        }
         return json;
     }
 
     private static void describeStack(StackRef stack, Set<String> namespaces, StringBuilder search) {
         namespaces.add(namespaceOf(stack.id()));
         search.append(stack.id()).append(' ').append(stack.displayName()).append(' ');
+        if (stack.components() != null) {
+            search.append(stack.components()).append(' ');
+        }
     }
 
     private static String namespaceOf(String id) {
@@ -340,7 +351,12 @@ public final class TradeCollector {
      * roll; marking it sampled says a second roll did not reproduce it, which is the honest
      * description of an offer that changed under the same seed.
      */
-    private static TradeOffer rolledOffer(String listingClass, MerchantOffer first, MerchantOffer second) {
+    private static TradeOffer rolledOffer(
+        String listingClass,
+        MerchantOffer first,
+        MerchantOffer second,
+        RegistryOps<JsonElement> ops
+    ) {
         boolean sampled = second == null || !sameIo(first, second);
         return new TradeOffer(
             null,
@@ -348,9 +364,9 @@ public final class TradeCollector {
             false,
             listingClass,
             null,
-            StackRef.of(first.getCostA()),
-            first.getCostB().isEmpty() ? null : StackRef.of(first.getCostB()),
-            StackRef.of(first.getResult()),
+            StackRef.of(first.getCostA(), ops),
+            first.getCostB().isEmpty() ? null : StackRef.of(first.getCostB(), ops),
+            StackRef.of(first.getResult(), ops),
             first.getMaxUses(),
             first.getXp(),
             first.getPriceMultiplier(),
@@ -369,11 +385,11 @@ public final class TradeCollector {
             && Float.compare(a.getPriceMultiplier(), b.getPriceMultiplier()) == 0;
     }
 
-    private static boolean sameStack(net.minecraft.world.item.ItemStack a, net.minecraft.world.item.ItemStack b) {
+    private static boolean sameStack(ItemStack a, ItemStack b) {
         if (a.isEmpty() != b.isEmpty()) {
             return false;
         }
-        return a.isEmpty() || (a.getItem() == b.getItem() && a.getCount() == b.getCount());
+        return a.isEmpty() || (a.getCount() == b.getCount() && ItemStack.isSameItemSameComponents(a, b));
     }
 
     /** A declaration worth reporting, or null when the snapshot produced nothing usable. */
@@ -425,11 +441,15 @@ public final class TradeCollector {
     //? if >=26.1 {
     /*private static List<TradeOffer> readRegistryTrades(Level level, HolderLookup.Provider registries, RegistryOps<JsonElement> ops) {
         if (!(level instanceof ServerLevel serverLevel) || registries == null) {
-            return List.of();
+            throw new InsightException(
+                InsightError.DATA_UNAVAILABLE,
+                "Trade definitions require an active server level."
+            );
         }
         HolderLookup.RegistryLookup<TradeSet> tradeSets = registries.lookupOrThrow(Registries.TRADE_SET);
         List<Holder.Reference<VillagerType>> villagerTypes =
             registries.lookupOrThrow(Registries.VILLAGER_TYPE).listElements().toList();
+        Map<ResourceLocation, Villager> villagersByType = new HashMap<>(villagerTypes.size() * 2);
 
         List<TradeOffer> out = new ArrayList<>();
         for (Holder.Reference<VillagerProfession> profession
@@ -443,9 +463,24 @@ public final class TradeCollector {
                 }
                 for (Holder<VillagerTrade> trade : tradeSetMembers(set)) {
                     String tradeId = trade.unwrapKey().map(key -> Versioned.idOf(key).toString()).orElse(null);
-                    collectRegistryTrade(serverLevel, tradeId, trade.value(), villagerTypes,
+                    collectRegistryTrade(serverLevel, tradeId, trade.value(), villagerTypes, villagersByType,
                         professionId, entry.getIntKey(), ops, out);
                 }
+            }
+        }
+        for (ResourceKey<TradeSet> key : List.of(
+            TradeSets.WANDERING_TRADER_BUYING,
+            TradeSets.WANDERING_TRADER_COMMON,
+            TradeSets.WANDERING_TRADER_UNCOMMON
+        )) {
+            TradeSet set = tradeSets.get(key).map(Holder.Reference::value).orElse(null);
+            if (set == null) {
+                continue;
+            }
+            for (Holder<VillagerTrade> trade : tradeSetMembers(set)) {
+                String tradeId = trade.unwrapKey().map(k -> Versioned.idOf(k).toString()).orElse(null);
+                collectRegistryTrade(serverLevel, tradeId, trade.value(), villagerTypes, villagersByType,
+                    WANDERING_TRADER_ID, null, ops, out);
             }
         }
         return out;
@@ -456,34 +491,78 @@ public final class TradeCollector {
         String tradeId,
         VillagerTrade trade,
         List<Holder.Reference<VillagerType>> types,
+        Map<ResourceLocation, Villager> villagersByType,
         String professionId,
-        int tradeLevel,
+        Integer tradeLevel,
         RegistryOps<JsonElement> ops,
         List<TradeOffer> out
     ) {
+        JsonElement encoded = encodeRegistryTrade(trade, ops);
+        if (encoded != null && encoded.toString().toLowerCase(Locale.ROOT).contains("exploration_map")) {
+            out.add(new TradeOffer(
+                professionId, tradeLevel, false, VillagerTrade.class.getName(), tradeId,
+                null, null, null, 0, 0, 0.0F, false, null, null
+            ).described(jsonOf(encoded)));
+            return;
+        }
         List<TradeOffer> rolled = new ArrayList<>();
         for (Holder.Reference<VillagerType> type : types) {
+            Villager villager = villagersByType.computeIfAbsent(
+                Versioned.idOf(type.key()),
+                ignored -> villagerOf(level, type)
+            );
             TradeOffer offer = materializeRegistryTrade(
-                level, villagerOf(level, type), trade,
-                professionId, tradeLevel, tradeId, Versioned.idOf(type.key()).toString()
+                level, villager, trade,
+                professionId, tradeLevel, tradeId, Versioned.idOf(type.key()).toString(), ops
             );
             if (offer != null) {
                 rolled.add(offer);
             }
         }
         if (rolled.isEmpty()) {
-            JsonElement declaration = JsonCodec.snapshotObject(trade, SNAPSHOT_DEPTH, ops);
+            JsonElement declaration = encoded != null ? encoded : JsonCodec.snapshotObject(trade, SNAPSHOT_DEPTH, ops);
             out.add(new TradeOffer(
                 professionId, tradeLevel, false, VillagerTrade.class.getName(), tradeId,
                 null, null, null, 0, 0, 0.0F, false, null, null
             ).described(jsonOf(declaration)));
             return;
         }
-        if (rolled.size() == types.size()) {
+        if (rolled.size() == types.size() && allOffersIdentical(rolled)) {
             out.add(rolled.get(0).attached(professionId, tradeLevel, false, tradeId, null));
             return;
         }
         out.addAll(rolled);
+    }
+
+    private static JsonElement encodeRegistryTrade(VillagerTrade trade, RegistryOps<JsonElement> ops) {
+        if (ops == null) {
+            return null;
+        }
+        try {
+            return VillagerTrade.CODEC.encodeStart(ops, trade).result().orElse(null);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static boolean allOffersIdentical(List<TradeOffer> rolled) {
+        if (rolled.size() <= 1) {
+            return true;
+        }
+        TradeOffer first = rolled.get(0);
+        for (int i = 1; i < rolled.size(); i++) {
+            TradeOffer other = rolled.get(i);
+            if (!Objects.equals(first.costA(), other.costA())
+                || !Objects.equals(first.costB(), other.costB())
+                || !Objects.equals(first.result(), other.result())
+                || first.maxUses() != other.maxUses()
+                || first.xp() != other.xp()
+                || Float.compare(first.priceMultiplier(), other.priceMultiplier()) != 0
+                || first.sampled() != other.sampled()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static TradeOffer materializeRegistryTrade(
@@ -491,16 +570,17 @@ public final class TradeCollector {
         Villager villager,
         VillagerTrade trade,
         String professionId,
-        int tradeLevel,
+        Integer tradeLevel,
         String tradeId,
-        String villagerType
+        String villagerType,
+        RegistryOps<JsonElement> ops
     ) {
         MerchantOffer first = registryOffer(level, villager, trade, SAMPLE_SEED_A);
         if (first == null) {
             return null;
         }
         MerchantOffer second = registryOffer(level, villager, trade, SAMPLE_SEED_B);
-        return rolledOffer(VillagerTrade.class.getName(), first, second)
+        return rolledOffer(VillagerTrade.class.getName(), first, second, ops)
             .attached(professionId, tradeLevel, false, tradeId, villagerType);
     }
 
@@ -588,7 +668,7 @@ public final class TradeCollector {
             for (ListingVariant variant : variantsOf(listing, context)) {
                 TradeOffer offer = variant.trader() == null
                     ? null
-                    : materializeListing(professionId, level, experimental, variant);
+                    : materializeListing(professionId, level, experimental, variant, ops);
                 out.add(offer != null
                     ? offer
                     : describeListing(professionId, level, experimental, variant, ops));
@@ -683,14 +763,15 @@ public final class TradeCollector {
         String professionId,
         int level,
         boolean experimental,
-        ListingVariant variant
+        ListingVariant variant,
+        RegistryOps<JsonElement> ops
     ) {
         MerchantOffer first = listingOffer(variant.listing(), variant.trader(), SAMPLE_SEED_A);
         if (first == null) {
             return null;
         }
         MerchantOffer second = listingOffer(variant.listing(), variant.trader(), SAMPLE_SEED_B);
-        return rolledOffer(variant.listing().getClass().getName(), first, second)
+        return rolledOffer(variant.listing().getClass().getName(), first, second, ops)
             .attached(professionId, level, experimental, variant.villagerType());
     }
 

@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Extended `mc_search_registry`, `mc_inspect`, and `ItemFilter` with `potion`, `mob_effect`, `attribute`, `enchantment`, and `biome` (`*_tag` and dynamic world registries), enriched block/entity metadata (`lootTable`, `explosionResistance`, `lightEmission`, `defaultStateProperties`, `defaultAttributes`), player `attributes`, rich active effect metadata, integrated/bridged `enderChest`, and container `dataSlots`.
+- Added brewing recipe indexing (`PotionBrewing` via type-based reflection on `<26.3`, `BrewingRecipe` on `>=26.3`), `SERVER_RECIPES_TYPES`/`SERVER_RECIPES_QUERY` multiplayer recipe bridging for `26.x`, `recipeId` filtering on `mc_render_recipe`, `structure_set`/`level_stem` worldgen queries, `mc_status(includeMetrics)`, pack script/`config/`/`saves/*/serverconfig/`/`.zip` datapack browsing and reading via `mc_inspect_code(action="read_resource", scope="pack_scripts")`, and line/character range slicing (`startLine`, `endLine`, `maxChars`) on `read_resource` and `decompile`.
+- Bundled production `node_modules/` in release MCP server archives (`mcinsight-mcp-server-*`) for offline execution and deduplicated `sync-modrinth-metadata` in the release workflow.
+
+### Changed & Security
+- Hardened mod and MCP HTTP servers (loopback `Host`, `Origin`, and `Sec-Fetch-Site` validation on mod endpoints and MCP `/mcp` & `/health`, constant-time bearer comparison, packet-bridge exposure restricted to `SERVER_DATA` endpoints, per-player concurrency limits, and disconnect cleanup).
+- Fixed atomic `GenerationalCache` entry updates, active reload purging via `CacheGenerations`, render-thread cancellation & GPU readback buffer leaks, integrated-server dimension detection, and Vineflower ZIP extraction containment / `realpath` boundary checks.
+- Removed `modsDir`/`gameDir` parameters from `mc_inspect_code` (startup `--mods-dir`/`--game-dir` flags or live mod discovery only) and pruned redundant generic machine recipe parsers so only non-obvious custom formats (`create:sequenced_assembly`, `ae2:inscriber`, `ars_nouveau:imbuement`, `ars_nouveau:enchanting_apparatus`) are pre-parsed.
+
 ## [0.1.0-beta.4] - 2026-11-26
 
 ### Added

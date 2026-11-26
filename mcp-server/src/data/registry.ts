@@ -32,7 +32,16 @@ export interface TagQueryParams {
   offset?: number;
 }
 
-export type RegistryKindName = 'item' | 'block' | 'fluid' | 'entity';
+export type RegistryKindName =
+  | 'item'
+  | 'block'
+  | 'fluid'
+  | 'entity'
+  | 'potion'
+  | 'mob_effect'
+  | 'attribute'
+  | 'enchantment'
+  | 'biome';
 
 export async function searchRegistry(
   client: McHttpClient,

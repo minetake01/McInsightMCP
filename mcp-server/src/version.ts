@@ -8,11 +8,17 @@ import path from 'node:path';
  * drifts from `package.json` on every release. `package.json` sits one level above `dist/` (and
  * above `src/` when the tests import the sources), so both layouts resolve to the same file.
  */
+let cachedVersion: string | undefined;
+
 export function readPackageVersion(): string {
+  if (cachedVersion !== undefined) {
+    return cachedVersion;
+  }
   const packageJsonPath = path.resolve(import.meta.dirname, '..', 'package.json');
   const parsed = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8')) as { version?: string };
   if (!parsed.version) {
     throw new Error(`package.json at '${packageJsonPath}' declares no version.`);
   }
-  return parsed.version;
+  cachedVersion = parsed.version;
+  return cachedVersion;
 }

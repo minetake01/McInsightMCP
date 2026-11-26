@@ -35,6 +35,9 @@ export async function startHttpServer(
       }
 
       if (pathName === '/health' && req.method === 'GET') {
+        if (!validateHost(req, res) || !validateOrigin(req, res)) {
+          return;
+        }
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ ok: true, server: 'mcinsight-mcp', spec: '2026-07-28' }));
         return;

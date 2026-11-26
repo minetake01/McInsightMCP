@@ -19,8 +19,15 @@ import {
   type JarSearchHit,
   type SearchJarContentsOptions,
 } from '../jar/search.js';
-import { searchPackFiles, type PackFileHit } from '../jar/packScripts.js';
+import {
+  listPackFiles,
+  type PackFileEntry,
+  type PackFileHit,
+  readPackFile,
+  searchPackFiles,
+} from '../jar/packScripts.js';
 import { traceIdUsage, type IdTraceResult, type TraceIdOptions } from '../jar/trace.js';
+import type { TextSliceOptions } from '../utils/textSlice.js';
 import { decompileJarClass, JdkTools, VineflowerInstaller, type DecompileMode } from './vineflower.js';
 
 const MAX_DECOMPILE_CACHE = 64;
@@ -90,6 +97,18 @@ export class JarInspector {
 
   async searchPackFiles(gameDir: string, query: string, limit = 40, filePattern?: string): Promise<PackFileHit[]> {
     return searchPackFiles(gameDir, query, limit, filePattern);
+  }
+
+  async listPackFiles(
+    gameDir: string,
+    prefix = '',
+    limit = 50,
+  ): Promise<{ gameDir: string; files: PackFileEntry[]; returned: number; truncated: boolean }> {
+    return listPackFiles(gameDir, prefix, limit);
+  }
+
+  async readPackFile(gameDir: string, relativePath: string, sliceOpts?: TextSliceOptions) {
+    return readPackFile(gameDir, relativePath, sliceOpts);
   }
 
   async listJarEntries(

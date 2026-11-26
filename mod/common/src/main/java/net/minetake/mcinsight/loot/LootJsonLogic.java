@@ -54,7 +54,15 @@ public final class LootJsonLogic {
     public static LootRefs lootRefs(JsonObject root) {
         Set<String> droppedItems = new LinkedHashSet<>();
         Set<String> referencedTables = new LinkedHashSet<>();
-        if (root != null && root.has("pools") && root.get("pools").isJsonArray()) {
+        walkTable(root, droppedItems, referencedTables);
+        return new LootRefs(Set.copyOf(droppedItems), Set.copyOf(referencedTables));
+    }
+
+    private static void walkTable(JsonObject root, Set<String> droppedItems, Set<String> referencedTables) {
+        if (root == null) {
+            return;
+        }
+        if (root.has("pools") && root.get("pools").isJsonArray()) {
             for (JsonElement poolElement : root.getAsJsonArray("pools")) {
                 if (!poolElement.isJsonObject()) {
                     continue;
@@ -63,9 +71,20 @@ public final class LootJsonLogic {
                 if (pool.has("entries") && pool.get("entries").isJsonArray()) {
                     walkEntries(pool.getAsJsonArray("entries"), droppedItems, referencedTables);
                 }
+                walkFunctions(pool, droppedItems, referencedTables);
             }
         }
-        return new LootRefs(Set.copyOf(droppedItems), Set.copyOf(referencedTables));
+        walkFunctions(root, droppedItems, referencedTables);
+    }
+
+    private static void walkFunctions(JsonObject owner, Set<String> droppedItems, Set<String> referencedTables) {
+        if (owner.has("functions") && owner.get("functions").isJsonArray()) {
+            for (JsonElement functionElement : owner.getAsJsonArray("functions")) {
+                if (functionElement.isJsonObject()) {
+                    walkFunction(functionElement.getAsJsonObject(), droppedItems, referencedTables);
+                }
+            }
+        }
     }
 
     /** The loot table ids a global loot modifier's conditions restrict it to. */
@@ -150,17 +169,13 @@ public final class LootJsonLogic {
                 ? entry.get("type").getAsString().toLowerCase(Locale.ROOT)
                 : "";
             if ("minecraft:loot_table".equals(type) || "loot_table".equals(type)) {
-                addTableReference(entry, referencedTables);
+                addTableReference(entry, droppedItems, referencedTables);
+            } else if ("minecraft:tag".equals(type) || "tag".equals(type)) {
+                addDroppedTag(entry, droppedItems);
             } else {
                 addDroppedItem(entry, droppedItems);
             }
-            if (entry.has("functions") && entry.get("functions").isJsonArray()) {
-                for (JsonElement functionElement : entry.getAsJsonArray("functions")) {
-                    if (functionElement.isJsonObject()) {
-                        walkFunction(functionElement.getAsJsonObject(), droppedItems, referencedTables);
-                    }
-                }
-            }
+            walkFunctions(entry, droppedItems, referencedTables);
             if (entry.has("children") && entry.get("children").isJsonArray()) {
                 walkEntries(entry.getAsJsonArray("children"), droppedItems, referencedTables);
             }
@@ -184,11 +199,36 @@ public final class LootJsonLogic {
         }
     }
 
-    private static void addTableReference(JsonObject entry, Set<String> referencedTables) {
-        if (entry.has("value") && entry.get("value").isJsonPrimitive()) {
-            referencedTables.add(entry.get("value").getAsString().toLowerCase(Locale.ROOT));
-        } else if (entry.has("name") && entry.get("name").isJsonPrimitive()) {
+    private static void addTableReference(JsonObject entry, Set<String> droppedItems, Set<String> referencedTables) {
+        if (entry.has("value")) {
+            JsonElement value = entry.get("value");
+            if (value.isJsonPrimitive()) {
+                referencedTables.add(value.getAsString().toLowerCase(Locale.ROOT));
+                return;
+            }
+            if (value.isJsonObject()) {
+                walkTable(value.getAsJsonObject(), droppedItems, referencedTables);
+                return;
+            }
+        }
+        if (entry.has("name") && entry.get("name").isJsonPrimitive()) {
             referencedTables.add(entry.get("name").getAsString().toLowerCase(Locale.ROOT));
+        }
+    }
+
+    private static void addDroppedTag(JsonObject entry, Set<String> droppedItems) {
+        String raw = null;
+        if (entry.has("name") && entry.get("name").isJsonPrimitive()) {
+            raw = entry.get("name").getAsString();
+        } else if (entry.has("tag") && entry.get("tag").isJsonPrimitive()) {
+            raw = entry.get("tag").getAsString();
+        }
+        if (raw == null) {
+            return;
+        }
+        String normalized = raw.trim().toLowerCase(Locale.ROOT);
+        if (!normalized.isEmpty()) {
+            droppedItems.add(normalized.startsWith("#") ? normalized : "#" + normalized);
         }
     }
 

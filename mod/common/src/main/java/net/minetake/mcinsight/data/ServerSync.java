@@ -1,7 +1,9 @@
 package net.minetake.mcinsight.data;
 
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Locale;
 import java.util.Map;
@@ -31,11 +33,12 @@ import net.minetake.mcinsight.network.PacketChunker;
 public final class ServerSync {
 
     private static final long TRANSPORT_MARGIN_MS = 2_000L;
+    private static final int MAX_PARAMS_CHARS = 8192;
 
     /** The endpoint ids the connected host announced it serves; empty until a matching hello. */
     private static volatile Set<String> remoteCapabilities = Set.of();
     private static final PacketChunker.Assembler ASSEMBLER = new PacketChunker.Assembler();
-    private static final Map<UUID, CompletableFuture<JsonObject>> PENDING = new ConcurrentHashMap<>();
+    private static final Map<UUID, CompletableFuture<byte[]>> PENDING = new ConcurrentHashMap<>();
 
     private ServerSync() {}
 
@@ -43,6 +46,7 @@ public final class ServerSync {
         if (hello == null) {
             return;
         }
+        clearPending();
         // A host speaking another protocol version serves nothing this client can parse.
         remoteCapabilities = hello.protocolVersion() == InsightHelloPayload.PROTOCOL_VERSION
             ? parseCapabilities(hello.capabilities())
@@ -53,7 +57,7 @@ public final class ServerSync {
         if (chunk == null || chunk.requestId() == null) {
             return;
         }
-        CompletableFuture<JsonObject> future = PENDING.get(chunk.requestId());
+        CompletableFuture<byte[]> future = PENDING.get(chunk.requestId());
         if (future == null) {
             return;
         }
@@ -65,8 +69,7 @@ public final class ServerSync {
                 chunk.chunkBytes()
             );
             if (fullBytes != null) {
-                future.complete(JsonParser.parseString(new String(fullBytes, java.nio.charset.StandardCharsets.UTF_8))
-                    .getAsJsonObject());
+                future.complete(fullBytes);
             }
         } catch (Exception e) {
             future.completeExceptionally(e);
@@ -75,8 +78,12 @@ public final class ServerSync {
 
     public static void reset() {
         remoteCapabilities = Set.of();
+        clearPending();
+    }
+
+    private static void clearPending() {
         ASSEMBLER.clear();
-        for (CompletableFuture<JsonObject> f : PENDING.values()) {
+        for (CompletableFuture<byte[]> f : PENDING.values()) {
             f.cancel(true);
         }
         PENDING.clear();
@@ -108,19 +115,31 @@ public final class ServerSync {
                 "The server's McInsight does not serve " + endpoint.id() + "; update the server's McInsight."
             );
         }
+        String paramsText = params.toJson().toString();
+        if (paramsText.length() > MAX_PARAMS_CHARS) {
+            throw new InsightException(
+                InsightError.INVALID_PARAMETER,
+                "Request parameters exceed the maximum multiplayer payload length (" + MAX_PARAMS_CHARS + " chars)."
+            );
+        }
         UUID id = UUID.randomUUID();
-        CompletableFuture<JsonObject> future = new CompletableFuture<>();
+        CompletableFuture<byte[]> future = new CompletableFuture<>();
         PENDING.put(id, future);
         try {
             boolean sent = InsightNetworking.sendToServer(
-                new InsightRequestPayload(id, endpoint.id(), params.toJson().toString())
+                new InsightRequestPayload(id, endpoint.id(), paramsText)
             );
             if (!sent) {
                 throw new InsightException(InsightError.REMOTE_ERROR, "Could not send the request packet to the server.");
             }
             // The host may spend the endpoint's whole budget; the round trip comes on top of it, so a
             // host that answers at its deadline is still heard instead of reported as a timeout.
-            JsonObject response = future.get(endpoint.budgetMs() + TRANSPORT_MARGIN_MS, TimeUnit.MILLISECONDS);
+            byte[] fullBytes = future.get(endpoint.budgetMs() + TRANSPORT_MARGIN_MS, TimeUnit.MILLISECONDS);
+            JsonElement parsed = JsonParser.parseString(new String(fullBytes, StandardCharsets.UTF_8));
+            if (!parsed.isJsonObject()) {
+                throw new InsightException(InsightError.REMOTE_ERROR, "The server returned a non-object response.");
+            }
+            JsonObject response = parsed.getAsJsonObject();
             if (response.has("ok") && !response.get("ok").getAsBoolean()) {
                 String code = response.has("code") ? response.get("code").getAsString() : "";
                 String message = response.has("error") ? response.get("error").getAsString() : "";
@@ -141,6 +160,7 @@ public final class ServerSync {
             );
         } finally {
             PENDING.remove(id);
+            ASSEMBLER.discard(id);
         }
     }
 

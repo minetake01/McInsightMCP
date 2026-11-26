@@ -155,9 +155,6 @@ public final class ViewerQuery {
             if (!normCategory.isEmpty() && !category.uid().toLowerCase(Locale.ROOT).equals(normCategory)) {
                 continue;
             }
-            if (!normMod.isEmpty() && !matchesMod(category, normMod)) {
-                continue;
-            }
             for (ViewerModel.Recipe recipe : bridge.recipesOf(category)) {
                 if (!normMod.isEmpty() && !matchesMod(category, recipe, normMod)) {
                     continue;

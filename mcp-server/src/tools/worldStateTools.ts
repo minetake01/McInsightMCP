@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
+import { requestEndpoint } from '../api/endpoints.js';
 import type { McHttpClient } from '../client/mcClient.js';
 import { fetchLookingAt, fetchPlayer, fetchScan, fetchStatus, filterMods } from '../data/worldState.js';
 import { toolResult } from './result.js';
@@ -9,6 +10,7 @@ const EMPTY_SCHEMA = z.object({});
 const STATUS_SCHEMA = z.object({
   includeMods: z.boolean().optional().default(false).describe('Include full list of loaded mods and JAR paths'),
   modFilter: z.string().optional().describe('Case-insensitive substring filter on mod ID or name'),
+  includeMetrics: z.boolean().optional().default(false).describe('Include /api/v1/metrics endpoint latency and cache hit statistics'),
 });
 
 const OBSERVE_WORLD_SCHEMA = z.object({
@@ -33,9 +35,14 @@ export function registerWorldStateTools(server: McpServer, mcClient: McHttpClien
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: STATUS_SCHEMA,
     },
-    async ({ includeMods, modFilter }) => toolResult(async () => {
+    async ({ includeMods, modFilter, includeMetrics }) => toolResult(async () => {
       const status = await fetchStatus(mcClient, includeMods || Boolean(modFilter));
-      return filterMods(status, modFilter);
+      const filtered = filterMods(status, modFilter);
+      if (!includeMetrics) {
+        return filtered;
+      }
+      const metrics = await requestEndpoint(mcClient, 'metrics', {});
+      return { ...filtered, metrics };
     }),
   );
 

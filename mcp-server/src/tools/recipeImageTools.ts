@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { limitBounds } from '../api/endpoints.js';
-import { toFailure } from '../api/result.js';
+import { toFailure, ToolError } from '../api/result.js';
 import type { McHttpClient } from '../client/mcClient.js';
 import { fetchRecipeImages } from '../data/recipeImages.js';
 import { jsonText } from './helpers.js';
@@ -10,10 +10,11 @@ import { imageResult } from './result.js';
 const RENDER_LIMITS = limitBounds('recipes_render');
 
 const ITEM_ID_DESCRIPTION =
-  'Exact item ResourceLocation (e.g. "minecraft:crafting_table") or tag (e.g. "#minecraft:planks")';
+  'Exact item ResourceLocation (e.g. "minecraft:crafting_table") or tag (e.g. "#minecraft:planks"). Required unless recipeId is specified.';
 
 const RENDER_RECIPE_SCHEMA = z.object({
-  item: z.string().min(1).describe(ITEM_ID_DESCRIPTION),
+  item: z.string().min(1).optional().describe(ITEM_ID_DESCRIPTION),
+  recipeId: z.string().min(1).optional().describe('Exact viewer recipe ID to render (optional alternative to item)'),
   role: z
     .enum(['any', 'input', 'output', 'catalyst', 'workstation'])
     .optional()
@@ -48,8 +49,14 @@ export function registerRecipeImageTools(server: McpServer, mcClient: McHttpClie
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: RENDER_RECIPE_SCHEMA,
     },
-    async ({ item, role, type, source, limit, offset }) =>
-      fetchRecipeImages(mcClient, { item, role, type, source, limit, offset }).then(
+    async ({ item, recipeId, role, type, source, limit, offset }) => {
+      if (!item && !recipeId) {
+        return {
+          ...jsonText(toFailure(new ToolError('INVALID_PARAMETER', 'Provide at least one of item or recipeId.'))),
+          isError: true,
+        };
+      }
+      return fetchRecipeImages(mcClient, { item, recipeId, role, type, source, limit, offset }).then(
         (response) => {
           // The text block repeats the answer without the picture bytes; the images carry those.
           const textImages = response.images.map(({ png: _png, ...rest }) => rest);
@@ -59,7 +66,11 @@ export function registerRecipeImageTools(server: McpServer, mcClient: McHttpClie
             images.map((image) => ({ data: image.png, mimeType: 'image/png' })),
           );
         },
-        (error: unknown) => jsonText(toFailure(error)),
-      ),
+        (error: unknown) => ({
+          ...jsonText(toFailure(error)),
+          isError: true,
+        }),
+      );
+    },
   );
 }

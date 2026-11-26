@@ -5,6 +5,7 @@ import net.minetake.mcinsight.network.InsightHelloPayload;
 import net.minetake.mcinsight.network.InsightNetworking;
 import net.minetake.mcinsight.network.InsightRequestPayload;
 import net.minetake.mcinsight.network.InsightResponsePayload;
+import net.minetake.mcinsight.network.ServerPacketHandler;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
@@ -38,6 +39,9 @@ public final class McInsightFabricCommon implements ModInitializer {
         );
 
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> InsightNetworking.onPlayerJoined(handler.getPlayer()));
+        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) ->
+            ServerPacketHandler.removeRateLimit(handler.getPlayer().getUUID())
+        );
 
         ServerLifecycleEvents.SERVER_STARTED.register(McInsightCommon::attachServer);
         ServerLifecycleEvents.SERVER_STOPPING.register(McInsightCommon::detachServer);

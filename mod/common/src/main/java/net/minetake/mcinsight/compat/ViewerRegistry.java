@@ -1,5 +1,6 @@
 package net.minetake.mcinsight.compat;
 
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -48,6 +49,6 @@ public final class ViewerRegistry {
     }
 
     private static synchronized Map<String, IRecipeViewerBridge> snapshot() {
-        return Map.copyOf(VIEWERS);
+        return Collections.unmodifiableMap(new LinkedHashMap<>(VIEWERS));
     }
 }

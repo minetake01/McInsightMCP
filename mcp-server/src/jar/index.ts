@@ -57,7 +57,15 @@ export interface DirJarIndex {
 /** Lists the top-level JAR files of a mods directory, sorted for determinism. */
 export async function listModJars(modsDir: string): Promise<string[]> {
   const resolvedDir = path.resolve(modsDir);
-  const entries = await fs.readdir(resolvedDir, { withFileTypes: true });
+  let entries;
+  try {
+    entries = await fs.readdir(resolvedDir, { withFileTypes: true });
+  } catch (err) {
+    throw new ToolError(
+      'DATA_UNAVAILABLE',
+      `Mods directory '${resolvedDir}' cannot be read: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
   return entries
     .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.jar'))
     .map((entry) => path.join(resolvedDir, entry.name))

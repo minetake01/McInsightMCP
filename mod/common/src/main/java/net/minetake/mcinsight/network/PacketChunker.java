@@ -111,6 +111,12 @@ public final class PacketChunker {
             }
         }
 
+        public void discard(UUID requestId) {
+            if (requestId != null) {
+                partials.remove(requestId);
+            }
+        }
+
         public void clear() {
             partials.clear();
         }

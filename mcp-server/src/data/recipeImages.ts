@@ -12,7 +12,8 @@ import type { RecipesRenderResponse } from '../api/types.js';
 import type { McHttpClient } from '../client/mcClient.js';
 
 export interface RecipeImageQueryParams {
-  item: string;
+  item?: string;
+  recipeId?: string;
   role?: 'any' | 'input' | 'output' | 'catalyst' | 'workstation';
   type?: string;
   source?: string;
@@ -26,6 +27,7 @@ export async function fetchRecipeImages(
 ): Promise<RecipesRenderResponse> {
   return requestEndpoint(client, 'recipes_render', {
     item: params.item,
+    recipeId: params.recipeId,
     role: params.role,
     type: params.type,
     source: params.source,

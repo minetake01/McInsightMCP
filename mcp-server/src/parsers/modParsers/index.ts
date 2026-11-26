@@ -2,22 +2,14 @@ import { type LoadedModsVersionMap, matchesModVersion } from '../modVersion.js';
 import { ae2Parser } from './ae2Parser.js';
 import { arsNouveauParser } from './arsNouveauParser.js';
 import { createParser } from './createParser.js';
-import { farmersDelightParser } from './farmersDelightParser.js';
-import { mekanismParser } from './mekanismParser.js';
-import { oritechParser } from './oritechParser.js';
-import { tofucraftParser } from './tofucraftParser.js';
 import { type BuiltinModParser, type ModParsedRecipe } from './types.js';
 
 export type { BuiltinModParser, ModIngredient, ModParsedRecipe } from './types.js';
 
 export const BUILTIN_MOD_PARSERS: BuiltinModParser[] = [
   createParser,
-  mekanismParser,
   ae2Parser,
-  oritechParser,
-  farmersDelightParser,
   arsNouveauParser,
-  tofucraftParser,
 ];
 
 function parserAcceptsType(parser: BuiltinModParser, recipeType: string): boolean {

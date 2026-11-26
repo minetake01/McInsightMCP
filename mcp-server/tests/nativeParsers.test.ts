@@ -197,4 +197,46 @@ describe('nativeParsers', () => {
     });
     expect(conditional?.hasUnparsedFields).toBe(true);
   });
+
+  it('captures shaped pattern, loot pool functions, structure_set/level_stem, and biome unhandled keys', () => {
+    const shaped = parseNativeRecipe('minecraft:crafting_shaped', {
+      type: 'minecraft:crafting_shaped',
+      pattern: ['AB', 'BA'],
+      key: { A: { item: 'minecraft:stone' }, B: { item: 'minecraft:stick' } },
+      result: { id: 'minecraft:lever', count: 1 },
+    });
+    expect(shaped?.pattern).toEqual(['AB', 'BA']);
+
+    const lootWithPoolFn = parseNativeLootTable('minecraft:chests/test', {
+      pools: [
+        {
+          rolls: 1,
+          entries: [{ type: 'minecraft:item', name: 'minecraft:diamond' }],
+          functions: [{ function: 'minecraft:set_count', count: 2 }],
+        },
+      ],
+    });
+    expect(lootWithPoolFn?.pools[0]?.functions?.[0]?.function).toBe('minecraft:set_count');
+
+    const biomeWithUnknown = parseNativeWorldgen('biome', 'mod:weird_biome', {
+      temperature: 0.8,
+      downfall: 0.4,
+      custom_climate_curve: true,
+    });
+    expect(biomeWithUnknown?.hasUnparsedFields).toBe(true);
+
+    const structureSet = parseNativeWorldgen('structure_set', 'minecraft:villages', {
+      structures: [{ structure: 'minecraft:village_plains', weight: 1 }],
+      placement: { type: 'minecraft:random_spread', spacing: 34, separation: 8 },
+    });
+    expect(structureSet?.featureConfig?.placement).toBeDefined();
+    expect(structureSet?.hasUnparsedFields).toBeUndefined();
+
+    const levelStem = parseNativeWorldgen('level_stem', 'minecraft:overworld', {
+      type: 'minecraft:overworld',
+      generator: { type: 'minecraft:noise' },
+    });
+    expect(levelStem?.featureType).toBe('minecraft:overworld');
+    expect(levelStem?.hasUnparsedFields).toBeUndefined();
+  });
 });

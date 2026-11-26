@@ -139,8 +139,24 @@ export async function resolveJarPath(
         `Invalid JAR path '${modIdOrJarName}': escapes mods directory '${resolvedModsDir}'.`,
       );
     }
-    await fs.access(candidate);
-    return candidate;
+    let realModsDir: string;
+    let realCandidate: string;
+    try {
+      [realModsDir, realCandidate] = await Promise.all([fs.realpath(resolvedModsDir), fs.realpath(candidate)]);
+    } catch {
+      throw new ToolError(
+        'NOT_FOUND',
+        `No mod JAR matching '${modIdOrJarName}' found in '${resolvedModsDir}'. Use mc_status with includeMods=true to check loaded mod IDs and JAR filenames.`,
+      );
+    }
+    const realRel = path.relative(realModsDir, realCandidate);
+    if (!realRel || realRel.startsWith('..') || path.isAbsolute(realRel)) {
+      throw new ToolError(
+        'INVALID_PARAMETER',
+        `Invalid JAR path '${modIdOrJarName}': symlink escapes mods directory '${resolvedModsDir}'.`,
+      );
+    }
+    return realCandidate;
   }
 
   const match = findJarByModOrClass(index, { modId: trimmed });

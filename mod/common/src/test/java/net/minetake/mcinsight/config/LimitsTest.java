@@ -16,7 +16,7 @@ class LimitsTest {
         Limits.apply(config);
         assertEquals(32, Limits.scanRadius());
         assertEquals(16, Limits.syncBlockRadius());
-        assertEquals(500, Limits.recipeResults());
+        assertEquals(100, Limits.recipeResults());
 
         config.maxScanRadius = 0;
         config.maxSyncBlockRadius = 0;
@@ -43,11 +43,11 @@ class LimitsTest {
     @Test
     void recipePageSizeFallsBackToTheOperatorCap() {
         McInsightConfig config = new McInsightConfig();
-        config.maxRecipeResults = 60;
+        config.maxRecipeResults = 20;
         Limits.apply(config);
         int served = net.minetake.mcinsight.api.InsightEndpoint.RECIPES_QUERY.limit(
-            net.minetake.mcinsight.api.Params.of(java.util.Map.of("limit", "60"))
+            net.minetake.mcinsight.api.Params.of(java.util.Map.of())
         );
-        assertEquals(60, served);
+        assertEquals(20, served);
     }
 }

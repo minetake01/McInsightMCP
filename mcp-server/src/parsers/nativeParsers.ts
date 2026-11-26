@@ -18,6 +18,7 @@ export interface NativeIngredient {
 export interface NativeRecipeSummary {
   nativeType: string;
   mechanism: string;
+  pattern?: string[];
   inputs: NativeIngredient[];
   outputs: NativeIngredient[];
   cookingTimeTicks?: number;
@@ -115,6 +116,7 @@ export interface NativeLootSummary {
     bonusRolls?: unknown;
     entries: NativeLootEntry[];
     conditions?: LootConditionSummary[];
+    functions?: LootFunctionSummary[];
   }>;
   hasUnparsedFields?: boolean;
 }
@@ -267,9 +269,11 @@ export function parseNativeRecipe(recipeType: string, rawJson: unknown): NativeR
       const extra = hasExtraTopLevelKeys(
         new Set(['type', 'pattern', 'key', 'result', 'group', 'category', 'show_notification']),
       );
+      const patternStrings = pattern.filter((r): r is string => typeof r === 'string');
       return {
         nativeType: recipeType,
         mechanism: 'Vanilla Crafting Table (Shaped)',
+        ...(patternStrings.length > 0 ? { pattern: patternStrings } : {}),
         inputs,
         outputs: outRes.items,
         group,
@@ -408,6 +412,19 @@ const HANDLED_STRUCTURE_KEYS = new Set([
   'liquid_settings',
 ]);
 
+const HANDLED_BIOME_KEYS = new Set([
+  'temperature',
+  'downfall',
+  'has_precipitation',
+  'temperature_modifier',
+  'spawners',
+  'features',
+  'carvers',
+  'effects',
+  'spawn_costs',
+  'creature_spawn_probability',
+]);
+
 const HANDLED_BIOME_MODIFIER_KEYS = new Set([
   'type',
   'biomes',
@@ -459,11 +476,27 @@ export function parseNativeWorldgen(kind: string, id: string, rawJson: unknown):
         decorators: cfg.decorators,
         ignoreVines: cfg.ignore_vines,
       };
+      const handledTreeKeys = new Set([
+        'trunk_provider',
+        'foliage_provider',
+        'trunk_placer',
+        'foliage_placer',
+        'minimum_size',
+        'decorators',
+        'ignore_vines',
+        'dirt_provider',
+        'root_placer',
+        'force_dirt',
+      ]);
+      summary.hasUnparsedFields = unparsedFieldFlag(unhandledKeys(cfg, handledTreeKeys).length > 0);
       return summary;
     }
 
     if (featureType === 'minecraft:simple_block') {
       summary.featureConfig = { toPlace: cfg.to_place, scheduleTick: cfg.schedule_tick };
+      summary.hasUnparsedFields = unparsedFieldFlag(
+        unhandledKeys(cfg, new Set(['to_place', 'schedule_tick'])).length > 0,
+      );
       return summary;
     }
 
@@ -474,6 +507,9 @@ export function parseNativeWorldgen(kind: string, id: string, rawJson: unknown):
         ySpread: cfg.y_spread,
         feature: cfg.feature,
       };
+      summary.hasUnparsedFields = unparsedFieldFlag(
+        unhandledKeys(cfg, new Set(['tries', 'xz_spread', 'y_spread', 'feature'])).length > 0,
+      );
       return summary;
     }
 
@@ -483,16 +519,34 @@ export function parseNativeWorldgen(kind: string, id: string, rawJson: unknown):
         layers: cfg.layers,
         crack: cfg.crack,
       };
+      const handledGeodeKeys = new Set([
+        'blocks',
+        'layers',
+        'crack',
+        'noise_multiplier',
+        'use_potential_placements_chance',
+        'use_alternate_layer0_chance',
+        'placements_require_layer0_alternate',
+        'outer_wall_distance',
+        'distribution_points',
+        'point_offset',
+        'min_gen_offset',
+        'max_gen_offset',
+        'invalid_blocks_threshold',
+      ]);
+      summary.hasUnparsedFields = unparsedFieldFlag(unhandledKeys(cfg, handledGeodeKeys).length > 0);
       return summary;
     }
 
     if (featureType === 'minecraft:lake') {
       summary.featureConfig = { fluid: cfg.fluid, barrier: cfg.barrier };
+      summary.hasUnparsedFields = unparsedFieldFlag(unhandledKeys(cfg, new Set(['fluid', 'barrier'])).length > 0);
       return summary;
     }
 
     if (featureType === 'minecraft:simple_random_selector' || featureType === 'minecraft:random_selector') {
       summary.featureConfig = { features: cfg.features, default: cfg.default };
+      summary.hasUnparsedFields = unparsedFieldFlag(unhandledKeys(cfg, new Set(['features', 'default'])).length > 0);
       return summary;
     }
 
@@ -559,7 +613,35 @@ export function parseNativeWorldgen(kind: string, id: string, rawJson: unknown):
     if (rawJson.features !== undefined) {
       summary.features = rawJson.features;
     }
+    summary.hasUnparsedFields = unparsedFieldFlag(unhandledKeys(rawJson, HANDLED_BIOME_KEYS).length > 0);
     return summary;
+  }
+
+  if (kind === 'structure_set') {
+    const handledKeys = new Set(['structures', 'placement']);
+    return {
+      kind,
+      id,
+      featureConfig: {
+        structures: rawJson.structures,
+        placement: rawJson.placement,
+      },
+      hasUnparsedFields: unparsedFieldFlag(unhandledKeys(rawJson, handledKeys).length > 0),
+    };
+  }
+
+  if (kind === 'level_stem') {
+    const handledKeys = new Set(['type', 'generator']);
+    return {
+      kind,
+      id,
+      featureType: typeof rawJson.type === 'string' ? rawJson.type : undefined,
+      featureConfig: {
+        type: rawJson.type,
+        generator: rawJson.generator,
+      },
+      hasUnparsedFields: unparsedFieldFlag(unhandledKeys(rawJson, handledKeys).length > 0),
+    };
   }
 
   if (kind === 'structure') {
@@ -733,6 +815,7 @@ export function parseNativeLootTable(id: string, rawJson: unknown): NativeLootSu
       bonusRolls: pool.bonus_rolls,
       entries: parsedEntries.entries,
       conditions: parseConditions(pool.conditions),
+      functions: parseFunctions(pool.functions),
     };
   });
 

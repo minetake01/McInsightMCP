@@ -98,7 +98,16 @@ export interface McModsResponse {
  * Registry
  * ------------------------------------------------------------------------- */
 
-export type RegistryKind = 'item' | 'block' | 'fluid' | 'entity';
+export type RegistryKind =
+  | 'item'
+  | 'block'
+  | 'fluid'
+  | 'entity'
+  | 'potion'
+  | 'mob_effect'
+  | 'attribute'
+  | 'enchantment'
+  | 'biome';
 export type TagKind = `${RegistryKind}_tag`;
 export type RegistrySearchKind = RegistryKind | 'tag' | TagKind;
 
@@ -125,8 +134,12 @@ export interface BlockInfo {
   isEntityBlock: boolean;
   isRandomlyTicking: boolean;
   destroySpeed: number;
+  explosionResistance?: number;
+  lightEmission?: number;
   requiresCorrectToolForDrops?: boolean;
+  lootTable?: string;
   stateProperties?: Record<string, string[]>;
+  defaultStateProperties?: Record<string, string>;
   tags?: string[];
 }
 
@@ -145,6 +158,8 @@ export interface EntityInfo {
   height?: number;
   fireImmune?: boolean;
   canSummon?: boolean;
+  defaultLootTable?: string;
+  defaultAttributes?: Record<string, number>;
   tags?: string[];
 }
 
@@ -169,7 +184,26 @@ export interface RegistryInspectResponse {
   height?: number;
   fireImmune?: boolean;
   canSummon?: boolean;
+  defaultLootTable?: string;
+  defaultAttributes?: Record<string, number>;
   blockItemId?: string;
+  hasInstantEffects?: boolean;
+  effects?: Array<Record<string, unknown>>;
+  color?: string;
+  isInstantaneous?: boolean;
+  attributeModifiers?: Array<{ attribute: string; amount: number; operation: string }>;
+  defaultValue?: number;
+  clientSyncable?: boolean;
+  minLevel?: number;
+  maxLevel?: number;
+  weight?: number;
+  anvilCost?: number;
+  slots?: string[];
+  supportedItems?: string[];
+  primaryItems?: string[];
+  exclusiveSet?: string[];
+  tags?: string[];
+  rawJson?: unknown;
   /** Per-viewer descriptions; the viewer set is whatever registered, never a fixed list. */
   viewerInformation?: Record<string, string[]>;
 }
@@ -334,6 +368,7 @@ export type GuideSearchResponse = PageOf<'hits', GuideSearchHit> & PartialResult
 export interface GuidePageResponse extends GuideRow {
   ok: true;
   content: string;
+  truncated?: boolean;
 }
 
 /* ------------------------------------------------------------------------- *
@@ -345,6 +380,8 @@ export type WorldgenKind =
   | 'configured_feature'
   | 'biome'
   | 'structure'
+  | 'structure_set'
+  | 'level_stem'
   | 'dimension_type'
   | 'biome_modifier';
 
@@ -458,14 +495,21 @@ export interface ClassIntrospectResponse {
   isInterface?: boolean;
   isEnum?: boolean;
   isAbstract?: boolean;
+  isRecord?: boolean;
   superclass?: string;
   interfaces: string[];
+  enumConstants?: string[];
+  recordComponents?: Array<{ name: string; type: string; genericType?: string }>;
+  declaredConstructors?: Array<{ modifiers: string; parameterTypes: string[]; genericParameterTypes?: string[] }>;
+  memberLoadError?: string;
   codeSource?: Record<string, unknown>;
-  declaredFields: Array<{ name: string; type: string; modifiers: string }>;
+  declaredFields: Array<{ name: string; type: string; genericType?: string; modifiers: string }>;
   declaredMethods: Array<{
     name: string;
     returnType: string;
+    genericReturnType?: string;
     modifiers: string;
     parameterTypes: string[];
+    genericParameterTypes?: string[];
   }>;
 }

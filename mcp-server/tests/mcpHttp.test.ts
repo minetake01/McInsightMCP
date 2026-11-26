@@ -581,9 +581,9 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (12 Semantic Tools)', () => {
       'Vanilla Furnace',
     );
     expect(recData.vanilla.recipes.find((r) => r.recipeType === 'minecraft:smelting')?.rawJson).toBeUndefined();
-    expect(recData.vanilla.recipes.find((r) => r.recipeType === 'tofucraft:bittern')?.modParsed?.parserId).toBe(
-      'builtin_tofucraft_12',
-    );
+    const customBittern = recData.vanilla.recipes.find((r) => r.recipeType === 'tofucraft:bittern');
+    expect(customBittern?.modParsed).toBeUndefined();
+    expect(customBittern?.rawJson).toBeDefined();
     expect(recData.vanilla.recipes.find((r) => r.recipeType === 'custommod:arcane_fusion')?.rawJson).toBeDefined();
     // Viewer bucket is slot-based and uncounted.
     expect(recData.viewers.emi.totalKnown).toBe(false);
@@ -881,8 +881,97 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (12 Semantic Tools)', () => {
     expect(badItem.code).toBe('INVALID_ID');
     expect(badItem.error).toContain('mc_search_registry');
 
+    // Tool failures must set MCP isError: true while preserving {ok: false, code, error}.
+    const overLimitParsed = JSON.parse(overLimitRes.body) as { result: { isError?: boolean } };
+    expect(overLimitParsed.result.isError).toBe(true);
+
     // HTTP transport answers unsupported methods with a clean HTTP error instead of dropping the socket.
     const badRes = await fetch(handle.url, { method: 'DELETE' });
     expect(badRes.status).toBeGreaterThanOrEqual(400);
+  });
+
+  it('rejects untrusted Host/Origin on /health, omits modsDir/gameDir from code tool, and supports includeMetrics + recipeId', async () => {
+    const mcSrv = createServer((req, res) => {
+      const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+      if (url.pathname === '/api/v1/status') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(STATUS_BODY));
+        return;
+      }
+      if (url.pathname === '/api/v1/metrics') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, cacheHits: 3 }));
+        return;
+      }
+      if (url.pathname === '/api/v1/recipes/render') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            ok: true,
+            offset: 0,
+            totalKnown: false,
+            returned: 1,
+            hasMore: false,
+            format: 'png',
+            scale: 1,
+            images: [
+              {
+                viewer: 'emi',
+                categoryUid: 'minecraft:crafting',
+                recipeId: url.searchParams.get('recipeId') ?? undefined,
+                width: 100,
+                height: 50,
+                png: Buffer.from('fake-png').toString('base64'),
+              },
+            ],
+          }),
+        );
+        return;
+      }
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, code: 'UNSUPPORTED_ENDPOINT', error: 'Unknown endpoint' }));
+    });
+    await new Promise<void>((r) => mcSrv.listen(0, '127.0.0.1', r));
+    cleanups.push(() => new Promise<void>((r) => mcSrv.close(() => r())));
+    const mcPort = (mcSrv.address() as { port: number }).port;
+    const client = new McHttpClient({ baseUrl: `http://127.0.0.1:${mcPort}` });
+    const handle = await startHttpServer(
+      { mcClient: client, jarInspector: new JarInspector(path.join(os.tmpdir(), 'mcinsight-tools-test2')) },
+      0,
+    );
+    cleanups.push(() => handle.close());
+
+    const healthEvilOrigin = await fetch(`http://127.0.0.1:${handle.port}/health`, {
+      headers: { Origin: 'http://evil.example' },
+    });
+    expect(healthEvilOrigin.status).toBe(403);
+
+    const statusMetricsRes = await rpcCall(handle.url, {
+      jsonrpc: '2.0',
+      id: 20,
+      method: 'tools/call',
+      params: { name: 'mc_status', arguments: { includeMetrics: true } },
+    });
+    const statusMetrics = unwrapToolPayload<{ ok: boolean; metrics?: { cacheHits: number } }>(statusMetricsRes.body);
+    expect(statusMetrics.ok).toBe(true);
+    expect(statusMetrics.metrics?.cacheHits).toBe(3);
+
+    const renderRes = await rpcCall(handle.url, {
+      jsonrpc: '2.0',
+      id: 21,
+      method: 'tools/call',
+      params: { name: 'mc_render_recipe', arguments: { recipeId: 'minecraft:oak_planks' } },
+    });
+    const renderData = unwrapToolPayload<{ ok: boolean; images: Array<{ recipeId?: string }> }>(renderRes.body);
+    expect(renderData.ok).toBe(true);
+    expect(renderData.images[0]?.recipeId).toBe('minecraft:oak_planks');
+
+    const toolsListRes = await rpcCall(handle.url, { jsonrpc: '2.0', id: 22, method: 'tools/list' });
+    const toolsList = JSON.parse(toolsListRes.body) as {
+      result: { tools: Array<{ name: string; inputSchema: { properties?: Record<string, unknown> } }> };
+    };
+    const codeTool = toolsList.result.tools.find((t) => t.name === 'mc_inspect_code');
+    expect(codeTool?.inputSchema.properties?.modsDir).toBeUndefined();
+    expect(codeTool?.inputSchema.properties?.gameDir).toBeUndefined();
   });
 });

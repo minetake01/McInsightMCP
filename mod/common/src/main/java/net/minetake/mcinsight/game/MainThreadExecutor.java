@@ -1,9 +1,14 @@
 package net.minetake.mcinsight.game;
 
+import net.minetake.mcinsight.api.InsightError;
+import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.metrics.PerfMetrics;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
@@ -96,9 +101,13 @@ public final class MainThreadExecutor {
 
     private <T> T supplyOnExecutor(Executor exec, Supplier<T> supplier, long timeoutMs) throws Exception {
         CompletableFuture<T> future = new CompletableFuture<>();
+        AtomicBoolean cancelled = new AtomicBoolean(false);
         AtomicLong elapsedNs = new AtomicLong(0L);
         AtomicLong taskStartNs = new AtomicLong(0L);
         exec.execute(() -> {
+            if (cancelled.get()) {
+                return;
+            }
             long t0 = System.nanoTime();
             taskStartNs.set(t0);
             try {
@@ -112,6 +121,9 @@ public final class MainThreadExecutor {
         });
         try {
             return future.get(timeoutMs, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            cancelled.set(true);
+            throw e;
         } finally {
             long recorded = elapsedNs.get();
             if (recorded == 0L) {
@@ -122,5 +134,20 @@ public final class MainThreadExecutor {
             }
             PerfMetrics.recordMainThreadTime(recorded);
         }
+    }
+
+    /** Unwraps an {@link InsightException} from {@link ExecutionException} or nested wrappers. */
+    public static InsightException unwrapInsightException(Throwable error, InsightError fallback) {
+        Throwable cursor = error;
+        while (cursor != null) {
+            if (cursor instanceof InsightException insight) {
+                return insight;
+            }
+            cursor = cursor.getCause();
+        }
+        String message = error != null && error.getMessage() != null && !error.getMessage().isBlank()
+            ? error.getMessage()
+            : fallback.defaultMessage();
+        return new InsightException(fallback, message);
     }
 }

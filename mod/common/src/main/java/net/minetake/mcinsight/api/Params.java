@@ -18,7 +18,7 @@ import java.util.Set;
  */
 public final class Params {
 
-    private static final Params EMPTY = new Params(Map.of());
+    public static final Params EMPTY = new Params(Map.of());
 
     private final Map<String, String> values;
 

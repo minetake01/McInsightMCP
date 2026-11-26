@@ -27,7 +27,7 @@ public final class LootModifierIndex {
     private static final String[] ACTIVATION_IDS = {"neoforge:global_loot_modifiers", "forge:global_loot_modifiers"};
 
     private static final GenerationalCache<List<Modifier>> CACHE =
-        new GenerationalCache<>(CacheGenerations::data);
+        new GenerationalCache<>(GenerationalCache.Scope.DATA);
 
     /** One active modifier and what its JSON declares. */
     public record Modifier(
@@ -51,15 +51,15 @@ public final class LootModifierIndex {
         return CACHE.get(() -> build(view));
     }
 
-    /** The ids activated by the merged pack layers, after every {@code replace} layer. */
+    /** The ids activated by the merged pack layers, after every {@code replace} layer per activation file. */
     public static Set<String> activeIds(DataPackView view) {
-        List<JsonObject> layers = new ArrayList<>();
+        Set<String> active = new LinkedHashSet<>();
         for (ResourceRef ref : view.folder(FOLDER)) {
             if (isActivationFile(ref.idLower())) {
-                layers.addAll(view.readLayers(ref));
+                active.addAll(LootJsonLogic.parseActiveGlmIds(view.readLayers(ref)));
             }
         }
-        return LootJsonLogic.parseActiveGlmIds(layers);
+        return Set.copyOf(active);
     }
 
     private static List<Modifier> build(DataPackView view) {

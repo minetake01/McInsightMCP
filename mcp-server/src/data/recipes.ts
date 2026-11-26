@@ -168,7 +168,13 @@ function recipeIdentity(recipe: EnrichedVanillaRecipe | EnrichedViewerRecipe): s
   const id = recipe.recipeId;
   if (id) return id;
   const category = 'categoryUid' in recipe ? recipe.categoryUid : '';
-  return `${category}|${recipe.recipeClass ?? ''}`;
+  const slotSig = 'inputs' in recipe
+    ? JSON.stringify({
+      inputs: recipe.inputs.map((s) => s.alternatives[0]?.id ?? ''),
+      outputs: recipe.outputs.map((s) => s.alternatives[0]?.id ?? ''),
+    })
+    : '';
+  return `${category}|${recipe.recipeClass ?? ''}|${slotSig}`;
 }
 
 function mergePage<P extends EnrichedPage & { recipes: R[] }, R extends EnrichedVanillaRecipe | EnrichedViewerRecipe>(

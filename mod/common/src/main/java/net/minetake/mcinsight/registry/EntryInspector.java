@@ -7,6 +7,7 @@ import com.mojang.serialization.DataResult;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
 import net.minetake.mcinsight.api.InsightError;
 import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.api.Params;
@@ -98,6 +99,11 @@ public final class EntryInspector {
             case BLOCK -> describeBlock(id);
             case FLUID -> describeFluid(id);
             case ENTITY -> describeEntity(id);
+            case POTION -> describePotion(id);
+            case MOB_EFFECT -> describeMobEffect(id);
+            case ATTRIBUTE -> describeAttribute(id);
+            case ENCHANTMENT -> describeEnchantment(id);
+            case BIOME -> describeBiome(id);
         };
         out.addProperty("ok", true);
         out.addProperty("kind", kind.id());
@@ -185,6 +191,26 @@ public final class EntryInspector {
         out.addProperty("height", type.getHeight());
         out.addProperty("fireImmune", type.fireImmune());
         out.addProperty("canSummon", type.canSummon());
+        String defaultLoot = Versioned.entityLootTable(type);
+        if (defaultLoot != null) {
+            out.addProperty("defaultLootTable", defaultLoot);
+        }
+        if (net.minecraft.world.entity.ai.attributes.DefaultAttributes.hasSupplier(type)) {
+            @SuppressWarnings("unchecked")
+            net.minecraft.world.entity.ai.attributes.AttributeSupplier supplier =
+                net.minecraft.world.entity.ai.attributes.DefaultAttributes.getSupplier(
+                    (EntityType<? extends net.minecraft.world.entity.LivingEntity>) type
+                );
+            JsonObject attrs = new JsonObject();
+            for (var holder : Versioned.registryHolders(BuiltInRegistries.ATTRIBUTE)) {
+                if (supplier.hasAttribute(holder)) {
+                    attrs.addProperty(Versioned.idOf(holder.key()).toString(), supplier.getBaseValue(holder));
+                }
+            }
+            if (!attrs.isEmpty()) {
+                out.add("defaultAttributes", attrs);
+            }
+        }
         addTags(out, BuiltInRegistries.ENTITY_TYPE.wrapAsHolder(type).tags()
             .map(tag -> tag.location().toString()).toList());
         return out;
@@ -198,20 +224,192 @@ public final class EntryInspector {
         out.addProperty("isEntityBlock", block instanceof EntityBlock);
         out.addProperty("isRandomlyTicking", defaultState.isRandomlyTicking());
         out.addProperty("destroySpeed", block.defaultDestroyTime());
+        out.addProperty("explosionResistance", block.getExplosionResistance());
+        out.addProperty("lightEmission", defaultState.getLightEmission());
         out.addProperty("requiresCorrectToolForDrops", defaultState.requiresCorrectToolForDrops());
+        String lootTable = Versioned.blockLootTable(block);
+        if (lootTable != null) {
+            out.addProperty("lootTable", lootTable);
+        }
 
         Collection<Property<?>> properties = block.getStateDefinition().getProperties();
         if (!properties.isEmpty()) {
             JsonObject stateProperties = new JsonObject();
+            JsonObject defaultValues = new JsonObject();
             for (Property<?> property : properties) {
                 stateProperties.add(property.getName(), possibleValues(property));
+                defaultValues.addProperty(property.getName(), propertyValueName(defaultState, property));
             }
             out.add("stateProperties", stateProperties);
+            out.add("defaultStateProperties", defaultValues);
         }
         // A state is a value of its block, so its tags are the block holder's; 26.x dropped the
         // forwarding method and left only that answer.
         addTags(out, block.builtInRegistryHolder().tags().map(tag -> tag.location().toString()).toList());
         return out;
+    }
+
+    private static <T extends Comparable<T>> String propertyValueName(BlockState state, Property<T> property) {
+        return property.getName(state.getValue(property));
+    }
+
+    private static JsonObject describePotion(ResourceLocation id) {
+        net.minecraft.world.item.alchemy.Potion potion = Versioned.byId(BuiltInRegistries.POTION, id);
+        if (potion == null) {
+            throw new InsightException(InsightError.NOT_FOUND, "Unknown potion: " + id);
+        }
+        JsonObject out = new JsonObject();
+        out.addProperty("id", id.toString());
+        String displayName = Versioned.potionDisplayName(potion);
+        if (displayName != null) {
+            out.addProperty("displayName", displayName);
+        }
+        out.addProperty("hasInstantEffects", potion.hasInstantEffects());
+        JsonArray effects = new JsonArray();
+        for (net.minecraft.world.effect.MobEffectInstance inst : potion.getEffects()) {
+            effects.add(describeEffectInstance(inst));
+        }
+        out.add("effects", effects);
+        addTags(out, BuiltInRegistries.POTION.wrapAsHolder(potion).tags()
+            .map(tag -> tag.location().toString()).toList());
+        return out;
+    }
+
+    private static JsonObject describeMobEffect(ResourceLocation id) {
+        net.minecraft.world.effect.MobEffect effect = Versioned.byId(BuiltInRegistries.MOB_EFFECT, id);
+        if (effect == null) {
+            throw new InsightException(InsightError.NOT_FOUND, "Unknown mob effect: " + id);
+        }
+        JsonObject out = new JsonObject();
+        out.addProperty("id", id.toString());
+        out.addProperty("displayName", effect.getDisplayName().getString());
+        out.addProperty("category", effect.getCategory().name().toLowerCase(Locale.ROOT));
+        out.addProperty("color", String.format(Locale.ROOT, "#%06x", effect.getColor() & 0xFFFFFF));
+        out.addProperty("isInstantaneous", Versioned.isInstantaneous(effect));
+        JsonArray modifiers = new JsonArray();
+        effect.createModifiers(0, (attrHolder, mod) -> {
+            JsonObject m = new JsonObject();
+            m.addProperty("attribute", attrHolder.unwrapKey().map(k -> Versioned.idOf(k).toString()).orElse("unknown"));
+            m.addProperty("amount", mod.amount());
+            m.addProperty("operation", mod.operation().getSerializedName());
+            modifiers.add(m);
+        });
+        if (!modifiers.isEmpty()) {
+            out.add("attributeModifiers", modifiers);
+        }
+        addTags(out, BuiltInRegistries.MOB_EFFECT.wrapAsHolder(effect).tags()
+            .map(tag -> tag.location().toString()).toList());
+        return out;
+    }
+
+    private static JsonObject describeAttribute(ResourceLocation id) {
+        net.minecraft.world.entity.ai.attributes.Attribute attr = Versioned.byId(BuiltInRegistries.ATTRIBUTE, id);
+        if (attr == null) {
+            throw new InsightException(InsightError.NOT_FOUND, "Unknown attribute: " + id);
+        }
+        JsonObject out = new JsonObject();
+        out.addProperty("id", id.toString());
+        out.addProperty("displayName", net.minecraft.network.chat.Component.translatable(attr.getDescriptionId()).getString());
+        out.addProperty("defaultValue", attr.getDefaultValue());
+        out.addProperty("clientSyncable", attr.isClientSyncable());
+        addTags(out, BuiltInRegistries.ATTRIBUTE.wrapAsHolder(attr).tags()
+            .map(tag -> tag.location().toString()).toList());
+        return out;
+    }
+
+    private static JsonObject describeEnchantment(ResourceLocation id) {
+        net.minecraft.core.HolderLookup.Provider access = requireDynamicRegistries();
+        var lookup = access.lookup(net.minecraft.core.registries.Registries.ENCHANTMENT)
+            .orElseThrow(() -> new InsightException(InsightError.DATA_UNAVAILABLE, "Enchantment registry is unavailable."));
+        var key = net.minecraft.resources.ResourceKey.create(net.minecraft.core.registries.Registries.ENCHANTMENT, id);
+        var holder = lookup.get(key)
+            .orElseThrow(() -> new InsightException(InsightError.NOT_FOUND, "Unknown enchantment: " + id));
+        net.minecraft.world.item.enchantment.Enchantment ench = holder.value();
+        var def = ench.definition();
+        JsonObject out = new JsonObject();
+        out.addProperty("id", id.toString());
+        out.addProperty("displayName", ench.description().getString());
+        out.addProperty("minLevel", ench.getMinLevel());
+        out.addProperty("maxLevel", ench.getMaxLevel());
+        out.addProperty("weight", def.weight());
+        out.addProperty("anvilCost", def.anvilCost());
+        JsonArray slots = new JsonArray();
+        for (var slot : def.slots()) {
+            slots.add(slot.getSerializedName());
+        }
+        out.add("slots", slots);
+        out.add("supportedItems", holderSetToJson(def.supportedItems()));
+        def.primaryItems().ifPresent(primary -> out.add("primaryItems", holderSetToJson(primary)));
+        out.add("exclusiveSet", holderSetToJson(ench.exclusiveSet()));
+        addTags(out, holder.tags().map(tag -> tag.location().toString()).toList());
+        var ops = net.minecraft.resources.RegistryOps.create(com.mojang.serialization.JsonOps.INSTANCE, access);
+        net.minecraft.world.item.enchantment.Enchantment.DIRECT_CODEC.encodeStart(ops, ench)
+            .result()
+            .ifPresent(raw -> out.add("rawJson", raw));
+        return out;
+    }
+
+    private static JsonObject describeBiome(ResourceLocation id) {
+        net.minecraft.core.HolderLookup.Provider access = requireDynamicRegistries();
+        var lookup = access.lookup(net.minecraft.core.registries.Registries.BIOME)
+            .orElseThrow(() -> new InsightException(InsightError.DATA_UNAVAILABLE, "Biome registry is unavailable."));
+        var key = net.minecraft.resources.ResourceKey.create(net.minecraft.core.registries.Registries.BIOME, id);
+        var holder = lookup.get(key)
+            .orElseThrow(() -> new InsightException(InsightError.NOT_FOUND, "Unknown biome: " + id));
+        JsonObject out = new JsonObject();
+        out.addProperty("id", id.toString());
+        out.addProperty("displayName",
+            net.minecraft.network.chat.Component.translatable("biome." + id.getNamespace() + "." + id.getPath()).getString());
+        addTags(out, holder.tags().map(tag -> tag.location().toString()).toList());
+        return out;
+    }
+
+    private static JsonObject describeEffectInstance(net.minecraft.world.effect.MobEffectInstance inst) {
+        JsonObject obj = new JsonObject();
+        String effectId = inst.getEffect().unwrapKey().map(k -> Versioned.idOf(k).toString()).orElse("unknown");
+        obj.addProperty("effect", effectId);
+        obj.addProperty("displayName", inst.getEffect().value().getDisplayName().getString());
+        obj.addProperty("duration", inst.getDuration());
+        obj.addProperty("amplifier", inst.getAmplifier());
+        obj.addProperty("ambient", inst.isAmbient());
+        obj.addProperty("visible", inst.isVisible());
+        obj.addProperty("showIcon", inst.showIcon());
+        obj.addProperty("infiniteDuration", inst.isInfiniteDuration());
+        return obj;
+    }
+
+    private static <T> JsonArray holderSetToJson(net.minecraft.core.HolderSet<T> set) {
+        JsonArray arr = new JsonArray();
+        set.unwrap().ifLeft(tag -> arr.add("#" + tag.location()))
+            .ifRight(holders -> {
+                for (var h : holders) {
+                    h.unwrapKey().ifPresent(k -> arr.add(Versioned.idOf(k).toString()));
+                }
+            });
+        return arr;
+    }
+
+    private static net.minecraft.core.HolderLookup.Provider requireDynamicRegistries() {
+        var executor = net.minetake.mcinsight.McInsightCommon.getExecutor();
+        net.minecraft.core.HolderLookup.Provider access;
+        try {
+            access = executor.supplyOnGameThread(
+                () -> GameAccess.getRegistryAccess(executor),
+                MAIN_THREAD_TIMEOUT_MS
+            );
+        } catch (Exception e) {
+            throw new InsightException(
+                InsightError.DATA_UNAVAILABLE,
+                "Dynamic registries are unavailable: " + e.getMessage()
+            );
+        }
+        if (access == null) {
+            throw new InsightException(
+                InsightError.DATA_UNAVAILABLE,
+                "No world is loaded, so dynamic registry entries cannot be inspected."
+            );
+        }
+        return access;
     }
 
     private static <T extends Comparable<T>> JsonArray possibleValues(Property<T> property) {
@@ -286,7 +484,12 @@ public final class EntryInspector {
     }
 
     private static ResourceLocation parseId(String raw) {
-        ResourceLocation parsed = ResourceLocation.tryParse(raw.trim());
+        String clean = raw == null ? "" : raw.trim();
+        int colon = clean.indexOf(':');
+        if (colon <= 0 || colon == clean.length() - 1) {
+            throw new InsightException(InsightError.INVALID_ID, "'id' must be 'namespace:path', got: " + raw);
+        }
+        ResourceLocation parsed = ResourceLocation.tryParse(clean);
         if (parsed == null) {
             throw new InsightException(InsightError.INVALID_ID, "'id' is not a valid resource id: " + raw);
         }

@@ -31,7 +31,12 @@ public final class RegistryIndex {
         ITEM("item"),
         BLOCK("block"),
         FLUID("fluid"),
-        ENTITY("entity");
+        ENTITY("entity"),
+        POTION("potion"),
+        MOB_EFFECT("mob_effect"),
+        ATTRIBUTE("attribute"),
+        ENCHANTMENT("enchantment"),
+        BIOME("biome");
 
         private final String id;
 
@@ -84,7 +89,7 @@ public final class RegistryIndex {
 
     static {
         for (Kind kind : Kind.values()) {
-            CACHES.put(kind, new GenerationalCache<>(CacheGenerations::resource));
+            CACHES.put(kind, new GenerationalCache<>(GenerationalCache.Scope.BOTH));
         }
     }
 
@@ -112,6 +117,10 @@ public final class RegistryIndex {
             case BLOCK -> BuiltInRegistries.BLOCK;
             case FLUID -> BuiltInRegistries.FLUID;
             case ENTITY -> BuiltInRegistries.ENTITY_TYPE;
+            case POTION -> BuiltInRegistries.POTION;
+            case MOB_EFFECT -> BuiltInRegistries.MOB_EFFECT;
+            case ATTRIBUTE -> BuiltInRegistries.ATTRIBUTE;
+            case ENCHANTMENT, BIOME -> null;
         };
     }
 
@@ -121,6 +130,9 @@ public final class RegistryIndex {
 
     private static KindIndex build(Kind kind) {
         Registry<?> registry = registry(kind);
+        if (registry == null) {
+            return buildDynamic(kind);
+        }
         List<Entry> entries = new ArrayList<>(registry.size());
         for (ResourceLocation id : registry.keySet()) {
             Object value = Versioned.byId(registry, id);
@@ -151,6 +163,91 @@ public final class RegistryIndex {
         }
         tags.sort(Comparator.comparing(TagName::id));
 
+        return new KindIndex(List.copyOf(entries), List.copyOf(tags));
+    }
+
+    private static KindIndex buildDynamic(Kind kind) {
+        var executor = net.minetake.mcinsight.McInsightCommon.getExecutor();
+        net.minecraft.core.HolderLookup.Provider access;
+        try {
+            access = executor.supplyOnGameThread(
+                () -> net.minetake.mcinsight.game.GameAccess.getRegistryAccess(executor),
+                5_000L
+            );
+        } catch (Exception e) {
+            throw new net.minetake.mcinsight.api.InsightException(
+                net.minetake.mcinsight.api.InsightError.DATA_UNAVAILABLE,
+                "Dynamic registry '" + kind.id() + "' is unavailable: " + e.getMessage()
+            );
+        }
+        if (access == null) {
+            throw new net.minetake.mcinsight.api.InsightException(
+                net.minetake.mcinsight.api.InsightError.DATA_UNAVAILABLE,
+                "No world is loaded, so dynamic registry '" + kind.id() + "' is unavailable."
+            );
+        }
+        return switch (kind) {
+            case ENCHANTMENT -> buildDynamicRegistry(
+                kind,
+                access,
+                net.minecraft.core.registries.Registries.ENCHANTMENT,
+                ench -> ench.description().getString()
+            );
+            case BIOME -> buildDynamicRegistry(
+                kind,
+                access,
+                net.minecraft.core.registries.Registries.BIOME,
+                null
+            );
+            default -> throw new IllegalStateException("Expected static registry for kind: " + kind);
+        };
+    }
+
+    private static <T> KindIndex buildDynamicRegistry(
+        Kind kind,
+        net.minecraft.core.HolderLookup.Provider access,
+        net.minecraft.resources.ResourceKey<? extends Registry<T>> registryKey,
+        java.util.function.Function<T, String> displayNameFn
+    ) {
+        var lookup = access.lookup(registryKey)
+            .orElseThrow(() -> new net.minetake.mcinsight.api.InsightException(
+                net.minetake.mcinsight.api.InsightError.DATA_UNAVAILABLE,
+                "Dynamic registry '" + kind.id() + "' is unavailable."
+            ));
+        List<Entry> entries = new ArrayList<>();
+        for (var holder : lookup.listElements().toList()) {
+            ResourceLocation id = Versioned.idOf(holder.key());
+            T value = holder.value();
+            String idString = id.toString();
+            String modId = id.getNamespace();
+            String displayName = displayNameFn != null
+                ? displayNameFn.apply(value)
+                : net.minecraft.network.chat.Component.translatable(
+                    kind.id() + "." + id.getNamespace() + "." + id.getPath()
+                ).getString();
+            entries.add(new Entry(
+                idString,
+                idString.toLowerCase(Locale.ROOT),
+                modId,
+                modId.toLowerCase(Locale.ROOT),
+                displayName,
+                displayName != null ? displayName.toLowerCase(Locale.ROOT) : null,
+                value != null ? value.getClass().getName() : null
+            ));
+        }
+        entries.sort(Comparator.comparing(Entry::id));
+
+        List<TagName> tags = new ArrayList<>();
+        for (TagKey<?> tagKey : lookup.listTagIds().toList()) {
+            ResourceLocation id = tagKey.location();
+            tags.add(new TagName(
+                "#" + id,
+                id.toString().toLowerCase(Locale.ROOT),
+                id.getNamespace(),
+                id.getNamespace().toLowerCase(Locale.ROOT)
+            ));
+        }
+        tags.sort(Comparator.comparing(TagName::id));
         return new KindIndex(List.copyOf(entries), List.copyOf(tags));
     }
 

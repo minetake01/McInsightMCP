@@ -24,17 +24,22 @@ final class Readback {
         // would let the second copy overwrite the first before its callback reads it.
         GpuBuffer buffer = RenderSystem.getDevice().createBuffer(() -> "mcinsight recipe read-back", 9, needed);
         CompletableFuture<CapturedImage> future = new CompletableFuture<>();
-        RenderSystem.getDevice()
-            .createCommandEncoder()
-            .copyTextureToBuffer(colorTexture, buffer, 0L, () -> {
-                try {
-                    future.complete(region(buffer, target.width, target.height, sourceWidth, sourceHeight, blockSize));
-                } catch (Throwable t) {
-                    future.completeExceptionally(t);
-                } finally {
-                    buffer.close();
-                }
-            }, 0);
+        try {
+            RenderSystem.getDevice()
+                .createCommandEncoder()
+                .copyTextureToBuffer(colorTexture, buffer, 0L, () -> {
+                    try {
+                        future.complete(region(buffer, target.width, target.height, sourceWidth, sourceHeight, blockSize));
+                    } catch (Throwable t) {
+                        future.completeExceptionally(t);
+                    } finally {
+                        buffer.close();
+                    }
+                }, 0);
+        } catch (Throwable t) {
+            buffer.close();
+            throw t;
+        }
         return future;
     }
 
@@ -94,17 +99,22 @@ final class Readback {
         GpuBuffer buffer = RenderSystem.getDevice().createBuffer(() -> "mcinsight recipe read-back", 9, needed);
         var encoder = RenderSystem.getDevice().createCommandEncoder();
         CompletableFuture<CapturedImage> future = new CompletableFuture<>();
-        encoder.copyTextureToBuffer(colorTexture, buffer, 0L, () -> {
-            try {
-                future.complete(
-                    region(buffer, encoder, target.width, target.height, sourceWidth, sourceHeight, pixelSize)
-                );
-            } catch (Throwable t) {
-                future.completeExceptionally(t);
-            } finally {
-                buffer.close();
-            }
-        }, 0);
+        try {
+            encoder.copyTextureToBuffer(colorTexture, buffer, 0L, () -> {
+                try {
+                    future.complete(
+                        region(buffer, encoder, target.width, target.height, sourceWidth, sourceHeight, pixelSize)
+                    );
+                } catch (Throwable t) {
+                    future.completeExceptionally(t);
+                } finally {
+                    buffer.close();
+                }
+            }, 0);
+        } catch (Throwable t) {
+            buffer.close();
+            throw t;
+        }
         return future;
     }
 

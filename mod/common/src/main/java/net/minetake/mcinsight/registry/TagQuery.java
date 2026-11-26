@@ -48,8 +48,14 @@ public final class TagQuery {
     private static JsonObject inspectAuto(ResourceLocation tagId, int limit, int offset) {
         List<Kind> declaring = new ArrayList<>(Kind.values().length);
         for (Kind kind : Kind.values()) {
-            if (RegistryIndex.hasTag(kind, tagId)) {
-                declaring.add(kind);
+            try {
+                if (RegistryIndex.hasTag(kind, tagId)) {
+                    declaring.add(kind);
+                }
+            } catch (InsightException ex) {
+                if (ex.error() != InsightError.DATA_UNAVAILABLE) {
+                    throw ex;
+                }
             }
         }
         if (declaring.isEmpty()) {
@@ -77,6 +83,11 @@ public final class TagQuery {
             case BLOCK -> members(kind, BuiltInRegistries.BLOCK, tagId, limit, offset);
             case FLUID -> members(kind, BuiltInRegistries.FLUID, tagId, limit, offset);
             case ENTITY -> members(kind, BuiltInRegistries.ENTITY_TYPE, tagId, limit, offset);
+            case POTION -> members(kind, BuiltInRegistries.POTION, tagId, limit, offset);
+            case MOB_EFFECT -> members(kind, BuiltInRegistries.MOB_EFFECT, tagId, limit, offset);
+            case ATTRIBUTE -> members(kind, BuiltInRegistries.ATTRIBUTE, tagId, limit, offset);
+            case ENCHANTMENT -> dynamicMembers(kind, net.minecraft.core.registries.Registries.ENCHANTMENT, tagId, limit, offset);
+            case BIOME -> dynamicMembers(kind, net.minecraft.core.registries.Registries.BIOME, tagId, limit, offset);
         };
         out.addProperty("kind", kind.id() + "_tag");
         out.addProperty("id", "#" + tagId);
@@ -94,7 +105,62 @@ public final class TagQuery {
         int offset
     ) {
         TagKey<T> key = TagKey.create(registry.key(), tagId);
-        Optional<HolderSet.Named<T>> declared = Versioned.tag(registry, key);
+        return membersFromSet(kind, Versioned.tag(registry, key), tagId, limit, offset);
+    }
+
+    private static JsonObject rowOf(Kind kind, ResourceLocation memberId) {
+        JsonObject row = new JsonObject();
+        row.addProperty("id", memberId.toString());
+        row.addProperty("modId", memberId.getNamespace());
+        String displayName = DisplayNames.of(kind, memberId);
+        if (displayName != null) {
+            row.addProperty("displayName", displayName);
+        }
+        return row;
+    }
+
+    private static <T> JsonObject dynamicMembers(
+        Kind kind,
+        net.minecraft.resources.ResourceKey<? extends Registry<T>> registryKey,
+        ResourceLocation tagId,
+        int limit,
+        int offset
+    ) {
+        var executor = net.minetake.mcinsight.McInsightCommon.getExecutor();
+        net.minecraft.core.HolderLookup.Provider access;
+        try {
+            access = executor.supplyOnGameThread(
+                () -> net.minetake.mcinsight.game.GameAccess.getRegistryAccess(executor),
+                5_000L
+            );
+        } catch (Exception e) {
+            throw new InsightException(
+                InsightError.DATA_UNAVAILABLE,
+                "Dynamic registry '" + kind.id() + "' is unavailable: " + e.getMessage()
+            );
+        }
+        if (access == null) {
+            throw new InsightException(
+                InsightError.DATA_UNAVAILABLE,
+                "No world is loaded, so dynamic registry tags for '" + kind.id() + "' are unavailable."
+            );
+        }
+        var lookup = access.lookup(registryKey)
+            .orElseThrow(() -> new InsightException(
+                InsightError.DATA_UNAVAILABLE,
+                "Dynamic registry '" + kind.id() + "' is unavailable."
+            ));
+        TagKey<T> key = TagKey.create(registryKey, tagId);
+        return membersFromSet(kind, lookup.get(key), tagId, limit, offset);
+    }
+
+    private static <T> JsonObject membersFromSet(
+        Kind kind,
+        Optional<? extends HolderSet.Named<T>> declared,
+        ResourceLocation tagId,
+        int limit,
+        int offset
+    ) {
         if (declared.isEmpty()) {
             throw new InsightException(
                 InsightError.NOT_FOUND,
@@ -117,21 +183,18 @@ public final class TagQuery {
         return Page.of("members", rows, offset, total);
     }
 
-    private static JsonObject rowOf(Kind kind, ResourceLocation memberId) {
-        JsonObject row = new JsonObject();
-        row.addProperty("id", memberId.toString());
-        row.addProperty("modId", memberId.getNamespace());
-        String displayName = DisplayNames.of(kind, memberId);
-        if (displayName != null) {
-            row.addProperty("displayName", displayName);
-        }
-        return row;
-    }
-
     private static ResourceLocation parseTagId(String raw) {
         String body = raw.trim();
         if (body.startsWith("#")) {
             body = body.substring(1);
+        }
+        int colon = body.indexOf(':');
+        if (colon <= 0 || colon == body.length() - 1) {
+            throw new InsightException(
+                InsightError.INVALID_ID,
+                "'id' must be 'namespace:path' (or '#namespace:path'), got: " + raw
+                    + ". Use mc_search_registry with kind=\"tag\" to find tag IDs."
+            );
         }
         ResourceLocation parsed = ResourceLocation.tryParse(body);
         if (parsed == null) {

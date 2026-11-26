@@ -6,6 +6,7 @@ import net.minetake.mcinsight.network.InsightHelloPayload;
 import net.minetake.mcinsight.network.InsightNetworking;
 import net.minetake.mcinsight.network.InsightRequestPayload;
 import net.minetake.mcinsight.network.InsightResponsePayload;
+import net.minetake.mcinsight.network.ServerPacketHandler;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
 //? if >=26.1 {
@@ -52,6 +53,7 @@ public final class McInsightNeoForge {
         NeoForge.EVENT_BUS.addListener(McInsightNeoForge::onAddReloadListeners);
         //? }
         NeoForge.EVENT_BUS.addListener(McInsightNeoForge::onPlayerLoggedIn);
+        NeoForge.EVENT_BUS.addListener(McInsightNeoForge::onPlayerLoggedOut);
         NeoForge.EVENT_BUS.addListener(McInsightNeoForge::onServerStarted);
         NeoForge.EVENT_BUS.addListener(McInsightNeoForge::onServerStopping);
         NeoForge.EVENT_BUS.addListener(McInsightNeoForge::onGameShuttingDown);
@@ -83,6 +85,12 @@ public final class McInsightNeoForge {
     private static void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
         if (event.getEntity() instanceof ServerPlayer sp) {
             InsightNetworking.onPlayerJoined(sp);
+        }
+    }
+
+    private static void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
+        if (event.getEntity() instanceof ServerPlayer sp) {
+            ServerPacketHandler.removeRateLimit(sp.getUUID());
         }
     }
 

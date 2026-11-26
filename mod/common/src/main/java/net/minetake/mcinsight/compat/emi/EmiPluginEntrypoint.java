@@ -11,6 +11,10 @@ public final class EmiPluginEntrypoint implements EmiPlugin {
 
     private static final EmiBridgeImpl BRIDGE = new EmiBridgeImpl();
 
+    static {
+        ViewerRegistry.register(BRIDGE);
+    }
+
     @Override
     public void register(EmiRegistry registry) {
         BRIDGE.invalidateCache();

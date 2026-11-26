@@ -53,7 +53,18 @@ public final class PlayerStateCollector {
 
     private PlayerStateCollector() {}
 
-    private record EffectSample(ResourceLocation id, int amplifier, int durationTicks) {}
+    private record EffectSample(
+        ResourceLocation id,
+        String displayName,
+        int amplifier,
+        int durationTicks,
+        boolean ambient,
+        boolean visible,
+        boolean showIcon,
+        boolean infiniteDuration
+    ) {}
+
+    private record AttributeSample(String id, double base, double value) {}
 
     private record SlotItemSample(int slot, ItemStack stack) {}
 
@@ -89,6 +100,7 @@ public final class PlayerStateCollector {
         boolean isSpectator,
         VehicleSample vehicle,
         List<EffectSample> effects,
+        List<AttributeSample> attributes,
         ItemStack mainHand,
         ItemStack offHand,
         ItemStack[] armor,
@@ -100,14 +112,73 @@ public final class PlayerStateCollector {
 
     public static JsonObject handle(RequestContext ctx, Params p) throws Exception {
         RawPlayerSnapshot snapshot = capture(ctx);
-        return serialize(snapshot);
+        JsonObject out = serialize(snapshot);
+        attachEnderChest(ctx, snapshot.uuid(), out);
+        return out;
+    }
+
+    public static JsonObject serverEnderChest(RequestContext ctx, Params p) throws Exception {
+        var requester = ctx.requester();
+        if (requester == null) {
+            throw new InsightException(InsightError.NO_WORLD, "No server player is available.");
+        }
+        return ctx.executor().supplyOnGameThread(() -> serializeEnderChestContainer(
+            requester.getEnderChestInventory(),
+            GameAccess.jsonOps(requester.registryAccess())
+        ), CAPTURE_TIMEOUT_MS);
+    }
+
+    private static void attachEnderChest(RequestContext ctx, UUID playerUuid, JsonObject out) throws Exception {
+        var server = ctx.executor().getActiveServer();
+        if (server != null) {
+            JsonObject local = ctx.executor().supplyOnGameThread(() -> {
+                var sp = server.getPlayerList().getPlayer(playerUuid);
+                if (sp == null) {
+                    return null;
+                }
+                return serializeEnderChestContainer(sp.getEnderChestInventory(), GameAccess.jsonOps(sp.registryAccess()));
+            }, CAPTURE_TIMEOUT_MS);
+            if (local != null) {
+                out.add("enderChest", local);
+            }
+            return;
+        }
+        if (net.minetake.mcinsight.data.ServerSync.isAvailable()) {
+            JsonObject remote = net.minetake.mcinsight.data.ServerSync.request(
+                net.minetake.mcinsight.api.InsightEndpoint.SERVER_PLAYER_ENDER_CHEST,
+                Params.EMPTY
+            );
+            if (remote != null && remote.has("items")) {
+                out.add("enderChest", remote);
+            }
+        }
+    }
+
+    private static JsonObject serializeEnderChestContainer(
+        net.minecraft.world.Container container,
+        RegistryOps<JsonElement> ops
+    ) {
+        JsonObject ec = new JsonObject();
+        int size = container.getContainerSize();
+        ec.addProperty("size", size);
+        JsonArray items = new JsonArray();
+        for (int i = 0; i < size; i++) {
+            ItemStack stack = container.getItem(i);
+            if (!stack.isEmpty()) {
+                JsonObject entry = JsonCodec.serializeItemStack(stack, ops);
+                entry.addProperty("slot", i);
+                items.add(entry);
+            }
+        }
+        ec.add("items", items);
+        return ec;
     }
 
     /** Phase 1: copy the player and the objects it points at, on the owning game thread. */
     private static RawPlayerSnapshot capture(RequestContext ctx) {
         RawPlayerSnapshot snapshot;
         try {
-            snapshot = ctx.executor().supplyOnGameThread(() -> {
+            snapshot = ctx.executor().supplyOnClientThread(() -> {
                 Player player = GameAccess.getLocalPlayer(ctx.executor());
                 return player == null ? null : sample(player);
             }, CAPTURE_TIMEOUT_MS);
@@ -187,11 +258,28 @@ public final class PlayerStateCollector {
         for (EffectSample effect : snapshot.effects()) {
             JsonObject entry = new JsonObject();
             entry.addProperty("id", effect.id() != null ? effect.id().toString() : "unknown");
+            if (effect.displayName() != null) {
+                entry.addProperty("displayName", effect.displayName());
+            }
             entry.addProperty("amplifier", effect.amplifier());
             entry.addProperty("durationTicks", effect.durationTicks());
+            entry.addProperty("ambient", effect.ambient());
+            entry.addProperty("visible", effect.visible());
+            entry.addProperty("showIcon", effect.showIcon());
+            entry.addProperty("infiniteDuration", effect.infiniteDuration());
             effects.add(entry);
         }
         out.add("effects", effects);
+
+        JsonArray attributes = new JsonArray(snapshot.attributes().size());
+        for (AttributeSample attr : snapshot.attributes()) {
+            JsonObject entry = new JsonObject();
+            entry.addProperty("id", attr.id());
+            entry.addProperty("base", attr.base());
+            entry.addProperty("value", attr.value());
+            attributes.add(entry);
+        }
+        out.add("attributes", attributes);
 
         out.add("mainHand", JsonCodec.serializeItemStack(snapshot.mainHand(), ops));
         out.add("offHand", JsonCodec.serializeItemStack(snapshot.offHand(), ops));
@@ -236,6 +324,13 @@ public final class PlayerStateCollector {
             slots.add(slot);
         }
         out.add("containerSlots", slots);
+        if (!screen.dataSlots().isEmpty()) {
+            JsonArray dataSlots = new JsonArray(screen.dataSlots().size());
+            for (int v : screen.dataSlots()) {
+                dataSlots.add(v);
+            }
+            out.add("dataSlots", dataSlots);
+        }
         return out;
     }
 
@@ -250,9 +345,26 @@ public final class PlayerStateCollector {
         for (MobEffectInstance effect : player.getActiveEffects()) {
             effects.add(new EffectSample(
                 BuiltInRegistries.MOB_EFFECT.getKey(effect.getEffect().value()),
+                effect.getEffect().value().getDisplayName().getString(),
                 effect.getAmplifier(),
-                effect.getDuration()
+                effect.getDuration(),
+                effect.isAmbient(),
+                effect.isVisible(),
+                effect.showIcon(),
+                effect.isInfiniteDuration()
             ));
+        }
+
+        List<AttributeSample> attributes = new ArrayList<>();
+        var attrMap = player.getAttributes();
+        for (var holder : Versioned.registryHolders(BuiltInRegistries.ATTRIBUTE)) {
+            if (attrMap.hasAttribute(holder)) {
+                attributes.add(new AttributeSample(
+                    Versioned.idOf(holder.key()).toString(),
+                    round3(attrMap.getBaseValue(holder)),
+                    round3(attrMap.getValue(holder))
+                ));
+            }
         }
 
         ItemStack[] armor = new ItemStack[ARMOR_SLOTS.length];
@@ -321,6 +433,7 @@ public final class PlayerStateCollector {
             player.isSpectator(),
             vehicle,
             effects,
+            attributes,
             player.getMainHandItem().copy(),
             player.getOffhandItem().copy(),
             armor,

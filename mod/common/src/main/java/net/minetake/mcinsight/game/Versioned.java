@@ -159,4 +159,62 @@ public final class Versioned {
         return net.minecraft.world.item.crafting.Recipe.CODEC;
         //? }
     }
+
+    public static String blockLootTable(net.minecraft.world.level.block.Block block) {
+        //? if >=26.1 {
+        /*return block.getLootTable().map(k -> idOf(k).toString()).orElse(null);
+        *///? } else {
+        ResourceKey<net.minecraft.world.level.storage.loot.LootTable> key = block.getLootTable();
+        return key == null || key.equals(net.minecraft.world.level.storage.loot.BuiltInLootTables.EMPTY)
+            ? null
+            : idOf(key).toString();
+        //? }
+    }
+
+    public static String entityLootTable(net.minecraft.world.entity.EntityType<?> entityType) {
+        //? if >=26.1 {
+        /*return entityType.getDefaultLootTable().map(k -> idOf(k).toString()).orElse(null);
+        *///? } else {
+        ResourceKey<net.minecraft.world.level.storage.loot.LootTable> key = entityType.getDefaultLootTable();
+        return key == null || key.equals(net.minecraft.world.level.storage.loot.BuiltInLootTables.EMPTY)
+            ? null
+            : idOf(key).toString();
+        //? }
+    }
+
+    public static boolean isInstantaneous(net.minecraft.world.effect.MobEffect effect) {
+        //? if >=26.3 {
+        /*return effect.isInstantaneous();
+        *///? } else {
+        return effect.isInstantenous();
+        //? }
+    }
+
+    public static <T> java.util.List<net.minecraft.core.Holder.Reference<T>> registryHolders(
+        net.minecraft.core.Registry<T> registry
+    ) {
+        //? if >=26.1 {
+        /*return registry.listElements().toList();
+        *///? } else {
+        return registry.holders().toList();
+        //? }
+    }
+
+    public static String potionDisplayName(net.minecraft.world.item.alchemy.Potion potion) {
+        if (potion == null) {
+            return null;
+        }
+        //? if >=26.1 {
+        /*return net.minecraft.network.chat.Component.translatable(
+            "item.minecraft.potion.effect." + potion.name()
+        ).getString();
+        *///? } else {
+        return net.minecraft.network.chat.Component.translatable(
+            net.minecraft.world.item.alchemy.Potion.getName(
+                java.util.Optional.of(net.minecraft.core.registries.BuiltInRegistries.POTION.wrapAsHolder(potion)),
+                "item.minecraft.potion.effect."
+            )
+        ).getString();
+        //? }
+    }
 }

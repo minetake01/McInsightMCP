@@ -159,9 +159,15 @@ jobs:
 
           cp -r mcp-server/dist "stage/${PKG_NAME}/dist"
           cp mcp-server/package.json mcp-server/pnpm-lock.yaml mcp-server/pnpm-workspace.yaml "stage/${PKG_NAME}/"
-          cp LICENSE README.md "stage/${PKG_NAME}/"
+          cp LICENSE README.md README.ja.md "stage/${PKG_NAME}/"
 
-          tar -czf "release-out/${PKG_NAME}.tar.gz" -C stage "${PKG_NAME}"
+          (
+            cd "stage/${PKG_NAME}"
+            pnpm install --prod --frozen-lockfile --config.node-linker=hoisted --ignore-scripts
+            rm -f pnpm-lock.yaml pnpm-workspace.yaml
+          )
+
+          tar -czhf "release-out/${PKG_NAME}.tar.gz" -C stage "${PKG_NAME}"
           (cd stage && zip -rq "../release-out/${PKG_NAME}.zip" "${PKG_NAME}")
 
       # 21 compiles and runs the mod; 25 runs the Gradle daemon (gradle/gradle-daemon-jvm.properties).
@@ -388,6 +394,29 @@ jobs:
           game-versions: ${{ matrix.target.mc }}
           dependencies: ${{ matrix.dependencies }}
           fail-mode: fail
+
+  sync-modrinth-metadata:
+    name: Sync Modrinth Metadata
+    needs: [build-and-verify, publish-github]
+    if: ${{ inputs.dry_run != true && vars.MODRINTH_PROJECT_ID != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate Modrinth token
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+        run: |
+          if [[ -z "${MODRINTH_TOKEN}" ]]; then
+            echo "::error::MODRINTH_PROJECT_ID is set, but secrets.MODRINTH_TOKEN is missing."
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
 
       - name: Sync README, license, links, and icon to Modrinth
         env:

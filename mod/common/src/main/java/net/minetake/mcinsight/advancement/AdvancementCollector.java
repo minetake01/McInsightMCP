@@ -74,26 +74,19 @@ public final class AdvancementCollector {
         boolean includeRecipes = p.bool("includeRecipes", false);
         Status status = Status.parse(p.string("status"));
 
-        List<Sample> samples = capture(ctx);
+        List<Sample> samples = capture(ctx, includeRecipes, modId);
 
         JsonArray entries = new JsonArray();
         int total = 0;
         for (Sample sample : samples) {
-            if (!includeRecipes && sample.id().getPath().startsWith("recipes/")) {
-                continue;
-            }
-            if (!modId.isEmpty() && !sample.id().getNamespace().toLowerCase(Locale.ROOT).equals(modId)) {
-                continue;
-            }
             if (!status.accepts(sample)) {
                 continue;
             }
-            JsonObject entry = describe(sample);
-            if (!query.isEmpty() && !matches(entry, query)) {
+            if (!query.isEmpty() && !matchesSummary(sample, query)) {
                 continue;
             }
             if (total >= offset && entries.size() < limit) {
-                entries.add(entry);
+                entries.add(describe(sample, true));
             }
             total++;
         }
@@ -144,12 +137,12 @@ public final class AdvancementCollector {
      * <p>The dispatcher only lets this run where a server is active (integrated, or the host
      * answering a bridged request), so definitions and progress always come from the same owner.
      */
-    private static List<Sample> capture(RequestContext ctx) throws Exception {
+    private static List<Sample> capture(RequestContext ctx, boolean includeRecipes, String modId) throws Exception {
         MinecraftServer server = ctx.executor().getActiveServer();
         try {
             ServerPlayer player = ctx.ownerPlayer(server);
             return ctx.executor().supplyOnServerThread(
-                () -> build(server.getAdvancements().getAllAdvancements(), player),
+                () -> build(server.getAdvancements().getAllAdvancements(), player, includeRecipes, modId),
                 CAPTURE_TIMEOUT_MS
             );
         } catch (InsightException e) {
@@ -170,10 +163,22 @@ public final class AdvancementCollector {
         }
     }
 
-    private static List<Sample> build(Collection<AdvancementHolder> all, ServerPlayer player) {
+    private static List<Sample> build(
+        Collection<AdvancementHolder> all,
+        ServerPlayer player,
+        boolean includeRecipes,
+        String modId
+    ) {
         PlayerAdvancements progress = player.getAdvancements();
-        List<Sample> samples = new ArrayList<>(all.size());
+        List<Sample> samples = new ArrayList<>();
         for (AdvancementHolder holder : all) {
+            ResourceLocation id = holder.id();
+            if (!includeRecipes && id.getPath().startsWith("recipes/")) {
+                continue;
+            }
+            if (!modId.isEmpty() && !id.getNamespace().toLowerCase(Locale.ROOT).equals(modId)) {
+                continue;
+            }
             AdvancementProgress advancementProgress = progress.getOrStartProgress(holder);
             List<String> completed = new ArrayList<>();
             for (String criterion : advancementProgress.getCompletedCriteria()) {
@@ -184,7 +189,7 @@ public final class AdvancementCollector {
                 remaining.add(criterion);
             }
             samples.add(new Sample(
-                holder.id(),
+                id,
                 holder.value(),
                 advancementProgress.isDone(),
                 advancementProgress.getPercent(),
@@ -197,7 +202,7 @@ public final class AdvancementCollector {
 
     // -------------------------------------------------------------- describe
 
-    private static JsonObject describe(Sample sample) {
+    private static JsonObject describe(Sample sample, boolean includeDetails) {
         Advancement advancement = sample.advancement();
         ResourceLocation id = sample.id();
 
@@ -219,17 +224,18 @@ public final class AdvancementCollector {
             advancement.name().ifPresent(name -> out.addProperty("title", name.getString()));
         }
 
-        addCriteria(out, advancement);
-        JsonArray requirements = describeRequirements(advancement);
-        if (!requirements.isEmpty()) {
-            out.add("requirements", requirements);
+        if (includeDetails) {
+            addCriteria(out, advancement);
+            JsonArray requirements = describeRequirements(advancement);
+            if (!requirements.isEmpty()) {
+                out.add("requirements", requirements);
+            }
+            JsonObject rewards = describeRewards(advancement.rewards());
+            if (!rewards.isEmpty()) {
+                out.add("rewards", rewards);
+            }
+            out.add("progress", describeProgress(sample));
         }
-        JsonObject rewards = describeRewards(advancement.rewards());
-        if (!rewards.isEmpty()) {
-            out.add("rewards", rewards);
-        }
-
-        out.add("progress", describeProgress(sample));
         return out;
     }
 
@@ -364,7 +370,7 @@ public final class AdvancementCollector {
      */
     private static List<ResourceLocation> lootIds(AdvancementRewards rewards) {
         //? if >=26.3 {
-        /*return rewards.loot().stream().map(holder -> Versioned.idOf(holder.unwrapKey().orElseThrow())).toList();
+        /*return rewards.loot().stream().flatMap(holder -> holder.unwrapKey().stream()).map(Versioned::idOf).toList();
         *///? } else {
         return rewards.loot().stream().map(Versioned::idOf).toList();
         //? }
@@ -388,32 +394,25 @@ public final class AdvancementCollector {
     }
 
     /**
-     * Whether an advancement matches the free-text query.
-     *
-     * <p>The needle is checked against the fields the caller can see: identity, title, description,
-     * icon and criteria. Building that haystack once per entry keeps namespace filtering and text
-     * filtering in the same pass over the tree.
+     * Whether an advancement matches the free-text query without building reflective criterion
+     * snapshots for entries that do not even fall inside the requested page.
      */
-    private static boolean matches(JsonObject entry, String lowerQuery) {
+    private static boolean matchesSummary(Sample sample, String lowerQuery) {
         StringBuilder haystack = new StringBuilder();
-        append(haystack, entry, "id");
-        append(haystack, entry, "title");
-        append(haystack, entry, "description");
-        append(haystack, entry, "icon");
-        JsonElement criteria = entry.get("criteria");
-        if (criteria != null && criteria.isJsonArray()) {
-            for (JsonElement name : criteria.getAsJsonArray()) {
-                haystack.append(name.getAsString()).append(' ');
-            }
+        haystack.append(sample.id()).append(' ');
+        Advancement advancement = sample.advancement();
+        advancement.display().ifPresent(display -> {
+            haystack.append(title(display).getString()).append(' ');
+            haystack.append(description(display).getString()).append(' ');
+            haystack.append(BuiltInRegistries.ITEM.getKey(iconItem(display))).append(' ');
+        });
+        if (advancement.display().isEmpty()) {
+            advancement.name().ifPresent(name -> haystack.append(name.getString()).append(' '));
+        }
+        for (String criterionName : advancement.criteria().keySet()) {
+            haystack.append(criterionName).append(' ');
         }
         return haystack.toString().toLowerCase(Locale.ROOT).contains(lowerQuery);
-    }
-
-    private static void append(StringBuilder haystack, JsonObject entry, String key) {
-        JsonElement value = entry.get(key);
-        if (value != null && value.isJsonPrimitive()) {
-            haystack.append(value.getAsString()).append(' ');
-        }
     }
 
     private static String lower(String value) {

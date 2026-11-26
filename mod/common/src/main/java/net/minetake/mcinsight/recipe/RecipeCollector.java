@@ -55,15 +55,18 @@ import net.minecraft.world.level.Level;
 public final class RecipeCollector {
 
     private static final String[] OUTPUT_FALLBACK_KEYS = {
-        "result", "results", "output", "outputs", "main_output", "secondary_output", "fluidResult"
+        "result", "results", "output", "outputs", "main_output", "secondary_output", "fluidResult",
+        "itemOutput", "item_output", "gasOutput", "chemical_output"
     };
     private static final String[] INPUT_FALLBACK_KEYS = {
         "ingredient", "ingredients", "input", "inputs", "process",
-        "extra_fluid", "fluidInput", "itemInput", "chemicalInput", "key"
+        "template", "base", "addition", "reagent", "pedestalItems", "additives",
+        "extra_fluid", "fluidInput", "itemInput", "chemicalInput", "key",
+        "mainInput", "main_input", "extra_input"
     };
 
     private static final GenerationalCache<RecipeIndex> INDEX =
-        new GenerationalCache<>(CacheGenerations::data);
+        new GenerationalCache<>(GenerationalCache.Scope.DATA);
 
     private RecipeCollector() {}
 
@@ -85,6 +88,7 @@ public final class RecipeCollector {
         final String serializerStr;
         final String recipeClass;
         final Recipe<?> recipe;
+        final JsonObject syntheticRawJson;
         final ItemStack resultPreview;
         final String resultItemIdLower;
         final String[] resultTagsLower;
@@ -98,6 +102,8 @@ public final class RecipeCollector {
             String modId,
             String serializerStr,
             Recipe<?> recipe,
+            String recipeClass,
+            JsonObject syntheticRawJson,
             ItemStack resultPreview,
             String resultItemIdLower,
             String[] resultTagsLower,
@@ -113,8 +119,9 @@ public final class RecipeCollector {
             this.modIdLower = modId.toLowerCase(Locale.ROOT);
             this.idNamespaceLower = id.getNamespace().toLowerCase(Locale.ROOT);
             this.serializerStr = serializerStr;
-            this.recipeClass = recipe.getClass().getName();
+            this.recipeClass = recipeClass;
             this.recipe = recipe;
+            this.syntheticRawJson = syntheticRawJson;
             this.resultPreview = resultPreview;
             this.resultItemIdLower = resultItemIdLower;
             this.resultTagsLower = resultTagsLower;
@@ -147,7 +154,10 @@ public final class RecipeCollector {
         }
 
         JsonElement rawJson(IndexedRecipe rec) {
-            if (jsonOps == null) {
+            if (rec.syntheticRawJson != null) {
+                return rec.syntheticRawJson;
+            }
+            if (jsonOps == null || rec.recipe == null) {
                 return null;
             }
             return encodedJson.computeIfAbsent(rec.id, id -> {
@@ -169,8 +179,23 @@ public final class RecipeCollector {
         RecipeIndex index = INDEX.get(() -> buildIndex(ctx.executor()));
         JsonObject out = new JsonObject();
         out.addProperty("ok", true);
-        out.addProperty("recipeManagerAvailable", index != null);
-        out.add("recipeTypes", index != null ? index.recipeTypesArray.deepCopy() : new JsonArray());
+        if (index != null) {
+            out.addProperty("recipeManagerAvailable", true);
+            out.add("recipeTypes", index.recipeTypesArray.deepCopy());
+        } else if (net.minetake.mcinsight.data.ServerSync.isAvailable()) {
+            JsonObject remote = net.minetake.mcinsight.data.ServerSync.request(
+                net.minetake.mcinsight.api.InsightEndpoint.SERVER_RECIPES_TYPES,
+                Params.EMPTY
+            );
+            out.addProperty(
+                "recipeManagerAvailable",
+                remote.has("recipeManagerAvailable") && remote.get("recipeManagerAvailable").getAsBoolean()
+            );
+            out.add("recipeTypes", remote.has("recipeTypes") ? remote.getAsJsonArray("recipeTypes") : new JsonArray());
+        } else {
+            out.addProperty("recipeManagerAvailable", false);
+            out.add("recipeTypes", new JsonArray());
+        }
 
         List<IRecipeViewerBridge> bridges = ViewerRegistry.active();
         JsonArray activeViewers = new JsonArray();
@@ -179,6 +204,34 @@ public final class RecipeCollector {
         }
         out.add("activeViewers", activeViewers);
         out.add("viewers", ViewerQuery.categories(bridges));
+        return out;
+    }
+
+    public static JsonObject serverTypes(RequestContext ctx, Params params) throws Exception {
+        RecipeIndex index = INDEX.get(() -> buildIndex(ctx.executor()));
+        JsonObject out = new JsonObject();
+        out.addProperty("ok", true);
+        out.addProperty("recipeManagerAvailable", index != null);
+        out.add("recipeTypes", index != null ? index.recipeTypesArray.deepCopy() : new JsonArray());
+        return out;
+    }
+
+    public static JsonObject serverQuery(RequestContext ctx, Params params) throws Exception {
+        RecipeIndex index = INDEX.get(() -> buildIndex(ctx.executor()));
+        if (index == null) {
+            throw new InsightException(InsightError.DATA_UNAVAILABLE, "The server recipe manager is not available.");
+        }
+        int limit = net.minetake.mcinsight.api.InsightEndpoint.SERVER_RECIPES_QUERY.limit(params);
+        int offset = params.offset();
+        ViewerQuery.RoleScope role = ViewerQuery.RoleScope.parse(params.string("role"));
+        ItemFilter item = ItemFilter.of(ItemQuery.optional(params.string("item")));
+        String type = params.string("type");
+        String modId = params.string("mod");
+        JsonObject out = new JsonObject();
+        out.addProperty("ok", true);
+        out.add("vanilla", role.vanillaHasIt()
+            ? queryIndex(index, item, role, type, modId, limit, offset)
+            : Page.of("recipes", new JsonArray(), offset, 0));
         return out;
     }
 
@@ -199,13 +252,24 @@ public final class RecipeCollector {
         out.addProperty("ok", true);
 
         RecipeIndex index = wantVanilla ? INDEX.get(() -> buildIndex(ctx.executor())) : null;
-        if (wantVanilla && index == null && "vanilla".equals(source)) {
+        JsonObject remoteVanilla = null;
+        if (wantVanilla && index == null && net.minetake.mcinsight.data.ServerSync.isAvailable()) {
+            JsonObject remote = net.minetake.mcinsight.data.ServerSync.request(
+                net.minetake.mcinsight.api.InsightEndpoint.SERVER_RECIPES_QUERY,
+                params
+            );
+            if (remote.has("vanilla") && remote.get("vanilla").isJsonObject()) {
+                remoteVanilla = remote.getAsJsonObject("vanilla");
+            }
+        }
+        boolean hasVanilla = index != null || remoteVanilla != null;
+        if (wantVanilla && !hasVanilla && "vanilla".equals(source)) {
             throw new InsightException(InsightError.DATA_UNAVAILABLE, "The recipe manager is not available.");
         }
         List<IRecipeViewerBridge> bridges = wantViewers
             ? ("all".equals(source) ? ViewerRegistry.active() : ViewerQuery.resolve(source))
             : List.of();
-        if (index == null && bridges.isEmpty()) {
+        if (!hasVanilla && bridges.isEmpty()) {
             throw new InsightException(
                 wantVanilla ? InsightError.DATA_UNAVAILABLE : InsightError.VIEWER_UNAVAILABLE,
                 wantVanilla
@@ -218,6 +282,8 @@ public final class RecipeCollector {
             out.add("vanilla", role.vanillaHasIt()
                 ? queryIndex(index, item, role, type, modId, limit, offset)
                 : Page.of("recipes", new JsonArray(), offset, 0));
+        } else if (remoteVanilla != null) {
+            out.add("vanilla", remoteVanilla);
         }
         if (!bridges.isEmpty()) {
             out.add("viewers", ViewerQuery.page(bridges, item, role, type, modId, limit, offset));
@@ -246,7 +312,6 @@ public final class RecipeCollector {
         if (bootstrap == null) {
             return null;
         }
-        PerfMetrics.markCacheHit();
         return index(bootstrap);
     }
 
@@ -306,6 +371,8 @@ public final class RecipeCollector {
                 recipeMod,
                 serStr,
                 recipe,
+                recipe.getClass().getName(),
+                null,
                 resultPreview,
                 resultIdLower,
                 resultTags.toArray(String[]::new),
@@ -314,37 +381,146 @@ public final class RecipeCollector {
                 standardVanillaIo
             );
 
-            index.allRecipes.add(rec);
-            index.byType.computeIfAbsent(rec.recipeTypeLower, k -> new ArrayList<>()).add(rec);
-            index.byMod.computeIfAbsent(rec.modIdLower, k -> new ArrayList<>()).add(rec);
-            if (!rec.idNamespaceLower.equals(rec.modIdLower)) {
-                index.byMod.computeIfAbsent(rec.idNamespaceLower, k -> new ArrayList<>()).add(rec);
-            }
-            if (resultIdLower != null) {
-                index.byOutputItemId.computeIfAbsent(resultIdLower, k -> new ArrayList<>()).add(rec);
-            }
-            for (String rt : rec.resultTagsLower) {
-                index.byOutputTag.computeIfAbsent(rt, k -> new ArrayList<>()).add(rec);
-            }
-            for (String inId : rec.inputItemIdsLower) {
-                index.byInputItemId.computeIfAbsent(inId, k -> new ArrayList<>()).add(rec);
-            }
-            for (String it : rec.inputTagsLower) {
-                index.byInputTag.computeIfAbsent(it, k -> new ArrayList<>()).add(rec);
-            }
-            if (!standardVanillaIo) {
-                index.fallbackCandidates.add(rec);
-            }
+            addToIndex(index, rec);
         }
 
+        indexBrewingMixes(boot, counts, index);
+
+        boolean hasBrewingType = false;
         for (ResourceLocation regId : BuiltInRegistries.RECIPE_TYPE.keySet()) {
+            String regStr = regId.toString();
+            if ("minecraft:brewing".equals(regStr)) {
+                hasBrewingType = true;
+            }
             JsonObject obj = new JsonObject();
-            obj.addProperty("id", regId.toString());
+            obj.addProperty("id", regStr);
             obj.addProperty("modId", regId.getNamespace());
-            obj.addProperty("count", counts.getOrDefault(regId.toString(), 0));
+            obj.addProperty("count", counts.getOrDefault(regStr, 0));
+            recipeTypes.add(obj);
+        }
+        if (!hasBrewingType && counts.getOrDefault("minecraft:brewing", 0) > 0) {
+            JsonObject obj = new JsonObject();
+            obj.addProperty("id", "minecraft:brewing");
+            obj.addProperty("modId", "minecraft");
+            obj.addProperty("count", counts.get("minecraft:brewing"));
             recipeTypes.add(obj);
         }
         return index;
+    }
+
+    private static void addToIndex(RecipeIndex index, IndexedRecipe rec) {
+        index.allRecipes.add(rec);
+        index.byType.computeIfAbsent(rec.recipeTypeLower, k -> new ArrayList<>()).add(rec);
+        index.byMod.computeIfAbsent(rec.modIdLower, k -> new ArrayList<>()).add(rec);
+        if (!rec.idNamespaceLower.equals(rec.modIdLower)) {
+            index.byMod.computeIfAbsent(rec.idNamespaceLower, k -> new ArrayList<>()).add(rec);
+        }
+        if (rec.resultItemIdLower != null) {
+            index.byOutputItemId.computeIfAbsent(rec.resultItemIdLower, k -> new ArrayList<>()).add(rec);
+        }
+        for (String rt : rec.resultTagsLower) {
+            index.byOutputTag.computeIfAbsent(rt, k -> new ArrayList<>()).add(rec);
+        }
+        for (String inId : rec.inputItemIdsLower) {
+            index.byInputItemId.computeIfAbsent(inId, k -> new ArrayList<>()).add(rec);
+        }
+        for (String it : rec.inputTagsLower) {
+            index.byInputTag.computeIfAbsent(it, k -> new ArrayList<>()).add(rec);
+        }
+        if (!rec.standardVanillaIo) {
+            index.fallbackCandidates.add(rec);
+        }
+    }
+
+    private static void indexBrewingMixes(Bootstrap boot, Map<String, Integer> counts, RecipeIndex index) {
+        BrewingCollector.Mixes mixes = BrewingCollector.collect(boot.level());
+        if (mixes.potionMixes().isEmpty() && mixes.containerMixes().isEmpty()) {
+            return;
+        }
+        int seq = 0;
+        for (BrewingCollector.PotionMix mix : mixes.potionMixes()) {
+            ItemStack fromStack = net.minecraft.world.item.alchemy.PotionContents.createItemStack(
+                net.minecraft.world.item.Items.POTION, mix.from()
+            );
+            ItemStack toStack = net.minecraft.world.item.alchemy.PotionContents.createItemStack(
+                net.minecraft.world.item.Items.POTION, mix.to()
+            );
+            ResourceLocation id = ResourceLocation.fromNamespaceAndPath("minecraft", "brewing/potion/" + (seq++));
+            JsonObject raw = new JsonObject();
+            raw.addProperty("type", "minecraft:brewing");
+            mix.from().unwrapKey().ifPresent(k -> raw.addProperty("fromPotion", Versioned.idOf(k).toString()));
+            mix.to().unwrapKey().ifPresent(k -> raw.addProperty("toPotion", Versioned.idOf(k).toString()));
+            addBrewingEntry(index, counts, id, fromStack, mix.reagent(), toStack, raw);
+        }
+        for (BrewingCollector.ContainerMix mix : mixes.containerMixes()) {
+            ItemStack fromStack = new ItemStack(mix.from().value());
+            ItemStack toStack = new ItemStack(mix.to().value());
+            ResourceLocation id = ResourceLocation.fromNamespaceAndPath("minecraft", "brewing/container/" + (seq++));
+            JsonObject raw = new JsonObject();
+            raw.addProperty("type", "minecraft:brewing");
+            addBrewingEntry(index, counts, id, fromStack, mix.reagent(), toStack, raw);
+        }
+    }
+
+    private static void addBrewingEntry(
+        RecipeIndex index,
+        Map<String, Integer> counts,
+        ResourceLocation id,
+        ItemStack baseStack,
+        Ingredient reagent,
+        ItemStack outputStack,
+        JsonObject raw
+    ) {
+        counts.merge("minecraft:brewing", 1, Integer::sum);
+        if (index.jsonOps != null) {
+            raw.add("input", JsonCodec.serializeItemStack(baseStack, index.jsonOps));
+            raw.add("output", JsonCodec.serializeItemStack(outputStack, index.jsonOps));
+            JsonArray reagentStacks = new JsonArray();
+            for (ItemStack s : stacksOf(reagent)) {
+                if (!s.isEmpty()) {
+                    reagentStacks.add(JsonCodec.serializeItemStack(s, index.jsonOps));
+                }
+            }
+            raw.add("reagent", reagentStacks);
+        }
+
+        String resultIdLower = outputStack.isEmpty()
+            ? null
+            : BuiltInRegistries.ITEM.getKey(outputStack.getItem()).toString().toLowerCase(Locale.ROOT);
+        Set<String> resultTags = new HashSet<>();
+        if (!outputStack.isEmpty()) {
+            Versioned.itemTags(outputStack)
+                .forEach(tk -> resultTags.add(tk.location().toString().toLowerCase(Locale.ROOT)));
+        }
+        Set<String> inputIds = new HashSet<>();
+        Set<String> inputTags = new HashSet<>();
+        if (!baseStack.isEmpty()) {
+            inputIds.add(BuiltInRegistries.ITEM.getKey(baseStack.getItem()).toString().toLowerCase(Locale.ROOT));
+            Versioned.itemTags(baseStack)
+                .forEach(tk -> inputTags.add(tk.location().toString().toLowerCase(Locale.ROOT)));
+        }
+        for (ItemStack stack : stacksOf(reagent)) {
+            if (!stack.isEmpty()) {
+                inputIds.add(BuiltInRegistries.ITEM.getKey(stack.getItem()).toString().toLowerCase(Locale.ROOT));
+                Versioned.itemTags(stack)
+                    .forEach(tk -> inputTags.add(tk.location().toString().toLowerCase(Locale.ROOT)));
+            }
+        }
+        addToIndex(index, new IndexedRecipe(
+            id,
+            "minecraft:brewing",
+            "minecraft",
+            "minecraft:brewing",
+            null,
+            "net.minecraft.world.item.alchemy.PotionBrewing$Mix",
+            raw,
+            outputStack,
+            resultIdLower,
+            resultTags.toArray(String[]::new),
+            inputIds.toArray(String[]::new),
+            inputTags.toArray(String[]::new),
+            true
+        ));
     }
 
     /**
@@ -354,6 +530,11 @@ public final class RecipeCollector {
      * displays, whose result is a slot display resolved against the registries.
      */
     private static ItemStack resultOf(Recipe<?> recipe, HolderLookup.Provider registries, Level level) {
+        //? if >=26.3 {
+        /*if (recipe instanceof net.minecraft.world.item.crafting.BrewingRecipe br) {
+            return br.getOutput().create();
+        }
+        *///? }
         //? if >=26.1 {
         /*ContextMap context = contextOf(level, registries);
         for (RecipeDisplay display : recipe.display()) {
@@ -390,6 +571,11 @@ public final class RecipeCollector {
 
     /** The ingredients a recipe places, in the shape the version that builds it exposes. */
     private static List<Ingredient> ingredientsOf(Recipe<?> recipe) {
+        //? if >=26.3 {
+        /*if (recipe instanceof net.minecraft.world.item.crafting.BrewingRecipe br) {
+            return List.of(br.getInput().ingredient(), br.getReagent().ingredient());
+        }
+        *///? }
         //? if >=26.1 {
         /*return recipe.placementInfo().ingredients();
         *///? } else {
@@ -456,7 +642,7 @@ public final class RecipeCollector {
         if (rawJson != null) {
             entry.add("rawJson", rawJson);
         } else {
-            entry.add("pojoSnapshot", JsonCodec.snapshotObject(rec.recipe, 3, index.jsonOps));
+            entry.add("pojoSnapshot", index.snapshot(rec));
         }
         if (!rec.resultPreview.isEmpty()) {
             entry.add("resultPreview", JsonCodec.serializeItemStack(rec.resultPreview, index.jsonOps));

@@ -220,13 +220,16 @@ final class WorldData {
 
     /** Whether a block entity matches a free-text filter over its block, its name, and its type id. */
     static boolean matchesBlockEntityFilter(BlockSample sample, String lowerFilter) {
+        return matchesBlockEntityFilter(sample.state(), sample.blockEntityTypeId(), lowerFilter);
+    }
+
+    static boolean matchesBlockEntityFilter(BlockState state, ResourceLocation typeId, String lowerFilter) {
         if (lowerFilter.isEmpty()) {
             return true;
         }
-        if (matchesBlockFilter(sample.state(), lowerFilter)) {
+        if (matchesBlockFilter(state, lowerFilter)) {
             return true;
         }
-        ResourceLocation typeId = sample.blockEntityTypeId();
         return typeId != null && typeId.toString().toLowerCase(Locale.ROOT).contains(lowerFilter);
     }
 

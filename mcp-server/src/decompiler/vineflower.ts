@@ -63,7 +63,8 @@ export class JdkTools {
 
     if (toolName === 'javap') {
       try {
-        const { stderr } = await execFileAsync('java', ['-XshowSettings:properties', '-version'], {
+        const javaBin = await this.resolve('java');
+        const { stderr } = await execFileAsync(javaBin, ['-XshowSettings:properties', '-version'], {
           timeout: 10_000,
         });
         const match = stderr.match(/java\.home\s*=\s*(.+)/);
@@ -131,8 +132,13 @@ export class VineflowerInstaller {
       );
     }
     const tempTarget = `${target}.tmp-${process.pid}-${Date.now()}`;
-    await fs.writeFile(tempTarget, buffer);
-    await fs.rename(tempTarget, target);
+    try {
+      await fs.writeFile(tempTarget, buffer);
+      await fs.rename(tempTarget, target);
+    } catch (err) {
+      await fs.rm(tempTarget, { force: true }).catch(() => {});
+      throw err;
+    }
     return target;
   }
 }
@@ -175,13 +181,19 @@ async function runVineflower(
     .filter(
       (entry) =>
         !entry.isDirectory &&
-        (entry.entryName === `${internalBase}.class` || entry.entryName.startsWith(`${internalBase}$`)),
+        (entry.entryName === `${internalBase}.class` ||
+          (entry.entryName.startsWith(`${internalBase}$`) && entry.entryName.endsWith('.class'))),
     );
   if (related.length === 0) {
     throw new Error(`No .class entries found for ${className}`);
   }
+  const resolvedClassesDir = path.resolve(classesDir);
+  const resolvedClassesPrefix = resolvedClassesDir + path.sep;
   for (const entry of related) {
-    const destination = path.join(classesDir, entry.entryName);
+    const destination = path.resolve(resolvedClassesDir, entry.entryName);
+    if (!destination.startsWith(resolvedClassesPrefix)) {
+      throw new Error(`Unsafe ZIP entry path '${entry.entryName}' outside extraction directory.`);
+    }
     await fs.mkdir(path.dirname(destination), { recursive: true });
     await fs.writeFile(destination, entry.getData());
   }

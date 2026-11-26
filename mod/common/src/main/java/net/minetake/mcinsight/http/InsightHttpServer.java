@@ -8,6 +8,9 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import net.minetake.mcinsight.McInsightConstants;
@@ -53,8 +56,8 @@ public final class InsightHttpServer {
             loopback = InetAddress.getLoopbackAddress();
         }
         IOException lastEx = null;
-        for (int i = 0; i < config.portRangeSize; i++) {
-            int candidate = config.port + i;
+        int maxPort = Math.min(config.port + config.portRangeSize - 1, 65535);
+        for (int candidate = config.port; candidate <= maxPort; candidate++) {
             try {
                 HttpServer srv = HttpServer.create(new InetSocketAddress(loopback, candidate), 64);
                 srv.createContext("/api/v1/", this::handleRequest);
@@ -76,7 +79,7 @@ public final class InsightHttpServer {
         McInsightConstants.LOG.error(
             "Failed to bind McInsight HTTP server in port range {}-{}: {}",
             config.port,
-            config.port + config.portRangeSize - 1,
+            maxPort,
             lastEx != null ? lastEx.getMessage() : "unknown"
         );
     }
@@ -94,19 +97,25 @@ public final class InsightHttpServer {
         McInsightConstants.LOG.info("McInsight HTTP server stopped.");
     }
 
+    private static final int MAX_BODY_DRAIN_BYTES = 4096;
+
     private void handleRequest(HttpExchange exchange) throws IOException {
         String path = exchange.getRequestURI().getPath();
         PerfMetrics.RequestTrace trace = PerfMetrics.beginRequest(path);
         try {
-            drainRequestBody(exchange);
             if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
                 sendJson(exchange, JsonCodec.errorObject(InsightError.METHOD_NOT_ALLOWED, null), trace);
+                return;
+            }
+            if (!isLocalBrowserSafe(exchange)) {
+                sendJson(exchange, JsonCodec.errorObject(InsightError.UNAUTHORIZED, "Rejected non-local Host or browser Origin header."), trace);
                 return;
             }
             if (!isAuthorized(exchange)) {
                 sendJson(exchange, JsonCodec.errorObject(InsightError.UNAUTHORIZED, null), trace);
                 return;
             }
+            drainRequestBody(exchange);
 
             InsightEndpoint endpoint = InsightEndpoint.fromHttpPath(path);
             if (endpoint == null) {
@@ -142,20 +151,83 @@ public final class InsightHttpServer {
     private static void drainRequestBody(HttpExchange exchange) {
         try (InputStream is = exchange.getRequestBody()) {
             byte[] skipBuf = new byte[256];
-            while (is.read(skipBuf) != -1) {
-                // Drain so Keep-Alive connections can be reused cleanly.
+            int remaining = MAX_BODY_DRAIN_BYTES;
+            while (remaining > 0) {
+                int read = is.read(skipBuf, 0, Math.min(skipBuf.length, remaining));
+                if (read <= 0) {
+                    break;
+                }
+                remaining -= read;
             }
         } catch (IOException ignored) {
             // Body is irrelevant for read-only GET endpoints.
         }
     }
 
+    private static boolean isLocalBrowserSafe(HttpExchange exchange) {
+        var headers = exchange.getRequestHeaders();
+        return isLocalBrowserSafeHeaders(
+            headers.getFirst("Host"),
+            headers.getFirst("Origin"),
+            headers.getFirst("Sec-Fetch-Site")
+        );
+    }
+
+    public static boolean isLocalBrowserSafeHeaders(String host, String origin, String secFetchSite) {
+        if (host != null && !isLoopbackHostHeader(host)) {
+            return false;
+        }
+        if (origin != null && !origin.isBlank()) {
+            return false;
+        }
+        if (secFetchSite != null && !secFetchSite.isBlank()) {
+            String normalized = secFetchSite.trim().toLowerCase(Locale.ROOT);
+            if (!"none".equals(normalized) && !"same-origin".equals(normalized)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isLoopbackHostHeader(String rawHost) {
+        String host = rawHost.trim().toLowerCase(Locale.ROOT);
+        if (host.startsWith("[")) {
+            int close = host.indexOf(']');
+            if (close < 0) {
+                return false;
+            }
+            String addr = host.substring(1, close);
+            if (!"::1".equals(addr) && !"0:0:0:0:0:0:0:1".equals(addr)) {
+                return false;
+            }
+            String tail = host.substring(close + 1);
+            return tail.isEmpty() || (tail.startsWith(":") && tail.substring(1).chars().allMatch(Character::isDigit));
+        }
+        int colon = host.indexOf(':');
+        String name = colon >= 0 ? host.substring(0, colon) : host;
+        if (colon >= 0) {
+            String portPart = host.substring(colon + 1);
+            if (portPart.isEmpty() || !portPart.chars().allMatch(Character::isDigit)) {
+                return false;
+            }
+        }
+        return "127.0.0.1".equals(name) || "localhost".equals(name);
+    }
+
     private boolean isAuthorized(HttpExchange exchange) {
-        if (config.authToken == null || config.authToken.isBlank()) {
+        return constantTimeBearerMatch(config.authToken, exchange.getRequestHeaders().getFirst("Authorization"));
+    }
+
+    public static boolean constantTimeBearerMatch(String expectedToken, String authHeader) {
+        if (expectedToken == null || expectedToken.isBlank()) {
             return true;
         }
-        String auth = exchange.getRequestHeaders().getFirst("Authorization");
-        return auth != null && auth.equals("Bearer " + config.authToken);
+        if (authHeader == null) {
+            return false;
+        }
+        byte[] expected = ("Bearer " + expectedToken).getBytes(StandardCharsets.UTF_8);
+        byte[] actual = authHeader.getBytes(StandardCharsets.UTF_8);
+        return MessageDigest.isEqual(expected, actual);
     }
 
     private static void sendJson(HttpExchange exchange, JsonObject body, PerfMetrics.RequestTrace trace)

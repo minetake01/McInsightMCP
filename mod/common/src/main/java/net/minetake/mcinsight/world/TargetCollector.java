@@ -43,7 +43,14 @@ public final class TargetCollector {
     private TargetCollector() {}
 
     /** What the crosshair met, before any world state has been copied out of the game. */
-    private record Ray(String dimension, HitResult.Type hitType, BlockPos blockPos, String face, int entityId) {}
+    private record Ray(
+        String dimension,
+        HitResult.Type hitType,
+        BlockPos blockPos,
+        String face,
+        int entityId,
+        BlockPos playerPos
+    ) {}
 
     /** The copied target and the registry view its JSON needs. */
     private record Target(
@@ -103,7 +110,11 @@ public final class TargetCollector {
             return out;
         }
 
-        double withinSyncRange = distanceSqrTo(ctx, target);
+        if (!target.block().state().hasBlockEntity()) {
+            return out;
+        }
+
+        double withinSyncRange = distanceSqrTo(target);
         if (withinSyncRange > (double) BlockEntityPart.maxSyncBlockRadius() * BlockEntityPart.maxSyncBlockRadius()) {
             // Asking anyway would only earn an OUT_OF_RANGE rejection; saying so here keeps the
             // answer complete about what it is missing.
@@ -130,14 +141,14 @@ public final class TargetCollector {
     }
 
     /** How far the player this request is about stands from the target, in squared blocks. */
-    private static double distanceSqrTo(RequestContext ctx, Target target) {
-        Player player = ctx.requester() != null ? ctx.requester() : GameAccess.getLocalPlayer(ctx.executor());
-        if (player == null) {
+    private static double distanceSqrTo(Target target) {
+        BlockPos playerPos = target.ray().playerPos();
+        if (playerPos == null) {
             // Without a player the distance is unknown; letting the server decide beats inventing
             // one that would suppress a legitimate answer.
             return 0.0;
         }
-        return player.blockPosition().distSqr(new BlockPos(target.block().x(), target.block().y(), target.block().z()));
+        return playerPos.distSqr(new BlockPos(target.block().x(), target.block().y(), target.block().z()));
     }
 
     private static JsonObject entity(Target target, double distance) {
@@ -172,6 +183,7 @@ public final class TargetCollector {
 
     private static Ray cast(Player player, double distance, boolean includeFluids) {
         Level level = player.level();
+        BlockPos playerPos = player.blockPosition().immutable();
         HitResult hit = WorldData.pick(player, distance, includeFluids);
         if (hit instanceof net.minecraft.world.phys.BlockHitResult blockHit) {
             return new Ray(
@@ -179,7 +191,8 @@ public final class TargetCollector {
                 HitResult.Type.BLOCK,
                 blockHit.getBlockPos().immutable(),
                 blockHit.getDirection().getName(),
-                -1
+                -1,
+                playerPos
             );
         }
         if (hit instanceof net.minecraft.world.phys.EntityHitResult entityHit) {
@@ -188,10 +201,11 @@ public final class TargetCollector {
                 HitResult.Type.ENTITY,
                 null,
                 null,
-                entityHit.getEntity().getId()
+                entityHit.getEntity().getId(),
+                playerPos
             );
         }
-        return new Ray(Versioned.dimensionId(level), HitResult.Type.MISS, null, null, -1);
+        return new Ray(Versioned.dimensionId(level), HitResult.Type.MISS, null, null, -1, playerPos);
     }
 
     /**

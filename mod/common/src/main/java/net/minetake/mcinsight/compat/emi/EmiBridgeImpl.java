@@ -8,6 +8,7 @@ import dev.emi.emi.api.recipe.EmiInfoRecipe;
 import dev.emi.emi.api.recipe.EmiRecipe;
 import dev.emi.emi.api.recipe.EmiRecipeCategory;
 import dev.emi.emi.api.recipe.EmiRecipeManager;
+import dev.emi.emi.api.recipe.VanillaEmiRecipeCategories;
 import dev.emi.emi.api.stack.EmiIngredient;
 import dev.emi.emi.api.stack.EmiStack;
 import dev.emi.emi.api.widget.Widget;
@@ -20,11 +21,13 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import net.minetake.mcinsight.api.InsightError;
 import net.minetake.mcinsight.api.InsightException;
+import net.minetake.mcinsight.cache.CacheGenerations;
 import net.minetake.mcinsight.client.ClientStateAccessor;
 import net.minetake.mcinsight.compat.IRecipePainter;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
 import net.minetake.mcinsight.compat.RecipeGraphics;
 import net.minetake.mcinsight.compat.ViewerModel;
+import net.minetake.mcinsight.game.Versioned;
 import net.minetake.mcinsight.serial.JsonCodec;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
@@ -41,10 +44,12 @@ public final class EmiBridgeImpl implements IRecipeViewerBridge {
 
     private static volatile List<Field> infoTextFields;
 
+    private volatile long cachedGeneration = Long.MIN_VALUE;
     private volatile List<ViewerModel.Category> cachedCategories;
     private final ConcurrentHashMap<String, EmiRecipeCategory> categoriesByUid = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, List<ViewerModel.Ingredient>> cachedWorkstations =
         new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, List<ViewerModel.Recipe>> cachedRecipes = new ConcurrentHashMap<>();
 
     @Override
     public String viewerName() {
@@ -61,14 +66,23 @@ public final class EmiBridgeImpl implements IRecipeViewerBridge {
     }
 
     @Override
-    public void invalidateCache() {
+    public synchronized void invalidateCache() {
+        cachedGeneration = CacheGenerations.combined();
         cachedCategories = null;
         categoriesByUid.clear();
         cachedWorkstations.clear();
+        cachedRecipes.clear();
+    }
+
+    private void ensureFreshCache() {
+        if (cachedGeneration != CacheGenerations.combined()) {
+            invalidateCache();
+        }
     }
 
     @Override
     public List<ViewerModel.Category> listCategories() {
+        ensureFreshCache();
         List<ViewerModel.Category> existing = cachedCategories;
         if (existing != null) {
             return existing;
@@ -96,6 +110,11 @@ public final class EmiBridgeImpl implements IRecipeViewerBridge {
 
     @Override
     public List<ViewerModel.Recipe> recipesOf(ViewerModel.Category category) {
+        ensureFreshCache();
+        List<ViewerModel.Recipe> cached = cachedRecipes.get(category.uid());
+        if (cached != null) {
+            return cached;
+        }
         EmiRecipeManager recipeManager = requireManager();
         EmiRecipeCategory resolved = categoriesByUid.get(category.uid());
         if (resolved == null) {
@@ -108,15 +127,18 @@ public final class EmiBridgeImpl implements IRecipeViewerBridge {
             ? category.workstations()
             : workstations(resolved);
         RegistryOps<JsonElement> ops = jsonOps();
-        List<ViewerModel.Recipe> out = new ArrayList<>();
-        for (EmiRecipe recipe : recipeManager.getRecipes(resolved)) {
-            try {
-                out.add(translate(resolved, recipe, workstations, ops));
-            } catch (Exception ignored) {
-                // One unreadable recipe must not remove the rest of the category.
+        final EmiRecipeCategory target = resolved;
+        return cachedRecipes.computeIfAbsent(category.uid(), ignored -> {
+            List<ViewerModel.Recipe> out = new ArrayList<>();
+            for (EmiRecipe recipe : recipeManager.getRecipes(target)) {
+                try {
+                    out.add(translate(target, recipe, workstations, ops));
+                } catch (Exception ignoredEx) {
+                    // One unreadable recipe must not remove the rest of the category.
+                }
             }
-        }
-        return List.copyOf(out);
+            return List.copyOf(out);
+        });
     }
 
     @Override
@@ -138,7 +160,7 @@ public final class EmiBridgeImpl implements IRecipeViewerBridge {
             return List.of();
         }
         Set<String> lines = new LinkedHashSet<>();
-        for (EmiRecipe recipe : recipeManager.getRecipes()) {
+        for (EmiRecipe recipe : recipeManager.getRecipes(VanillaEmiRecipeCategories.INFO)) {
             if (!(recipe instanceof EmiInfoRecipe info) || !mentionsIngredient(info, target)) {
                 continue;
             }
@@ -268,7 +290,11 @@ public final class EmiBridgeImpl implements IRecipeViewerBridge {
             @Override
             public void paint(RecipeGraphics graphics) {
                 for (Widget widget : painted) {
+                    //? if >=26.1 {
+                    /*widget.render(graphics.extractor(), -1, -1, 0.0F);
+                    *///? } else {
                     widget.render(graphics.gui(), -1, -1, 0.0F);
+                    //? }
                 }
             }
         };
@@ -280,7 +306,7 @@ public final class EmiBridgeImpl implements IRecipeViewerBridge {
             return id;
         }
         RecipeHolder<?> backing = backingRecipe(recipe);
-        return backing != null ? backing.id() : null;
+        return backing != null ? Versioned.recipeId(backing) : null;
     }
 
     private static RecipeHolder<?> backingRecipe(EmiRecipe recipe) {
@@ -350,7 +376,7 @@ public final class EmiBridgeImpl implements IRecipeViewerBridge {
             return null;
         }
         try {
-            DataResult<JsonElement> encoded = Recipe.CODEC.encodeStart(ops, recipe);
+            DataResult<JsonElement> encoded = Versioned.recipeCodec().encodeStart(ops, recipe);
             return encoded.result().orElse(null);
         } catch (Exception e) {
             return null;
@@ -460,7 +486,7 @@ public final class EmiBridgeImpl implements IRecipeViewerBridge {
 
     private static List<String> tagsOf(ItemStack itemStack, Fluid fluid) {
         if (!itemStack.isEmpty()) {
-            return itemStack.getTags().map(tag -> tag.location().toString()).sorted().toList();
+            return Versioned.itemTags(itemStack).map(tag -> tag.location().toString()).sorted().toList();
         }
         if (fluid != null) {
             return BuiltInRegistries.FLUID.wrapAsHolder(fluid)

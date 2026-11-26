@@ -2,6 +2,7 @@ package net.minetake.mcinsight.render;
 
 //? if >=26.1 {
 /*import com.mojang.blaze3d.pipeline.RenderTarget;
+import java.lang.ref.WeakReference;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import net.minetake.mcinsight.api.InsightError;
@@ -10,6 +11,7 @@ import net.minetake.mcinsight.compat.RecipeGraphics;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.render.GuiRenderer;
+import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.state.gui.GuiRenderState;
 
 // The recorded-GUI path: the engine's GUI renderer draws onto the main target, which is used as a
@@ -20,6 +22,7 @@ import net.minecraft.client.renderer.state.gui.GuiRenderState;
 // occupies.
 final class MainTargetCanvas {
 
+    private static WeakReference<GameRenderer> ownerRef = new WeakReference<>(null);
     private static GuiRenderer renderer;
     private static GuiRenderState renderState;
 
@@ -31,6 +34,12 @@ final class MainTargetCanvas {
         int scale,
         Consumer<RecipeGraphics> painter
     ) {
+        if (width <= 0 || height <= 0) {
+            throw new InsightException(
+                InsightError.DATA_UNAVAILABLE,
+                "Invalid recipe layout dimensions: " + width + "x" + height + "."
+            );
+        }
         Minecraft minecraft = Minecraft.getInstance();
         RenderTarget target = TargetAccess.main(minecraft);
         int guiScale = minecraft.getWindow().getGuiScale();
@@ -56,9 +65,10 @@ final class MainTargetCanvas {
     }
 
     private static void ensureRenderer(Minecraft minecraft) {
-        if (renderer != null) {
+        if (renderer != null && ownerRef.get() == minecraft.gameRenderer) {
             return;
         }
+        ownerRef = new WeakReference<>(minecraft.gameRenderer);
         renderer = GuiRendererAccess.renderer(minecraft);
         renderState = GuiRendererAccess.state(minecraft);
     }

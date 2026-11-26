@@ -10,6 +10,7 @@
  * declaring fields.
  */
 
+import { ToolError } from '../api/result.js';
 import { inspectClassBytecode } from '../bytecode/classFile.js';
 import AdmZip from 'adm-zip';
 import { JAR_CONCURRENCY, mapConcurrent } from './concurrency.js';
@@ -237,20 +238,7 @@ export async function traceIdUsage(
   const pathLower = (colonIdx > 0 ? trimmed.slice(colonIdx + 1) : trimmed).toLowerCase();
 
   const all = allJars(index);
-  let targetJars: IndexedJarFile[];
-  if (options.modIdOrJar) {
-    targetJars = findJarsForMod(index, options.modIdOrJar);
-    if (targetJars.length === 0) {
-      const error = new Error(`No mod JAR matching '${options.modIdOrJar}' found in '${modsDir}'.`);
-      error.name = 'JarNotFoundError';
-      throw error;
-    }
-  } else if (!options.crossMod && namespace && namespace !== 'minecraft') {
-    const matched = findJarsForMod(index, namespace);
-    targetJars = matched.length > 0 ? matched : all;
-  } else {
-    targetJars = all;
-  }
+  const { targetJars, resourceScope } = selectTargetJars(index, all, modsDir, namespace, options);
 
   const { declaredFields, directStringMatches } = await findDeclaredFields(targetJars, trimmed);
   const referenceJars = options.crossMod ? all : targetJars;
@@ -258,9 +246,6 @@ export async function traceIdUsage(
 
   // Pass 3: text resources and, when a game directory is known, pack scripts.
   const resourceQuery = colonIdx > 0 ? fullLower : pathLower;
-  const resourceScope = options.crossMod
-    ? undefined
-    : (options.modIdOrJar ?? (targetJars.length === 1 ? targetJars[0]!.jarPath : undefined));
   const [resourceMatches, packMatches] = await Promise.all([
     searchJarContents(index, modsDir, resourceQuery, {
       modIdOrJar: resourceScope,
@@ -281,4 +266,30 @@ export async function traceIdUsage(
     packMatches,
     skippedJars: index.skippedJars.length > 0 ? index.skippedJars : undefined,
   };
+}
+
+function selectTargetJars(
+  index: DirJarIndex,
+  all: IndexedJarFile[],
+  modsDir: string,
+  namespace: string | undefined,
+  options: TraceIdOptions,
+): { targetJars: IndexedJarFile[]; resourceScope: string | undefined } {
+  if (options.modIdOrJar) {
+    const matched = findJarsForMod(index, options.modIdOrJar);
+    if (matched.length === 0) {
+      throw new ToolError('NOT_FOUND', `No mod JAR matching '${options.modIdOrJar}' found in '${modsDir}'.`);
+    }
+    return { targetJars: matched, resourceScope: options.crossMod ? undefined : options.modIdOrJar };
+  }
+  if (!options.crossMod && namespace && namespace !== 'minecraft') {
+    const matched = findJarsForMod(index, namespace);
+    if (matched.length > 0) {
+      return {
+        targetJars: matched,
+        resourceScope: matched.length === 1 ? matched[0]!.jarPath : namespace,
+      };
+    }
+  }
+  return { targetJars: all, resourceScope: undefined };
 }

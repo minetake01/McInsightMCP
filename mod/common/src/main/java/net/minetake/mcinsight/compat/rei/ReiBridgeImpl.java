@@ -7,6 +7,7 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import me.shedaniel.rei.api.client.registry.category.CategoryRegistry;
@@ -20,6 +21,7 @@ import me.shedaniel.rei.plugin.common.BuiltinPlugin;
 import me.shedaniel.rei.plugin.common.displays.DefaultInformationDisplay;
 import net.minetake.mcinsight.api.InsightError;
 import net.minetake.mcinsight.api.InsightException;
+import net.minetake.mcinsight.cache.CacheGenerations;
 import net.minetake.mcinsight.client.ClientStateAccessor;
 import net.minetake.mcinsight.compat.IRecipePainter;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
@@ -36,11 +38,15 @@ import net.minecraft.world.level.Level;
 
 public final class ReiBridgeImpl implements IRecipeViewerBridge {
 
+    private static final ConcurrentHashMap<Class<?>, Optional<Method>> AMOUNT_METHODS = new ConcurrentHashMap<>();
+
+    private volatile long cachedGeneration = Long.MIN_VALUE;
     private volatile List<ViewerModel.Category> cachedCategories;
     private final ConcurrentHashMap<String, CategoryRegistry.CategoryConfiguration<?>> categoriesByUid =
         new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, List<ViewerModel.Ingredient>> cachedWorkstations =
         new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, List<ViewerModel.Recipe>> cachedRecipes = new ConcurrentHashMap<>();
 
     @Override
     public String viewerName() {
@@ -57,14 +63,23 @@ public final class ReiBridgeImpl implements IRecipeViewerBridge {
     }
 
     @Override
-    public void invalidateCache() {
+    public synchronized void invalidateCache() {
+        cachedGeneration = CacheGenerations.combined();
         cachedCategories = null;
         categoriesByUid.clear();
         cachedWorkstations.clear();
+        cachedRecipes.clear();
+    }
+
+    private void ensureFreshCache() {
+        if (cachedGeneration != CacheGenerations.combined()) {
+            invalidateCache();
+        }
     }
 
     @Override
     public List<ViewerModel.Category> listCategories() {
+        ensureFreshCache();
         List<ViewerModel.Category> existing = cachedCategories;
         if (existing != null) {
             return existing;
@@ -92,6 +107,11 @@ public final class ReiBridgeImpl implements IRecipeViewerBridge {
 
     @Override
     public List<ViewerModel.Recipe> recipesOf(ViewerModel.Category category) {
+        ensureFreshCache();
+        List<ViewerModel.Recipe> cached = cachedRecipes.get(category.uid());
+        if (cached != null) {
+            return cached;
+        }
         DisplayRegistry displayRegistry = requireDisplayRegistry();
         CategoryRegistry.CategoryConfiguration<?> configuration = categoriesByUid.get(category.uid());
         if (configuration == null) {
@@ -104,6 +124,7 @@ public final class ReiBridgeImpl implements IRecipeViewerBridge {
         ResourceLocation uid = identifier.getIdentifier();
         List<Display> displays = displayRegistry.getAll().get(identifier);
         if (displays == null || displays.isEmpty()) {
+            cachedRecipes.putIfAbsent(category.uid(), List.of());
             return List.of();
         }
         List<ViewerModel.Ingredient> workstations = category.workstations() != null
@@ -111,15 +132,18 @@ public final class ReiBridgeImpl implements IRecipeViewerBridge {
             : workstations(configuration);
         RegistryOps<JsonElement> ops = jsonOps();
         String categoryTitle = title(configuration);
-        List<ViewerModel.Recipe> out = new ArrayList<>();
-        for (Display display : displays) {
-            try {
-                out.add(translate(displayRegistry, uid, categoryTitle, configuration, display, workstations, ops));
-            } catch (Exception ignored) {
-                // One unreadable display must not remove the rest of the category.
+        CategoryRegistry.CategoryConfiguration<?> finalConfig = configuration;
+        return cachedRecipes.computeIfAbsent(category.uid(), ignored -> {
+            List<ViewerModel.Recipe> out = new ArrayList<>();
+            for (Display display : displays) {
+                try {
+                    out.add(translate(displayRegistry, uid, categoryTitle, finalConfig, display, workstations, ops));
+                } catch (Exception ignoredEx) {
+                    // One unreadable display must not remove the rest of the category.
+                }
             }
-        }
-        return List.copyOf(out);
+            return List.copyOf(out);
+        });
     }
 
     //? if >=26.1 {
@@ -437,9 +461,18 @@ public final class ReiBridgeImpl implements IRecipeViewerBridge {
         if (value == null) {
             return -1L;
         }
+        Optional<Method> method = AMOUNT_METHODS.computeIfAbsent(value.getClass(), cls -> {
+            try {
+                return Optional.of(cls.getMethod("getAmount"));
+            } catch (NoSuchMethodException e) {
+                return Optional.empty();
+            }
+        });
+        if (method.isEmpty()) {
+            return -1L;
+        }
         try {
-            Method amount = value.getClass().getMethod("getAmount");
-            Object result = amount.invoke(value);
+            Object result = method.get().invoke(value);
             return result instanceof Number number ? number.longValue() : -1L;
         } catch (Exception e) {
             return -1L;

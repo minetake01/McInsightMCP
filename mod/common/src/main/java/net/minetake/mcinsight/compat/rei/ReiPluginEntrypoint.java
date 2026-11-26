@@ -10,6 +10,10 @@ public class ReiPluginEntrypoint implements REIClientPlugin {
 
     private static final ReiBridgeImpl BRIDGE = new ReiBridgeImpl();
 
+    static {
+        ViewerRegistry.register(BRIDGE);
+    }
+
     @Override
     public void registerCategories(CategoryRegistry registry) {
         BRIDGE.invalidateCache();
