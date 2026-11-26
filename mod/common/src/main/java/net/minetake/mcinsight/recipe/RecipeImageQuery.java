@@ -45,8 +45,7 @@ public final class RecipeImageQuery {
     private static final int MAX_IMAGE_BYTES = 512 * 1024;
     /** The whole request waits at most this long for the client to draw and read back. */
     private static final long RENDER_TIMEOUT_MS = 15_000L;
-    private static final int MIN_SCALE = 1;
-    private static final int MAX_SCALE = 3;
+    private static final int RENDER_SCALE = 2;
 
     private RecipeImageQuery() {}
 
@@ -71,19 +70,18 @@ public final class RecipeImageQuery {
         String source = params.stringOr("source", "viewer").toLowerCase(Locale.ROOT);
         int limit = InsightEndpoint.RECIPES_RENDER.limit(params);
         int offset = params.offset();
-        int scale = scaleOf(params);
 
         if ("vanilla".equals(source)) {
             throw new InsightException(
                 InsightError.DATA_UNAVAILABLE,
-                "The vanilla recipe manager has no GUI layout to draw; images come from a recipe viewer."
+                "The vanilla recipe manager has no GUI layout to draw; use source=\"viewer\" for images or mc_query_recipes for text."
             );
         }
         List<IRecipeViewerBridge> bridges = paintCapable(source);
         if (bridges.isEmpty()) {
             throw new InsightException(
                 InsightError.VIEWER_UNAVAILABLE,
-                "No active recipe viewer can draw recipe images (JEI, EMI, and REI are the supported ones)."
+                "No active recipe viewer can draw recipe images (JEI, EMI, and REI are supported). Use mc_query_recipes to fetch recipe data as text instead."
             );
         }
 
@@ -96,7 +94,7 @@ public final class RecipeImageQuery {
             try {
                 pending = ctx.executor().supplyOnClientThread(() -> {
                     try {
-                        return start(candidate, scale);
+                        return start(candidate);
                     } catch (Exception e) {
                         throw new IllegalStateException(e);
                     }
@@ -113,7 +111,7 @@ public final class RecipeImageQuery {
                 );
                 continue;
             }
-            await(pending, rendered, scale, deadline);
+            await(pending, rendered, deadline);
         }
         // Nothing drawable at all is an error, not an empty page: "no recipe matched" is a page with
         // no rows, which is a different answer from "the picture could not be produced".
@@ -140,24 +138,13 @@ public final class RecipeImageQuery {
         // A page of pictures: the scan stops when the page is full, so the total is not counted.
         JsonObject out = Page.uncounted("images", images, offset, hasMore);
         out.addProperty("format", "png");
-        out.addProperty("scale", scale);
+        out.addProperty("scale", RENDER_SCALE);
         rendered.missing.applyTo(out);
         return out;
     }
 
     private static ViewerQuery.RoleScope roleOf(String raw) {
         return raw == null ? ViewerQuery.RoleScope.OUTPUT : ViewerQuery.RoleScope.parse(raw);
-    }
-
-    private static int scaleOf(Params params) {
-        int scale = params.intOr("scale", 2);
-        if (scale < MIN_SCALE || scale > MAX_SCALE) {
-            throw new InsightException(
-                InsightError.INVALID_PARAMETER,
-                "Parameter 'scale' must be in " + MIN_SCALE + ".." + MAX_SCALE + ", got: " + scale + "."
-            );
-        }
-        return scale;
     }
 
     /** The adapters the source selects, narrowed to the ones that can actually paint. */
@@ -209,7 +196,7 @@ public final class RecipeImageQuery {
      * <p>Returns {@code null} when the viewer has no drawable layout for the recipe; the caller turns
      * that into a {@code missing} entry.
      */
-    private static Pending start(Candidate candidate, int scale) throws Exception {
+    private static Pending start(Candidate candidate) throws Exception {
         IRecipePainter.Painting painting = candidate.bridge().painter().prepare(candidate.recipe());
         if (painting == null) {
             return null;
@@ -217,17 +204,17 @@ public final class RecipeImageQuery {
         try {
             int width = painting.width();
             int height = painting.height();
-            return new Pending(candidate, width, height, RecipeCanvas.capture(width, height, scale, painting::paint));
+            return new Pending(candidate, width, height, RecipeCanvas.capture(width, height, RENDER_SCALE, painting::paint));
         } finally {
             painting.close();
         }
     }
 
     /** Waits for one drawing's pixels, encodes them off the render thread, and records the result. */
-    private static void await(Pending pending, Rendered rendered, int scale, long deadline) {
+    private static void await(Pending pending, Rendered rendered, long deadline) {
         try {
             CapturedImage captured = pending.pixels().get(remainingMs(deadline), TimeUnit.MILLISECONDS);
-            byte[] png = PngEncoder.encode(captured, pending.width() * scale, pending.height() * scale);
+            byte[] png = PngEncoder.encode(captured, pending.width() * RENDER_SCALE, pending.height() * RENDER_SCALE);
             if (png.length > MAX_IMAGE_BYTES) {
                 rendered.missing.add(
                     part(pending.candidate()),

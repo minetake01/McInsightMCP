@@ -235,7 +235,7 @@ export async function readJarResource(
   if (!entry) {
     throw new ToolError(
       'NOT_FOUND',
-      `Entry '${cleanPath}' not found inside '${jar?.fileName ?? path.basename(jarPath)}'`,
+      `Entry '${cleanPath}' not found inside '${jar?.fileName ?? path.basename(jarPath)}'. Omit internalPath to list entries under a prefix.`,
     );
   }
   return { jarPath, entryName: cleanPath, content: entry.getData().toString('utf-8') };

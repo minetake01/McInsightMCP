@@ -49,7 +49,10 @@ public final class ClassIntrospector {
         try {
             type = Class.forName(name, false, ClassIntrospector.class.getClassLoader());
         } catch (ClassNotFoundException e) {
-            throw new InsightException(InsightError.CLASS_NOT_FOUND, "Class is not loaded: " + name);
+            throw new InsightException(
+                InsightError.CLASS_NOT_FOUND,
+                "Class is not loaded: " + name + ". Use mc_inspect_code with action=\"search\" to verify the exact class name."
+            );
         } catch (LinkageError | SecurityException e) {
             throw new InsightException(
                 InsightError.CLASS_NOT_FOUND,

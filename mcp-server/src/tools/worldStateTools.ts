@@ -7,8 +7,8 @@ import { toolResult } from './result.js';
 const EMPTY_SCHEMA = z.object({});
 
 const STATUS_SCHEMA = z.object({
-  includeMods: z.boolean().optional().default(false).describe('Include full list of loaded mods and jar paths'),
-  modFilter: z.string().optional().describe('Optional case-insensitive substring filter on mod id or name'),
+  includeMods: z.boolean().optional().default(false).describe('Include full list of loaded mods and JAR paths'),
+  modFilter: z.string().optional().describe('Case-insensitive substring filter on mod ID or name'),
 });
 
 const OBSERVE_WORLD_SCHEMA = z.object({
@@ -16,11 +16,11 @@ const OBSERVE_WORLD_SCHEMA = z.object({
     .enum(['looking_at', 'area'])
     .optional()
     .default('looking_at')
-    .describe('looking_at: raycast block/fluid/entity in crosshair; area: scan blocks, block entities (with NBT), and entities around player'),
-  maxDistance: z.number().min(1).max(64).optional().default(16).describe('Raycast distance when mode=looking_at'),
-  includeFluids: z.boolean().optional().default(false).describe('Include fluid hit detection when mode=looking_at'),
-  radius: z.number().int().min(1).max(32).optional().default(8).describe('Scan radius when mode=area'),
-  filter: z.string().optional().describe('Optional substring filter on block ID or display name when mode=area'),
+    .describe('looking_at: raycast crosshair target; area: scan around the player'),
+  maxDistance: z.number().min(1).max(64).optional().default(16).describe('Raycast distance in blocks (mode=looking_at)'),
+  includeFluids: z.boolean().optional().default(false).describe('Include fluid hits in the raycast (mode=looking_at)'),
+  radius: z.number().int().min(1).max(32).optional().default(8).describe('Scan radius in blocks (mode=area)'),
+  filter: z.string().optional().describe('Substring filter on block ID or display name (mode=area)'),
 });
 
 export function registerWorldStateTools(server: McpServer, mcClient: McHttpClient): void {
@@ -29,7 +29,7 @@ export function registerWorldStateTools(server: McpServer, mcClient: McHttpClien
     {
       title: 'Minecraft Runtime Status',
       description:
-        'Check connection to the running McInsight mod (NeoForge/Fabric), active world state, recipe viewer availability and guide integrations, and loaded mod list. reports serverActive (whether a world owner is present) and the per-viewer availability map.',
+        'Check connection to the running McInsight mod (NeoForge/Fabric), active world state, recipe viewer and guide integrations, and loaded mods.',
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: STATUS_SCHEMA,
     },
@@ -44,7 +44,7 @@ export function registerWorldStateTools(server: McpServer, mcClient: McHttpClien
     {
       title: 'Player State & Live Environment',
       description:
-        'Get current player position, dimension, biome, live environment (biomeBaseTemperature, canSeeSky, skyLight, blockLight, precipitation), vitals, effects, inventory, and open screen slots.',
+        'Get the current player position, dimension, biome, local environment (temperature, sky visibility, light, precipitation), vitals, effects, inventory, and open screen slots.',
       annotations: { readOnlyHint: true },
       inputSchema: EMPTY_SCHEMA,
     },
@@ -56,7 +56,7 @@ export function registerWorldStateTools(server: McpServer, mcClient: McHttpClien
     {
       title: 'Observe Target or Surrounding World',
       description:
-        'Inspect either what the player is looking at (raycast block/fluid/blockstate/BlockEntity NBT/entity) or scan blocks, block entities, and entities in a radius around the player.',
+        'Inspect what the player is looking at (block, fluid, block state, block entity NBT, or entity) or scan blocks, block entities, and entities in a radius around the player.',
       annotations: { readOnlyHint: true },
       inputSchema: OBSERVE_WORLD_SCHEMA,
     },

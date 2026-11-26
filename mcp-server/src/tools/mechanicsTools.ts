@@ -40,7 +40,9 @@ const TRADES_LIMITS = limitBounds('trades_query');
 const ADVANCEMENTS_LIMITS = limitBounds('advancements_query');
 
 const ITEM_ID_DESCRIPTION =
-  'Exact item/fluid ResourceLocation such as "tofucraft:tofudried", or a tag such as "#minecraft:planks". Resolve a display name with mc_search_registry first; this parameter does not match substrings.';
+  'Exact item/fluid ResourceLocation (e.g. "minecraft:iron_ingot") or tag (e.g. "#minecraft:planks")';
+const INCLUDE_RAW_DESCRIPTION =
+  'Include rawJson even when cleanly parsed; set true when you suspect the parsed output omits needed details';
 
 const QUERY_ITEM_FLOW_SCHEMA = z.object({
   item: z.string().min(1).describe(ITEM_ID_DESCRIPTION),
@@ -48,19 +50,19 @@ const QUERY_ITEM_FLOW_SCHEMA = z.object({
     .enum(['obtain', 'use', 'both'])
     .optional()
     .default('obtain')
-    .describe('obtain: how to craft/drop/buy it; use: what recipes/trades/datamaps consume or use it as a catalyst; both: all'),
+    .describe('obtain: how to craft, drop, or buy it; use: recipes, trades, or data maps that consume it or use it as a catalyst; both: all'),
   sources: z
     .array(z.enum(ITEM_FLOW_SOURCES))
     .optional()
-    .describe('Subset of sources to query (defaults to all relevant sources for the chosen direction)'),
-  includeRaw: z.boolean().optional().default(false).describe('Include rawJson even when cleanly parsed'),
+    .describe('Subset of sources to query (defaults to all applicable sources for the chosen direction)'),
+  includeRaw: z.boolean().optional().default(false).describe(INCLUDE_RAW_DESCRIPTION),
   limit: z
     .number()
     .int()
     .min(1)
     .optional()
     .describe(
-      `Page size sent to each source. Omitted means each endpoint uses its own declared default. A value above a source's declared maximum (recipes ${RECIPE_LIMITS.maxLimit}, loot ${LOOT_LIMITS.maxLimit}, trades ${TRADES_LIMITS.maxLimit}, datamaps ${DATAMAPS_LIMITS.maxLimit}) is rejected by the mod with INVALID_PARAMETER instead of being silently reduced.`,
+      `Page size per source (max: recipes ${RECIPE_LIMITS.maxLimit}, loot ${LOOT_LIMITS.maxLimit}, trades ${TRADES_LIMITS.maxLimit}, datamaps ${DATAMAPS_LIMITS.maxLimit})`,
     ),
 });
 
@@ -69,35 +71,28 @@ const QUERY_RECIPES_SCHEMA = z.object({
     .boolean()
     .optional()
     .default(false)
-    .describe('When true, returns registered RecipeTypes, active viewer categories, and built-in mod parsers instead of querying recipes'),
-  item: z
-    .string()
-    .optional()
-    .describe(
-      'Exact item/fluid ResourceLocation or "#tag". Display names and substrings are rejected with INVALID_ID; use mc_search_registry to resolve a name first.',
-    ),
+    .describe('When true, list registered RecipeTypes, active viewer categories, and built-in mod parsers instead of querying recipes'),
+  item: z.string().optional().describe(ITEM_ID_DESCRIPTION),
   role: z
     .enum(['any', 'input', 'output', 'catalyst', 'workstation'])
     .optional()
     .default('any')
-    .describe('Which part of a recipe the item must occupy (catalyst/workstation are viewer-only roles)'),
-  type: z.string().optional().describe('RecipeType or viewer category UID, e.g. tofucraft:bittern'),
+    .describe('Role the item must occupy in the recipe (catalyst and workstation are viewer-only)'),
+  type: z.string().optional().describe('RecipeType or viewer category UID (e.g. "minecraft:smelting")'),
   modId: z.string().optional().describe('Filter by mod namespace'),
   source: z
     .string()
     .optional()
     .default('all')
-    .describe('all, vanilla, viewer, or the name of any active recipe viewer (e.g. jei, emi, rei)'),
-  includeRaw: z.boolean().optional().default(false).describe('Include rawJson even when parsed cleanly'),
+    .describe('all, vanilla, viewer, or a specific active viewer name (e.g. jei, emi, rei)'),
+  includeRaw: z.boolean().optional().default(false).describe(INCLUDE_RAW_DESCRIPTION),
   limit: z
     .number()
     .int()
     .min(1)
     .optional()
-    .describe(
-      `Page size; omitted means the endpoint's declared default (${RECIPE_LIMITS.defaultLimit}). Maximum ${RECIPE_LIMITS.maxLimit}; a larger value is rejected by the mod with INVALID_PARAMETER.`,
-    ),
-  offset: z.number().int().min(0).optional().default(0),
+    .describe(`Maximum recipes to return (default ${RECIPE_LIMITS.defaultLimit}, max ${RECIPE_LIMITS.maxLimit})`),
+  offset: z.number().int().min(0).optional().default(0).describe('Number of matching recipes to skip'),
 });
 
 const WORLDGEN_KINDS = [
@@ -113,31 +108,27 @@ const WORLDGEN_KINDS = [
 const QUERY_WORLD_DATA_SCHEMA = z.object({
   kind: z
     .enum([...WORLDGEN_KINDS, 'loot', 'trades', 'datamaps'])
-    .describe('Data system to query'),
-  query: z.string().optional().describe('Substring filter on entry ID (or content when searchContent=true)'),
+    .describe('Data system to query: worldgen_summary (counts overview), placed_feature, configured_feature, biome, structure, dimension_type, biome_modifier (NeoForge), loot, trades, or datamaps (NeoForge)'),
+  query: z.string().optional().describe('Substring filter on entry ID (or JSON content when searchContent=true)'),
   item: z
     .string()
     .optional()
-    .describe(
-      'Exact item ResourceLocation or "#tag": the loot reverse lookup, the trade filter, or the data-map value key (kind=loot/trades/datamaps only). Substrings and display names are rejected; resolve them with mc_search_registry first. A parameter the chosen kind does not read is rejected with INVALID_PARAMETER.',
-    ),
+    .describe('Exact item ResourceLocation or "#tag" for reverse lookup (kind=loot, trades, or datamaps only)'),
   modId: z.string().optional().describe('Filter by mod namespace'),
-  registry: z.string().optional().describe('Target registry filter when kind=datamaps (e.g. item, block)'),
-  profession: z.string().optional().describe('Villager profession filter when kind=trades'),
-  searchContent: z.boolean().optional().default(false).describe('Search inside worldgen JSON definitions'),
-  minTemp: z.number().optional().describe('Minimum biome base temperature filter when kind=biome'),
-  maxTemp: z.number().optional().describe('Maximum biome base temperature filter when kind=biome (e.g. 0.149 for < 0.15)'),
-  includeModifiers: z.boolean().optional().describe('Include Global Loot Modifiers when kind=loot (NeoForge only; omitted means "whenever available")'),
-  includeRaw: z.boolean().optional().default(false).describe('Include rawJson even when parsed cleanly'),
+  registry: z.string().optional().describe('Target registry filter (kind=datamaps only, e.g. item, block)'),
+  profession: z.string().optional().describe('Villager profession filter (kind=trades only)'),
+  searchContent: z.boolean().optional().default(false).describe('Search inside worldgen JSON definitions (worldgen kinds only)'),
+  minTemp: z.number().optional().describe('Minimum biome base temperature (kind=biome only)'),
+  maxTemp: z.number().optional().describe('Maximum biome base temperature (kind=biome only, e.g. 0.149 for < 0.15)'),
+  includeModifiers: z.boolean().optional().describe('Include Global Loot Modifiers (kind=loot on NeoForge only; omitted includes when available)'),
+  includeRaw: z.boolean().optional().default(false).describe(INCLUDE_RAW_DESCRIPTION),
   limit: z
     .number()
     .int()
     .min(1)
     .optional()
-    .describe(
-      `Page size; omitted means the selected endpoint's declared default. Maximum 200 (trades), 100 (worldgen/loot/datamaps); a larger value is rejected by the mod with INVALID_PARAMETER.`,
-    ),
-  offset: z.number().int().min(0).optional().default(0),
+    .describe('Maximum entries to return (max 200 for trades, 100 for worldgen/loot/datamaps)'),
+  offset: z.number().int().min(0).optional().default(0).describe('Number of matching entries to skip'),
 });
 
 type WorldDataKind = z.infer<typeof QUERY_WORLD_DATA_SCHEMA>['kind'];
@@ -178,19 +169,17 @@ function rejectInapplicable(kind: WorldDataKind, given: Record<string, unknown>)
 }
 
 const QUERY_ADVANCEMENTS_SCHEMA = z.object({
-  query: z.string().optional().describe('Filter by advancement ID, title, description, icon, or criteria'),
+  query: z.string().optional().describe('Substring filter on advancement ID, title, description, icon, or criteria'),
   modId: z.string().optional().describe('Filter by mod namespace'),
-  status: z.enum(['all', 'completed', 'incomplete']).optional().default('all'),
+  status: z.enum(['all', 'completed', 'incomplete']).optional().default('all').describe('Filter by completion status'),
   includeRecipes: z.boolean().optional().default(false).describe('Include recipe-unlock advancements under recipes/'),
   limit: z
     .number()
     .int()
     .min(1)
     .optional()
-    .describe(
-      `Page size; omitted means the declared default (${ADVANCEMENTS_LIMITS.defaultLimit}). Maximum ${ADVANCEMENTS_LIMITS.maxLimit}; a larger value is rejected by the mod with INVALID_PARAMETER.`,
-    ),
-  offset: z.number().int().min(0).optional().default(0),
+    .describe(`Maximum advancements to return (default ${ADVANCEMENTS_LIMITS.defaultLimit}, max ${ADVANCEMENTS_LIMITS.maxLimit})`),
+  offset: z.number().int().min(0).optional().default(0).describe('Number of matching advancements to skip'),
 });
 
 /**
@@ -216,7 +205,7 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
     {
       title: 'Query How to Obtain or Use an Item',
       description:
-        'Cross-query recipes (including viewer catalysts on use), loot tables + Global Loot Modifiers, villager/wandering trader trades, NeoForge data maps, viewer info (JEI/EMI/REI), and block/fluid/entity metadata in one call. Parts that could not be read are listed under "missing" with the mod\'s error code and the answer is marked "partial".',
+        'Query how to obtain or use an item across recipes (including viewer catalysts), loot tables, trades, NeoForge data maps, and item/viewer metadata in one call.',
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: QUERY_ITEM_FLOW_SCHEMA,
     },
@@ -326,7 +315,7 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
     {
       title: 'Browse Recipe Types or Query Recipes',
       description:
-        'List registered RecipeTypes, active viewer categories, and built-in mod parsers (listTypes=true), or query recipes by type, modId, exact item, role, or source. Viewer recipes carry slot-based inputs/outputs; vanilla recipes carry parsed structure plus rawJson only when unparsed or requested.',
+        'List registered RecipeTypes, active viewer categories, and built-in mod parsers (listTypes=true), or query recipes by type, modId, item, role, or source.',
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: QUERY_RECIPES_SCHEMA,
     },
@@ -395,7 +384,7 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
     {
       title: 'Query Worldgen, Loot Tables, Trades & Data Maps',
       description:
-        'Query worldgen registries (ores, placements, biomes with temperature filters, structures, biome modifiers), loot tables, villager trades, or NeoForge data maps with pagination and one includeRaw rule. Parsed structure is returned alongside rawJson only when the parser could not explain the record or includeRaw was requested.',
+        'Query worldgen definitions (features, biomes, structures, dimensions, biome modifiers), loot tables, villager trades, or NeoForge data maps.',
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: QUERY_WORLD_DATA_SCHEMA,
     },
@@ -482,7 +471,7 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
     {
       title: 'Query Advancements & Player Progress',
       description:
-        'Query advancement definitions, display titles/descriptions, rewards, and the player\'s completion progress. Every entry carries its progress; when the world owner cannot be asked the call fails with its error code instead of returning definitions alone.',
+        'Query advancement definitions, display info, rewards, and the player\'s completion progress.',
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: QUERY_ADVANCEMENTS_SCHEMA,
     },

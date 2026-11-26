@@ -30,7 +30,7 @@ export async function resolveModsDir(deps: ToolPathDeps, override?: string): Pro
   if (deps.defaultModsDir) return deps.defaultModsDir;
   throw new ToolError(
     'DATA_UNAVAILABLE',
-    'Could not determine the mods directory: the mod is not reachable and no --mods-dir was given.',
+    'Could not determine the mods directory: the mod is not reachable and no modsDir parameter or --mods-dir was provided. Start Minecraft with McInsight or pass modsDir.',
   );
 }
 
@@ -44,7 +44,7 @@ export async function resolveGameDir(deps: ToolPathDeps, override?: string): Pro
   if (deps.defaultGameDir) return deps.defaultGameDir;
   throw new ToolError(
     'DATA_UNAVAILABLE',
-    'Could not determine the game directory: the mod is not reachable and no --game-dir was given.',
+    'Could not determine the game directory: the mod is not reachable and no gameDir parameter or --game-dir was provided. Start Minecraft with McInsight or pass gameDir.',
   );
 }
 

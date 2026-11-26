@@ -55,7 +55,7 @@ public final class TagQuery {
         if (declaring.isEmpty()) {
             throw new InsightException(
                 InsightError.NOT_FOUND,
-                "No item, block, fluid, or entity tag is named #" + tagId + "."
+                "No item, block, fluid, or entity tag is named #" + tagId + ". Use mc_search_registry with kind=\"tag\" to find tag IDs."
             );
         }
         JsonArray declaredKinds = new JsonArray();
@@ -98,7 +98,7 @@ public final class TagQuery {
         if (declared.isEmpty()) {
             throw new InsightException(
                 InsightError.NOT_FOUND,
-                "No " + kind.id() + " tag is named #" + tagId + "."
+                "No " + kind.id() + " tag is named #" + tagId + ". Use mc_search_registry with kind=\"" + kind.id() + "_tag\" to find tag IDs."
             );
         }
 
@@ -135,7 +135,10 @@ public final class TagQuery {
         }
         ResourceLocation parsed = ResourceLocation.tryParse(body);
         if (parsed == null) {
-            throw new InsightException(InsightError.INVALID_ID, "'id' is not a valid tag id: " + raw);
+            throw new InsightException(
+                InsightError.INVALID_ID,
+                "'id' is not a valid tag ID: " + raw + ". Use mc_search_registry with kind=\"tag\" to find tag IDs."
+            );
         }
         return parsed;
     }

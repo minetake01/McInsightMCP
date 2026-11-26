@@ -16,11 +16,23 @@ export interface ServerDeps {
   defaultGameDir?: string;
 }
 
+const SERVER_INSTRUCTIONS = [
+  'McInsight inspects a live modded Minecraft session (and local mod JARs/pack scripts).',
+  '- Tools that take an item or target ID require an exact ResourceLocation (e.g. "minecraft:stone") or tag (e.g. "#minecraft:planks"). Resolve display names with mc_search_registry first.',
+  '- Prefer runtime tools (mc_query_item_flow, mc_query_recipes, mc_guides, mc_query_world_data, mc_inspect) for gameplay questions; use mc_inspect_code when you need mod implementation details or pack scripts.',
+  '- Use mc_render_recipe to show a visual recipe diagram to the user, and mc_query_recipes or mc_query_item_flow to inspect recipe data as text.',
+].join('\n');
+
 export function createMcInsightServer(deps: ServerDeps): McpServer {
-  const server = new McpServer({
-    name: 'mcinsight',
-    version: readPackageVersion(),
-  });
+  const server = new McpServer(
+    {
+      name: 'mcinsight',
+      version: readPackageVersion(),
+    },
+    {
+      instructions: SERVER_INSTRUCTIONS,
+    },
+  );
 
   registerWorldStateTools(server, deps.mcClient);
   registerRegistryTools(server, deps.mcClient);

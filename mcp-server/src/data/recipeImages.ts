@@ -18,7 +18,6 @@ export interface RecipeImageQueryParams {
   source?: string;
   limit?: number;
   offset?: number;
-  scale?: number;
 }
 
 export async function fetchRecipeImages(
@@ -32,6 +31,5 @@ export async function fetchRecipeImages(
     source: params.source,
     limit: params.limit,
     offset: params.offset,
-    scale: params.scale,
   });
 }

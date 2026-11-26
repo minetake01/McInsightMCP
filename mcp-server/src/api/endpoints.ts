@@ -148,12 +148,12 @@ export const ENDPOINTS = {
   }),
   recipes_render: endpoint<
     'recipes_render',
-    'item' | 'role' | 'type' | 'source' | 'limit' | 'offset' | 'scale',
+    'item' | 'role' | 'type' | 'source' | 'limit' | 'offset',
     RecipesRenderResponse
   >({
     id: 'recipes_render',
     path: '/api/v1/recipes/render',
-    params: ['item', 'role', 'type', 'source', 'limit', 'offset', 'scale'],
+    params: ['item', 'role', 'type', 'source', 'limit', 'offset'],
     defaultLimit: 1,
     maxLimit: 8,
   }),

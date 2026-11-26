@@ -72,7 +72,7 @@ public final class EntryInspector {
             if (present.isEmpty()) {
                 throw new InsightException(
                     InsightError.NOT_FOUND,
-                    "No item, block, fluid, or entity is named " + id + "."
+                    "No item, block, fluid, or entity is named " + id + ". Use mc_search_registry to find the exact ID."
                 );
             }
             return inspectAs(ctx, present.getFirst(), id, present.size() > 1 ? kindsOf(present) : null);
@@ -88,7 +88,10 @@ public final class EntryInspector {
         JsonArray alsoPresentIn
     ) throws Exception {
         if (!RegistryIndex.contains(kind, id)) {
-            throw new InsightException(InsightError.NOT_FOUND, "No " + kind.id() + " is named " + id + ".");
+            throw new InsightException(
+                InsightError.NOT_FOUND,
+                "No " + kind.id() + " is named " + id + ". Use mc_search_registry to find the exact ID."
+            );
         }
         JsonObject out = switch (kind) {
             case ITEM -> describeItem(ctx, id);

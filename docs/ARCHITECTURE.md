@@ -215,7 +215,7 @@ declares page bounds.
 | `registry_tag` | `/api/v1/registry/tag` | `kind`, `id`, `limit`, `offset` | LOCAL | NONE | 200 / 500 |
 | `recipes_types` | `/api/v1/recipes/types` | — | LOCAL | NONE | — |
 | `recipes_query` | `/api/v1/recipes/query` | `item`, `role`, `type`, `mod`, `source`, `limit`, `offset` | LOCAL | NONE | 40 / 100 |
-| `recipes_render` | `/api/v1/recipes/render` | `item`, `role`, `type`, `source`, `limit`, `offset`, `scale` | LOCAL | NONE | 1 / 8 |
+| `recipes_render` | `/api/v1/recipes/render` | `item`, `role`, `type`, `source`, `limit`, `offset` | LOCAL | NONE | 1 / 8 |
 | `guides_list` | `/api/v1/guides/list` | `source`, `mod`, `limit`, `offset` | LOCAL | NONE | 50 / 500 |
 | `guides_search` | `/api/v1/guides/search` | `q`, `source`, `mod`, `lang`, `includeAllLang`, `limit`, `offset` | LOCAL | NONE | 20 / 50 |
 | `guides_page` | `/api/v1/guides/page` | `id` | LOCAL | NONE | — |
@@ -459,7 +459,7 @@ recipes carry `recipeId`, `recipeType`, `modId`, `recipeClass`, optional `serial
 draws them. `role` defaults to `output` (the recipes that make the item); `type` restricts the
 search to one viewer category uid; `source` is `viewer` (default, every active viewer that can
 paint) or a viewer name, and `vanilla` is `DATA_UNAVAILABLE` because the recipe manager has no GUI
-layout to draw. `scale` is the pixel scale, `1..3` (default `2`). The answer is the uncounted page
+layout to draw. Images are rendered at a fixed 2x pixel scale. The answer is the uncounted page
 shape with key `images` (`totalKnown: false`, so no `total`), plus `format: "png"` and `scale`; each
 row is `viewer`, `categoryUid`, optional `categoryTitle`/`recipeId`, `width`/`height` in GUI units,
 and `png` (base64 PNG bytes). `width`/`height` are the layout size; the image is
@@ -487,7 +487,7 @@ recipes normally but does not draw them.
 
 This is a client-only operation (the loopback server exists only on a client, and a dedicated server
 never starts it), which is why the endpoint is `LOCAL`; the player's GUI scale does not affect the
-output, because the image is resampled to the requested scale.
+output, because the image is resampled to the fixed 2x scale.
 
 **`worldgen_summary`** — `hasDynamicRegistries`, `hasDataResources`, `counts` keyed by kind(`placed_feature`, `configured_feature`, `biome`, `structure`, `dimension_type`, `biome_modifier`).
 Registry-backed kinds are counted only when the session has dynamic registries, and `biome_modifier`

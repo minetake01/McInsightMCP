@@ -124,7 +124,10 @@ export async function resolveJarPath(
     if (direct) return direct.jarPath;
     const byFileName = [...index.jarsByPath.values()].find((jar) => jar.fileNameLower === trimmed.toLowerCase());
     if (byFileName) return byFileName.jarPath;
-    throw new ToolError('NOT_FOUND', `No nested mod JAR matching '${trimmed}' found in '${resolvedModsDir}'.`);
+    throw new ToolError(
+      'NOT_FOUND',
+      `No nested mod JAR matching '${trimmed}' found in '${resolvedModsDir}'. Use mc_status with includeMods=true to check loaded mod IDs and JAR filenames.`,
+    );
   }
 
   if (trimmed.toLowerCase().endsWith('.jar')) {
@@ -142,7 +145,10 @@ export async function resolveJarPath(
 
   const match = findJarByModOrClass(index, { modId: trimmed });
   if (!match) {
-    throw new ToolError('NOT_FOUND', `No mod JAR matching '${modIdOrJarName}' found in '${resolvedModsDir}'.`);
+    throw new ToolError(
+      'NOT_FOUND',
+      `No mod JAR matching '${modIdOrJarName}' found in '${resolvedModsDir}'. Use mc_status with includeMods=true to check loaded mod IDs and JAR filenames.`,
+    );
   }
   return match.jarPath;
 }

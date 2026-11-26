@@ -14,7 +14,7 @@ const INSPECT_CODE_SCHEMA = z.object({
   action: z
     .enum(['trace_id', 'search', 'read_resource', 'decompile', 'reflect'])
     .describe(
-      'trace_id: trace a block/item ID from static field registration to referencing classes + resources/pack scripts; search: grep JAR paths/contents/class_strings or pack scripts; read_resource: read or list files inside a mod JAR; decompile: decompile a Java class via Vineflower/javap; reflect: inspect loaded JVM class fields/methods',
+      'trace_id: trace a block/item ID from registration to referencing classes and scripts; search: search JARs or pack scripts; read_resource: read or list files inside a mod JAR; decompile: decompile a Java class; reflect: inspect a loaded JVM class',
     ),
   query: z.string().optional().describe('ID or substring query (required for trace_id and search)'),
   className: z.string().optional().describe('Fully qualified Java class name (required for decompile and reflect)'),
@@ -23,20 +23,28 @@ const INSPECT_CODE_SCHEMA = z.object({
     .boolean()
     .optional()
     .default(false)
-    .describe('For trace_id: also scan all other mod JARs for cross-mod field references'),
-  scope: z.enum(['jars', 'pack_scripts', 'both']).optional().default('jars').describe('Search scope when action=search'),
+    .describe('Also scan all other mod JARs for cross-mod field references (action=trace_id)'),
+  scope: z
+    .enum(['jars', 'pack_scripts', 'both'])
+    .optional()
+    .default('jars')
+    .describe('Search scope (action=search): jars (mod JARs), pack_scripts (KubeJS/CraftTweaker/datapacks), or both'),
   searchMode: z
     .enum(['paths', 'content', 'class_strings'])
     .optional()
     .default('paths')
-    .describe('Search mode when action=search'),
-  filePattern: z.string().optional().describe('Optional path/class substring filter when action=search'),
-  internalPath: z.string().optional().describe('Exact path inside JAR to read when action=read_resource; omit to list prefix'),
-  prefix: z.string().optional().default('').describe('Path prefix when listing JAR entries in action=read_resource'),
-  decompileMode: z.enum(['vineflower', 'javap']).optional().default('vineflower').describe('Decompiler mode when action=decompile'),
-  limit: z.number().int().min(1).max(200).optional().default(50),
-  modsDir: z.string().optional(),
-  gameDir: z.string().optional(),
+    .describe('Search mode (action=search): paths (entry filenames), content (text/JSON contents), or class_strings (string literals in class bytecode)'),
+  filePattern: z.string().optional().describe('Path or class substring filter (action=search)'),
+  internalPath: z.string().optional().describe('Exact path inside JAR to read (action=read_resource; omit to list entries under prefix)'),
+  prefix: z.string().optional().default('').describe('Path prefix when listing JAR entries (action=read_resource)'),
+  decompileMode: z
+    .enum(['vineflower', 'javap'])
+    .optional()
+    .default('vineflower')
+    .describe('Decompiler mode (action=decompile): vineflower (Java source) or javap (bytecode disassembly)'),
+  limit: z.number().int().min(1).max(200).optional().default(50).describe('Maximum results to return (default 50, max 200)'),
+  modsDir: z.string().optional().describe('Override path to the mods directory (omit to auto-detect from the running mod)'),
+  gameDir: z.string().optional().describe('Override path to the Minecraft game directory (omit to auto-detect from the running mod)'),
 });
 
 function nonEmpty(value?: string): string | undefined {
@@ -50,7 +58,7 @@ export function registerCodeTools(server: McpServer, deps: CodeToolDeps): void {
     {
       title: 'Trace Mod IDs, Search JARs/Scripts & Decompile Java Classes',
       description:
-        'Trace where a block/item ID is registered and referenced in bytecode (trace_id), search mod JARs and KubeJS/CraftTweaker/pack scripts (search), read JAR resources (read_resource), decompile Java classes with Vineflower/javap (decompile), or reflect live JVM classes (reflect).',
+        'Inspect mod implementation and pack scripts: trace a block/item ID through bytecode and scripts (trace_id), search mod JARs or KubeJS/CraftTweaker/pack scripts (search), read or list files in a mod JAR (read_resource), decompile a Java class (decompile), or reflect a loaded JVM class (reflect).',
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: INSPECT_CODE_SCHEMA,
     },
@@ -79,14 +87,20 @@ export function registerCodeTools(server: McpServer, deps: CodeToolDeps): void {
 
       if (action === 'reflect') {
         if (!cleanClass) {
-          throw new ToolError('INVALID_PARAMETER', 'className is required when action="reflect".');
+          throw new ToolError(
+            'INVALID_PARAMETER',
+            'className is required when action="reflect". Use action="search" or action="trace_id" to find the exact class name.',
+          );
         }
         return fetchClassIntrospection(deps.mcClient, cleanClass);
       }
 
       if (action === 'decompile') {
         if (!cleanClass) {
-          throw new ToolError('INVALID_PARAMETER', 'className is required when action="decompile".');
+          throw new ToolError(
+            'INVALID_PARAMETER',
+            'className is required when action="decompile". Use action="search" or action="trace_id" to find the exact class name.',
+          );
         }
         const resolvedMods = await resolveModsDir(deps, modsDir);
         return deps.jarInspector.decompileClass(resolvedMods, cleanClass, decompileMode, cleanModOrJar);
@@ -94,7 +108,10 @@ export function registerCodeTools(server: McpServer, deps: CodeToolDeps): void {
 
       if (action === 'read_resource') {
         if (!cleanModOrJar) {
-          throw new ToolError('INVALID_PARAMETER', 'modIdOrJar is required when action="read_resource".');
+          throw new ToolError(
+            'INVALID_PARAMETER',
+            'modIdOrJar is required when action="read_resource". Use mc_status with includeMods=true to list loaded mod IDs and JAR filenames.',
+          );
         }
         const resolvedMods = await resolveModsDir(deps, modsDir);
         if (cleanInternalPath) {

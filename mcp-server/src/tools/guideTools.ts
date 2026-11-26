@@ -8,30 +8,37 @@ import { ToolError } from '../api/result.js';
 import { toolResult } from './result.js';
 
 const GUIDE_LIMITS = limitBounds('guides_search');
+const GUIDE_LIST_LIMITS = limitBounds('guides_list');
 
 const GUIDES_SCHEMA = z.object({
   action: z
     .enum(['search', 'list', 'read'])
     .describe('search: keyword search across guides/quests/lang; list: list available guide IDs; read: fetch full content of a guideId'),
   query: z.string().optional().describe('Search keyword (required when action=search)'),
-  guideId: z.string().optional().describe('Guide ID from search/list (required when action=read)'),
+  guideId: z.string().optional().describe('Guide ID from action=search or action=list (required when action=read)'),
   source: z
     .enum(['all', 'patchouli', 'guideme', 'ftbquests', 'ponder', 'oracle', 'lang'])
     .optional()
     .default('all')
-    .describe('Filter by guide/documentation source'),
-  modId: z.string().optional().describe('Filter by mod namespace'),
+    .describe('Filter by documentation source (action=search or action=list)'),
+  modId: z.string().optional().describe('Filter by mod namespace (action=search or action=list)'),
   lang: z
     .string()
     .optional()
-    .describe('Preferred language code (e.g. en_us, ja_jp, or "all"). Defaults to active Minecraft client language + en_us fallback'),
+    .describe('Preferred language code, e.g. en_us, ja_jp, or "all" (action=search only; defaults to active Minecraft client language + en_us fallback)'),
   includeAllLang: z
     .boolean()
     .optional()
     .default(false)
-    .describe('Include all lang entries (including short names/labels) rather than guide-length text only'),
-  limit: z.number().int().min(1).optional().default(GUIDE_LIMITS.defaultLimit),
-  offset: z.number().int().min(0).optional().default(0),
+    .describe('Include short lang labels/names in addition to guide-length text (action=search only)'),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .default(GUIDE_LIMITS.defaultLimit)
+    .describe(`Maximum entries to return (action=search: default ${GUIDE_LIMITS.defaultLimit}, max ${GUIDE_LIMITS.maxLimit}; action=list: max ${GUIDE_LIST_LIMITS.maxLimit})`),
+  offset: z.number().int().min(0).optional().default(0).describe('Number of matching entries to skip (action=search or action=list)'),
 });
 
 export function registerGuideTools(server: McpServer, mcClient: McHttpClient): void {
@@ -40,7 +47,7 @@ export function registerGuideTools(server: McpServer, mcClient: McHttpClient): v
     {
       title: 'Search, List & Read Mod Guides, Quests & Lang Docs',
       description:
-        'Access Patchouli books, GuideME pages, FTB Quests chapters, Create Ponder entries, Oracle Index books, and mod lang entries. All three actions page through the same shape, so search hits and list rows carry the same id/source/modId fields.',
+        'Search, list, or read in-game documentation from Patchouli books, GuideME pages, FTB Quests chapters, Create Ponder entries, Oracle Index books, and mod lang files.',
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: GUIDES_SCHEMA,
     },
@@ -50,7 +57,10 @@ export function registerGuideTools(server: McpServer, mcClient: McHttpClient): v
       }
       if (action === 'read') {
         if (!guideId || !guideId.trim()) {
-          throw new ToolError('INVALID_PARAMETER', 'guideId is required when action="read".');
+          throw new ToolError(
+            'INVALID_PARAMETER',
+            'guideId is required when action="read". Use action="search" or action="list" to obtain a guideId.',
+          );
         }
         return readGuidePage(mcClient, guideId);
       }

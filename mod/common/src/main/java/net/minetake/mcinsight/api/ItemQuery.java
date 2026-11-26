@@ -37,7 +37,8 @@ public final class ItemQuery {
         if (net.minecraft.resources.ResourceLocation.tryParse(body) == null) {
             throw new InsightException(
                 InsightError.INVALID_ID,
-                "Parameter 'item' is not a valid ResourceLocation, got: " + raw
+                "Parameter 'item' is not a valid ResourceLocation, got: "
+                    + raw + ". Use mc_search_registry to resolve a display name first."
             );
         }
         return new ItemQuery(body, isTag);

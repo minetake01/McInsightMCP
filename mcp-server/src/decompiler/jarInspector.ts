@@ -134,14 +134,17 @@ export class JarInspector {
         }
         throw new ToolError(
           'NOT_FOUND',
-          `Class '${cleanClass}' was not found inside '${jar?.fileName ?? modIdOrJar}'.`,
+          `Class '${cleanClass}' was not found inside '${jar?.fileName ?? modIdOrJar}'. Use action="search" to find the exact class name.`,
         );
       }
       return findJarByModOrClass(index, { className: cleanClass });
     })();
 
     if (!match) {
-      throw new ToolError('NOT_FOUND', `Class '${cleanClass}' was not found in any JAR inside '${modsDir}'.`);
+      throw new ToolError(
+        'NOT_FOUND',
+        `Class '${cleanClass}' was not found in any JAR inside '${modsDir}'. Use action="search" to find the exact class name.`,
+      );
     }
 
     const jarMeta = index.jarsByPath.get(match.jarPath);

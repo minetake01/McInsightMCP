@@ -15,34 +15,40 @@ const SEARCH_REGISTRY_SCHEMA = z.object({
     .enum(['item', 'block', 'fluid', 'entity', 'tag', 'item_tag', 'block_tag', 'fluid_tag', 'entity_tag'])
     .optional()
     .default('item')
-    .describe('Registry kind, or a tag kind to search tag names'),
+    .describe('Registry or tag kind to search'),
   query: z
     .string()
     .optional()
-    .describe('Substring match on ID or localized display name. This is how a display name is resolved to an exact id for item= parameters.'),
+    .describe('Substring match on ID or localized display name'),
   modId: z.string().optional().describe('Filter by mod namespace'),
-  limit: z.number().int().min(1).optional().default(SEARCH_LIMITS.defaultLimit),
-  offset: z.number().int().min(0).optional().default(0),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .default(SEARCH_LIMITS.defaultLimit)
+    .describe(`Maximum entries to return (default ${SEARCH_LIMITS.defaultLimit}, max ${SEARCH_LIMITS.maxLimit})`),
+  offset: z.number().int().min(0).optional().default(0).describe('Number of matching entries to skip'),
 });
 
 const INSPECT_SCHEMA = z.object({
   target: z
     .string()
     .min(1)
-    .describe('Namespaced ID (item, block, fluid, or entity e.g. tofucraft:blocktofumomen) or tag ID (e.g. #minecraft:planks)'),
+    .describe('Exact ResourceLocation (e.g. "minecraft:stone") or tag ID (e.g. "#minecraft:planks")'),
   kind: z
     .enum(['auto', 'item', 'block', 'fluid', 'entity', 'item_tag', 'block_tag', 'fluid_tag', 'entity_tag'])
     .optional()
     .default('auto')
-    .describe('auto inspects as a tag when target starts with "#", otherwise resolves across item/block/fluid/entity registries'),
+    .describe('auto inspects "#..." as a tag and otherwise resolves across item, block, fluid, and entity registries'),
   limit: z
     .number()
     .int()
     .min(1)
     .optional()
     .default(TAG_LIMITS.defaultLimit)
-    .describe(`Max tag members returned when inspecting a tag (mod maximum ${TAG_LIMITS.maxLimit})`),
-  offset: z.number().int().min(0).optional().default(0).describe('Pagination offset when inspecting a tag'),
+    .describe(`Maximum tag members to return when inspecting a tag (default ${TAG_LIMITS.defaultLimit}, max ${TAG_LIMITS.maxLimit})`),
+  offset: z.number().int().min(0).optional().default(0).describe('Number of tag members to skip when inspecting a tag'),
 });
 
 export function registerRegistryTools(server: McpServer, mcClient: McHttpClient): void {
@@ -51,7 +57,7 @@ export function registerRegistryTools(server: McpServer, mcClient: McHttpClient)
     {
       title: 'Search Minecraft Registries',
       description:
-        'Search registered items, blocks, fluids, entities, or tags by ID or localized display name across all loaded mods. Use this first to resolve a display name to the exact ResourceLocation other tools require.',
+        'Search registered items, blocks, fluids, entities, or tags by ID or localized display name across all loaded mods. Use this to resolve display names to exact ResourceLocations.',
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: SEARCH_REGISTRY_SCHEMA,
     },
@@ -71,7 +77,7 @@ export function registerRegistryTools(server: McpServer, mcClient: McHttpClient)
     {
       title: 'Inspect Registry Entry or Tag Members',
       description:
-        'Inspect detailed metadata for an item, block, fluid, or entity (tags, defaultComponents, foodProperties, blockInfo with isRandomlyTicking/stateProperties/destroySpeed, viewerInformation across whichever recipe viewers are active) or list paginated members of an item/block/fluid/entity tag.',
+        'Inspect detailed metadata for an item, block, fluid, or entity (including recipe viewer info), or list members of a tag.',
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: INSPECT_SCHEMA,
     },
