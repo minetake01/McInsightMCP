@@ -7,7 +7,7 @@
 mod.id = "mcinsight"
 mod.name = "McInsight"
 mod.group = "net.minetake.mcinsight"
-mod.version = "0.1.0-beta.2"
+mod.version = "0.1.0-beta.3"
 mod.author = "Minetake"
 mod.license = "MIT"
 mod.description = "Read-only Minecraft runtime introspection mod for AI assistants via McInsightMCP."
