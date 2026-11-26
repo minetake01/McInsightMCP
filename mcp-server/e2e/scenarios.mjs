@@ -178,21 +178,32 @@ export const SCENARIOS = {
   },
 };
 
-export async function runScenario({ name, loader, specs, workRoot, entry, suites, runSuite }) {
+export async function runScenario({ name, loader, specs, workRoot, entry, suites, log = console.log, runSuite }) {
   const scenario = SCENARIOS[name];
   const workDir = path.join(workRoot, `${loader}-${name}`);
-  fs.rmSync(workDir, { recursive: true, force: true });
+  try {
+    fs.rmSync(workDir, { recursive: true, force: true });
+  } catch (err) {
+    // The directory is a running scenario's, not stale leftovers: deleting it would pull the
+    // world out from under that run, so this one stops and says which selection is busy.
+    if (err?.code === 'EPERM' || err?.code === 'EBUSY' || err?.code === 'EACCES') {
+      throw new Error(`${workDir} is in use by another run of ${loader}/${name}; stop it or select something else.`);
+    }
+    throw err;
+  }
   const logDir = path.join(workDir, 'logs');
   fs.mkdirSync(logDir, { recursive: true });
   const processes = [];
-  const ctx = { specs, workDir, logDir, track: (p) => (processes.push(p), p) };
+  const ctx = { specs, workDir, logDir, log, track: (p) => (processes.push(p), p) };
   let mcp;
   try {
     const started = await scenario.start(ctx);
     mcp = await startMcpServer({ entry, mcUrl: started.url, log: (out) => fs.writeFileSync(path.join(logDir, 'mcp.log'), out) });
     const reports = [];
     for (const suite of suites) {
-      reports.push(await runSuite(suite, { mcp: mcp.client, url: started.url, loader, scenario: name, server: started.server }));
+      reports.push(
+        await runSuite(suite, { mcp: mcp.client, url: started.url, loader, scenario: name, server: started.server, log }),
+      );
     }
     return { workDir, reports };
   } finally {

@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- The e2e runner runs scenarios in parallel (`--jobs`, default one per four hardware threads, at most four), prints each job's checks under a `<version>/<loader>/<scenario>` prefix, and reports how long each scenario and the whole run took
+- The e2e runner no longer waits 30 s for a client that ignores `stop`: it closes the client's window (a `WM_CLOSE` on Windows, `SIGTERM` elsewhere) and only kills what outlives its deadline, so every scenario ends in a second or two
+- The e2e harness keeps a local run out of the way: it hands the system cursor back whenever a client captures it, and sends the game window to the taskbar, so the run neither traps the mouse nor covers the desktop (a headless CI client keeps its window on the virtual display)
+
 ## [0.1.0-beta.3] - 2026-11-26
 
 > **Breaking internal response-shape change (beta, no compatibility shim).** Endpoints, accepted

@@ -225,8 +225,8 @@ const SUITES = {
 export const SUITE_NAMES = Object.keys(SUITES);
 
 export async function runSuite(name, ctx) {
-  const report = new Report(`${ctx.loader}/${ctx.scenario}/${name}`);
-  console.log(`\n== ${report.scenario}`);
+  const report = new Report(`${ctx.loader}/${ctx.scenario}/${name}`, ctx.log);
+  report.log(`== ${report.scenario}`);
   await SUITES[name](report, ctx);
   return report;
 }

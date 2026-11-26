@@ -50,18 +50,21 @@ pnpm test
 
 The e2e runner builds the mod, starts real Minecraft clients and dedicated servers, and checks every
 tool through MCP. A client opens a window; close nothing by hand, the runner stops what it started.
+It also stays out of the way: the harness hands the cursor back whenever a client captures it, and
+sends the window to the taskbar, so a local run neither holds the mouse nor covers the desktop.
 
 ```bash
 cd mcp-server
 pnpm e2e                                  # quick: NeoForge singleplayer
 pnpm e2e --preset release                 # every loader × singleplayer / multiplayer with and without the server mod
+pnpm e2e --preset release --jobs 2        # the same, two scenarios at a time (default: one per four threads)
 pnpm e2e --scenario singleplayer --suite recipes --skip-build   # one area while working
 pnpm e2e --extra-mods /path/to/mods       # local only: try an arbitrary mod set
 pnpm e2e --list                           # presets, scenarios, suites
 ```
 
 Logs of every process are kept under `mod/<loader>/versions/<mc_version>/runs/e2e/<loader>-<scenario>/logs/`. See
-[docs/ARCHITECTURE.md §12](docs/ARCHITECTURE.md) for how the runs are launched.
+[docs/ARCHITECTURE.md §12](docs/ARCHITECTURE.md) for how the runs are launched, scheduled and stopped.
 
 ## Architecture & Conventions
 

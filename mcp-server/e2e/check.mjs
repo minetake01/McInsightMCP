@@ -8,19 +8,20 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 
 export class Report {
-  constructor(scenario) {
+  constructor(scenario, log = console.log) {
     this.scenario = scenario;
+    this.log = log;
     this.results = [];
   }
 
   pass(name, detail = '') {
     this.results.push({ name, status: 'pass', detail });
-    console.log(`  [PASS] ${name}${detail ? ` — ${detail}` : ''}`);
+    this.log(`  [PASS] ${name}${detail ? ` — ${detail}` : ''}`);
   }
 
   fail(name, detail) {
     this.results.push({ name, status: 'fail', detail });
-    console.log(`  [FAIL] ${name} — ${detail}`);
+    this.log(`  [FAIL] ${name} — ${detail}`);
   }
 
   /** Records a check from a predicate; a thrown error is a failure with its message. */

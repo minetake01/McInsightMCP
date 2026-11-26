@@ -2,6 +2,7 @@ package net.minetake.mcinsight.e2e;
 
 import com.mojang.logging.LogUtils;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.TitleScreen;
@@ -17,6 +18,11 @@ import net.minecraft.world.level.GameRules;
 //? }
 import net.minecraft.world.level.levelgen.WorldOptions;
 import net.minecraft.world.level.levelgen.presets.WorldPresets;
+//? if >=26.3 {
+/*import org.lwjgl.sdl.SDLVideo;
+*///? } else {
+import org.lwjgl.glfw.GLFW;
+//? }
 import org.slf4j.Logger;
 
 /**
@@ -31,9 +37,29 @@ public final class E2eClient implements ClientModInitializer {
     private static final Logger LOG = LogUtils.getLogger();
     private static final long SEED = 20261125L;
     private static boolean requested;
+    private static boolean cursorReturned;
+    private static boolean windowMinimized;
 
     @Override
     public void onInitializeClient() {
+        // A client that enters a world captures the mouse; no check reads it, so the harness hands
+        // the pointer back on the tick after each capture. When the runner asks, it also sends the
+        // window to the taskbar once, so a local run stops covering the desktop (see the NeoForge
+        // side; minimizing does not stop the game).
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            if (client.mouseHandler.isMouseGrabbed()) {
+                client.mouseHandler.releaseMouse();
+                if (!cursorReturned) {
+                    cursorReturned = true;
+                    LOG.info("[E2E] the game captured the cursor; gave it back");
+                }
+            }
+            if (!windowMinimized && Boolean.getBoolean("mcinsight.e2e.minimizeWindow")) {
+                windowMinimized = true;
+                minimize(client);
+                LOG.info("[E2E] sent the game window to the taskbar");
+            }
+        });
         ScreenEvents.AFTER_INIT.register((client, screen, width, height) -> {
             String world = System.getProperty("mcinsight.e2e.createWorld");
             if (world == null || requested || !(screen instanceof TitleScreen)) {
@@ -69,5 +95,19 @@ public final class E2eClient implements ClientModInitializer {
             ));
             //? }
         });
+    }
+
+    /** Minimizes the game window: GLFW before 26.3, SDL from 26.3 on. */
+    private static void minimize(Minecraft client) {
+        //? if >=26.1 {
+        /*long handle = client.getWindow().handle();
+        *///? } else {
+        long handle = client.getWindow().getWindow();
+        //? }
+        //? if >=26.3 {
+        /*SDLVideo.SDL_MinimizeWindow(handle);
+        *///? } else {
+        GLFW.glfwIconifyWindow(handle);
+        //? }
     }
 }

@@ -788,13 +788,27 @@ server over Streamable HTTP, the way an agent would.
   creative flat world with a fixed seed when the client is started with
   `-Dmcinsight.e2e.createWorld=<name>` (quick play can only open an existing world), and, when a player
   joins, runs `e2e-setup.mcfunction` from the game directory as that player. The setup places the
-  blocks, block entities, entity and items the checks read, so every loader sees the same world.
+  blocks, block entities, entity and items the checks read, so every loader sees the same world. A
+  client that enters a world captures the mouse and covers whatever is behind it, so the harness
+  hands the cursor back on the tick after each capture and sends the window to the taskbar once,
+  when the runner asks (`-Dmcinsight.e2e.minimizeWindow=true`, which it passes wherever a real
+  display is in use: a headless CI client keeps its window on the virtual display, where minimizing
+  would test nothing).
 - **Scenarios.** `singleplayer` (the client hosts the integrated server), `multiplayer-mod` (a
   dedicated server running McInsight; server data travels over the packet bridge) and
   `multiplayer-nomod` (a dedicated server without McInsight; server data must fail as
   `SERVER_MOD_REQUIRED` and composite answers must say what is missing). Each scenario runs in a fresh
   directory under `mod/<loader>/versions/<mc_version>/runs/e2e/<loader>-<scenario>/`, and its process
   logs stay there.
+- **Scheduling.** Scenarios share nothing but the machine — each owns its game directory, its ports and
+  its processes — so the runner runs up to `--jobs` of them at once. Without `--jobs` it runs one per
+  four hardware threads, at most four, which leaves a four-core CI runner at one, as before the option
+  existed. Jobs print with a `<version>/<loader>/<scenario>` prefix and each is timed, and the closing
+  summary reports the whole run's wall time, so a parallel run stays readable.
+- **Stopping.** A client cannot be told to stop: it ignores console input, and waiting for it was a
+  fixed 30 s of nothing after every scenario. The runner closes its window instead (a `WM_CLOSE` on
+  Windows, `SIGTERM` elsewhere), which is how the game saves and exits; a dedicated server gets `stop`
+  and 30 s to save. Either side is killed when it outlives its deadline.
 - **Suites and presets.** Checks are grouped into suites (`status`, `registry`, `recipes`, `world`,
   `worlddata`, `progress`, `guides`, `contract`, `bridge`, `nomod`). Each scenario lists the suites
   that apply to it, and `--suite` narrows that. Presets name common selections: `quick` (NeoForge
@@ -817,6 +831,7 @@ server over Streamable HTTP, the way an agent would.
 cd mcp-server
 node e2e/run.mjs                        # quick
 node e2e/run.mjs --preset release       # everything
+node e2e/run.mjs --preset release --jobs 2   # everything, two scenarios at a time
 node e2e/run.mjs --loader fabric --scenario multiplayer-nomod
 node e2e/run.mjs --scenario singleplayer --suite recipes,worlddata --skip-build
 node e2e/run.mjs --extra-mods ~/my-mods # local only

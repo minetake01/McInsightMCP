@@ -19,6 +19,18 @@ export function readSpec(specPath) {
   return JSON.parse(fs.readFileSync(specPath, 'utf-8'));
 }
 
+/** How long a dedicated server gets to save its world and leave on `stop`. */
+const SERVER_STOP_MS = 30_000;
+
+/**
+ * How long a client gets to close its window after being asked, before it is killed.
+ *
+ * <p>A client ignores console input, so the only clean stop is closing its window: the game saves
+ * and exits in a second or two. Waiting the server's 30 s for that used to be the largest fixed
+ * cost of every scenario.
+ */
+const CLIENT_STOP_MS = 10_000;
+
 /**
  * A running game process.
  *
@@ -26,8 +38,9 @@ export function readSpec(specPath) {
  * exits or the deadline passes, so a crash is reported as a crash rather than as a timeout.
  */
 export class GameProcess {
-  constructor(name, child, logFile) {
+  constructor(name, side, child, logFile) {
     this.name = name;
+    this.side = side;
     this.child = child;
     this.logFile = logFile;
     this.lines = [];
@@ -88,18 +101,30 @@ export class GameProcess {
     this.child.stdin.write(`${line}\n`);
   }
 
-  async stop(graceMs = 30_000) {
+  async stop() {
     if (this.exitCode !== undefined) return;
     const exited = new Promise((resolve) => this.child.once('exit', resolve));
-    if (this.child.stdin.writable) {
-      // A dedicated server stops cleanly on `stop`; a client ignores stdin and is killed below.
-      this.child.stdin.write('stop\n');
+    const deadline = this.side === 'server' ? SERVER_STOP_MS : CLIENT_STOP_MS;
+    if (this.side === 'server') {
+      // A dedicated server saves its world and leaves on `stop`.
+      if (this.child.stdin.writable) this.child.stdin.write('stop\n');
+    } else {
+      // A client cannot be told to stop; closing its window is the only clean way out.
+      closeWindow(this.child.pid);
     }
-    const timer = sleep(graceMs, 'timeout');
-    if ((await Promise.race([exited, timer])) === 'timeout') {
-      killTree(this.child.pid);
-      await exited;
-    }
+    if ((await Promise.race([exited, sleep(deadline, 'timeout')])) !== 'timeout') return;
+    killTree(this.child.pid);
+    await exited;
+  }
+}
+
+/** Asks a client to close its window, which is how the game saves and exits. */
+function closeWindow(pid) {
+  if (process.platform === 'win32') {
+    // Without /F this is a WM_CLOSE to the game's window, not a termination.
+    spawn('taskkill', ['/pid', String(pid), '/T'], { stdio: 'ignore' });
+  } else {
+    signalTree(pid, 'SIGTERM');
   }
 }
 
@@ -109,7 +134,16 @@ function killTree(pid) {
   } else {
     // The game was started in its own process group, so the group signal also reaches xvfb-run's
     // children (the X server and the JVM).
-    process.kill(-pid, 'SIGKILL');
+    signalTree(pid, 'SIGKILL');
+  }
+}
+
+/** Signals a whole process group; a process that is already gone is the outcome we wanted. */
+function signalTree(pid, signal) {
+  try {
+    process.kill(-pid, signal);
+  } catch (err) {
+    if (err.code !== 'ESRCH') throw err;
   }
 }
 
@@ -125,8 +159,13 @@ function killTree(pid) {
 export function launch({ name, spec, gameDir, withMod = true, jvmArgs = [], extraArgs = [], logDir }) {
   fs.mkdirSync(gameDir, { recursive: true });
   fs.mkdirSync(logDir, { recursive: true });
+  // A local run's window would sit in front of whoever is working beside it, so the harness sends
+  // it to the taskbar; a headless CI client renders on a virtual display where that would test
+  // nothing, so there it keeps the window.
+  const backgroundWindow = spec.side === 'client' && process.env.MCINSIGHT_E2E_XVFB !== '1';
   const args = [
     ...spec.jvmArgs,
+    ...(backgroundWindow ? ['-Dmcinsight.e2e.minimizeWindow=true'] : []),
     ...jvmArgs,
     ...(withMod ? spec.withMod : spec.withoutMod),
     spec.mainClass,
@@ -148,6 +187,6 @@ export function launch({ name, spec, gameDir, withMod = true, jvmArgs = [], extr
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: process.platform !== 'win32',
   });
-  return new GameProcess(name, child, path.join(logDir, `${name}.log`));
+  return new GameProcess(name, spec.side, child, path.join(logDir, `${name}.log`));
 }
 

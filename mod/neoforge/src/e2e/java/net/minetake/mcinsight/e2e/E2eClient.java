@@ -17,7 +17,13 @@ import net.minecraft.world.level.levelgen.presets.WorldPresets;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.ScreenEvent;
+//? if >=26.3 {
+/*import org.lwjgl.sdl.SDLVideo;
+*///? } else {
+import org.lwjgl.glfw.GLFW;
+//? }
 import org.slf4j.Logger;
 
 /**
@@ -33,8 +39,51 @@ public final class E2eClient {
     private static final Logger LOG = LogUtils.getLogger();
     private static final long SEED = 20261125L;
     private static boolean requested;
+    private static boolean cursorReturned;
+    private static boolean windowMinimized;
 
     private E2eClient() {}
+
+    /**
+     * Keeps the game out of the way of whoever is working beside a local run.
+     *
+     * <p>A client that enters a world captures the mouse: the pointer disappears into the window
+     * and every click lands in the game. No check reads the mouse, so the harness hands it back on
+     * the tick after each capture. When the runner asks
+     * ({@code -Dmcinsight.e2e.minimizeWindow=true}) it also sends the window to the taskbar once,
+     * so the run stops covering the desktop. Minimizing does not stop the game, which is what lets
+     * the checks run against a window nobody is looking at.
+     */
+    @SubscribeEvent
+    public static void onClientTick(ClientTickEvent.Post event) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.mouseHandler.isMouseGrabbed()) {
+            mc.mouseHandler.releaseMouse();
+            if (!cursorReturned) {
+                cursorReturned = true;
+                LOG.info("[E2E] the game captured the cursor; gave it back");
+            }
+        }
+        if (!windowMinimized && Boolean.getBoolean("mcinsight.e2e.minimizeWindow")) {
+            windowMinimized = true;
+            minimize(mc);
+            LOG.info("[E2E] sent the game window to the taskbar");
+        }
+    }
+
+    /** Minimizes the game window: GLFW before 26.3, SDL from 26.3 on. */
+    private static void minimize(Minecraft mc) {
+        //? if >=26.1 {
+        /*long handle = mc.getWindow().handle();
+        *///? } else {
+        long handle = mc.getWindow().getWindow();
+        //? }
+        //? if >=26.3 {
+        /*SDLVideo.SDL_MinimizeWindow(handle);
+        *///? } else {
+        GLFW.glfwIconifyWindow(handle);
+        //? }
+    }
 
     @SubscribeEvent
     public static void onTitle(ScreenEvent.Opening event) {
