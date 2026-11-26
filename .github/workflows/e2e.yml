@@ -39,8 +39,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Install virtual display and software OpenGL
-        run: sudo apt-get update && sudo apt-get install -y xvfb mesa-utils libgl1-mesa-dri
+      # 26.x renders through RenderPearl, which prefers OpenGL and falls back to Vulkan. This runner's X
+      # server has no GLX visual the OpenGL backend accepts, so Mesa's lavapipe is what gives the client
+      # a window at all; the client's own `latest.log` names the backend and driver it settled on.
+      - name: Install virtual display and software renderers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb mesa-utils libgl1-mesa-dri libvulkan1 mesa-vulkan-drivers
 
       # 21 compiles and runs the mod; 25 runs the Gradle daemon (gradle/gradle-daemon-jvm.properties).
       - name: Setup Java 21 and 25

@@ -80,6 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `describeBuiltinParsers`/`mc_query_recipes` viewer handling no longer assumes a fixed viewer name set; buckets and availability come from whatever registered
 - Version synchronization instructions: the MCP server version is read from `package.json`, so `server.ts` is no longer a version declaration to keep in sync
 - Recipe JSON encoding cached in the shared recipe index is filled concurrently by HTTP and bridge threads; the cache was a plain `HashMap` and is now concurrent
+- The e2e workflow's client could not start on the Linux runner for `26.x`: RenderPearl found no GLX visual it accepts for OpenGL and no Vulkan driver implementing `VK_KHR_surface`, so the scenario never reached player-ready. The runner now installs Mesa's lavapipe, and the client renders through the Vulkan backend
 
 ## [0.1.0-beta.2] - 2026-11-24
 

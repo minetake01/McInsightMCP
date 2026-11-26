@@ -808,7 +808,10 @@ server over Streamable HTTP, the way an agent would.
 - **CI.** `.github/workflows/e2e.yml` runs the `quick` preset on pull requests and pushes. A
   `workflow_dispatch` can choose any preset, and `release.yml` calls it with `release` before
   publishing. On Linux, `MCINSIGHT_E2E_XVFB=1` makes the runner start the client under `xvfb-run` with
-  Mesa software rendering. Game and MCP logs are uploaded as an artifact.
+  Mesa software rendering: OpenGL comes from `llvmpipe`, and `26.x` reaches the game through the Vulkan
+  backend on `lavapipe`, because the runner's X server offers no GLX visual RenderPearl's OpenGL
+  backend accepts. The client's own `latest.log` records the backend and driver it used. Game and MCP
+  logs are uploaded as an artifact.
 
 ```bash
 cd mcp-server
