@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed atomic `GenerationalCache` entry updates, active reload purging via `CacheGenerations`, render-thread cancellation & GPU readback buffer leaks, integrated-server dimension detection, and Vineflower ZIP extraction containment / `realpath` boundary checks.
 - Removed `modsDir`/`gameDir` parameters from `mc_inspect_code` (startup `--mods-dir`/`--game-dir` flags or live mod discovery only) and pruned redundant generic machine recipe parsers so only non-obvious custom formats (`create:sequenced_assembly`, `ae2:inscriber`, `ars_nouveau:imbuement`, `ars_nouveau:enchanting_apparatus`) are pre-parsed.
 - Removed the `ponder` guide source: Create registers its Ponder scenes in code and ships only structure NBT under `assets/*/ponder/`, so the source could only ever answer `total: 0`. `mc_guides` no longer advertises it.
+- `mc_observe_world`'s `filter` now says it narrows the listings (`matchedBlocks`, `blockEntities`, `nearbyEntities`) while `blockSummary` always counts every block in the radius.
 
 ## [0.1.0-beta.4] - 2026-11-26
 

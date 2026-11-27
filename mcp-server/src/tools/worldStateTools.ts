@@ -22,7 +22,12 @@ const OBSERVE_WORLD_SCHEMA = z.object({
   maxDistance: z.number().min(1).max(64).optional().default(16).describe('Raycast distance in blocks (mode=looking_at)'),
   includeFluids: z.boolean().optional().default(false).describe('Include fluid hits in the raycast (mode=looking_at)'),
   radius: z.number().int().min(1).max(32).optional().default(8).describe('Scan radius in blocks (mode=area)'),
-  filter: z.string().optional().describe('Substring filter on block ID or display name (mode=area)'),
+  filter: z
+    .string()
+    .optional()
+    .describe(
+      'Narrow what is listed, not what is counted: blockSummary always describes every block in the radius, while filter selects matchedBlocks, blockEntities, and nearbyEntities by block ID or display name (mode=area)',
+    ),
 });
 
 export function registerWorldStateTools(server: McpServer, mcClient: McHttpClient): void {
