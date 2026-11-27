@@ -3,7 +3,10 @@ package net.minetake.mcinsight.world;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
@@ -35,6 +38,7 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.Property;
+import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.material.FluidState;
 //? if >=26.1 {
 /*import net.minecraft.world.level.storage.TagValueOutput;
@@ -137,6 +141,65 @@ final class WorldData {
             }
         }
         return new BlockSample(pos.getX(), pos.getY(), pos.getZ(), state, typeId, entityClass, nbt, nbtError);
+    }
+
+    /** The block entities within a radius, and how many matched before the cap was applied. */
+    record BlockEntityScan(List<BlockSample> samples, int total) {}
+
+    /**
+     * Enumerates the block entities within {@code radius} of {@code center}.
+     *
+     * <p>One walk, one filter, one cap: the integrated server answers a {@code scan} with this and the
+     * bridge answers {@code server_scan_block_entities} with it, so the two paths cannot disagree
+     * about what counts as a match or how many are serialized.
+     */
+    static BlockEntityScan blockEntities(Level level, BlockPos center, int radius, String lowerFilter) {
+        int minX = center.getX() - radius;
+        int maxX = center.getX() + radius;
+        //? if >=26.1 {
+        /*int minY = Math.max(level.getMinY(), center.getY() - radius);
+        int maxY = Math.min(level.getMinY() + level.getHeight() - 1, center.getY() + radius);
+        *///? } else {
+        int minY = Math.max(level.getMinBuildHeight(), center.getY() - radius);
+        int maxY = Math.min(level.getMaxBuildHeight() - 1, center.getY() + radius);
+        //? }
+        int minZ = center.getZ() - radius;
+        int maxZ = center.getZ() + radius;
+
+        HolderLookup.Provider registries = level.registryAccess();
+        List<BlockSample> samples = new ArrayList<>();
+        int total = 0;
+        var chunkSource = level.getChunkSource();
+        for (int chunkX = minX >> 4; chunkX <= (maxX >> 4); chunkX++) {
+            int chunkMinX = Math.max(minX, chunkX << 4);
+            int chunkMaxX = Math.min(maxX, (chunkX << 4) + 15);
+            for (int chunkZ = minZ >> 4; chunkZ <= (maxZ >> 4); chunkZ++) {
+                LevelChunk chunk = chunkSource.getChunkNow(chunkX, chunkZ);
+                if (chunk == null) {
+                    continue;
+                }
+                int chunkMinZ = Math.max(minZ, chunkZ << 4);
+                int chunkMaxZ = Math.min(maxZ, (chunkZ << 4) + 15);
+                for (Map.Entry<BlockPos, BlockEntity> entry : chunk.getBlockEntities().entrySet()) {
+                    BlockPos pos = entry.getKey();
+                    if (pos.getX() < chunkMinX || pos.getX() > chunkMaxX
+                        || pos.getY() < minY || pos.getY() > maxY
+                        || pos.getZ() < chunkMinZ || pos.getZ() > chunkMaxZ) {
+                        continue;
+                    }
+                    BlockState state = chunk.getBlockState(pos);
+                    ResourceLocation typeId = BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(entry.getValue().getType());
+                    if (!matchesBlockEntityFilter(state, typeId, lowerFilter)) {
+                        continue;
+                    }
+                    total++;
+                    if (samples.size() < MAX_BLOCK_ENTITIES) {
+                        samples.add(block(pos, state, entry.getValue(), registries));
+                    }
+                }
+            }
+        }
+        return new BlockEntityScan(samples, total);
     }
 
     static JsonObject blockJson(BlockSample sample, boolean includeTags, boolean includeBlockEntity) {

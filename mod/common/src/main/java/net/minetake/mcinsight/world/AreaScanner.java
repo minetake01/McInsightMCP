@@ -250,18 +250,15 @@ public final class AreaScanner {
 
         Map<Block, Integer> counts = new LinkedHashMap<>();
         Map<Block, Boolean> blockFilterMemo = new IdentityHashMap<>();
-        List<WorldData.BlockSample> blockEntities = new ArrayList<>();
-        int totalBlockEntities = 0;
         List<WorldData.BlockSample> matchedBlocks = new ArrayList<>();
         int totalMatchedBlocks = 0;
         HolderLookup.Provider registries = level.registryAccess();
         int beRadius = Math.min(radius, BlockEntityPart.maxSyncBlockRadius());
-        int beMinX = center.getX() - beRadius;
-        int beMaxX = center.getX() + beRadius;
-        int beMinY = Math.max(minY, center.getY() - beRadius);
-        int beMaxY = Math.min(maxY, center.getY() + beRadius);
-        int beMinZ = center.getZ() - beRadius;
-        int beMaxZ = center.getZ() + beRadius;
+        // One enumeration for both transports: the client asks the owner for the same square, and
+        // the integrated server answers it with the same filter and cap.
+        WorldData.BlockEntityScan blockEntityScan = captureBlockEntityContents
+            ? WorldData.blockEntities(level, center, beRadius, filter)
+            : new WorldData.BlockEntityScan(List.of(), 0);
 
         var chunkSource = level.getChunkSource();
         for (int chunkX = minX >> 4; chunkX <= (maxX >> 4); chunkX++) {
@@ -274,26 +271,6 @@ public final class AreaScanner {
                 }
                 int chunkMinZ = Math.max(minZ, chunkZ << 4);
                 int chunkMaxZ = Math.min(maxZ, (chunkZ << 4) + 15);
-
-                if (captureBlockEntityContents) {
-                    for (Map.Entry<BlockPos, BlockEntity> entry : chunk.getBlockEntities().entrySet()) {
-                        BlockPos pos = entry.getKey();
-                        if (pos.getX() < beMinX || pos.getX() > beMaxX
-                            || pos.getY() < beMinY || pos.getY() > beMaxY
-                            || pos.getZ() < beMinZ || pos.getZ() > beMaxZ) {
-                            continue;
-                        }
-                        BlockState state = chunk.getBlockState(pos);
-                        ResourceLocation typeId = BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(entry.getValue().getType());
-                        if (!WorldData.matchesBlockEntityFilter(state, typeId, filter)) {
-                            continue;
-                        }
-                        totalBlockEntities++;
-                        if (blockEntities.size() < WorldData.MAX_BLOCK_ENTITIES) {
-                            blockEntities.add(WorldData.block(pos, state, entry.getValue(), registries));
-                        }
-                    }
-                }
 
                 LevelChunkSection[] sections = chunk.getSections();
                 for (int sectionY = minY >> 4; sectionY <= (maxY >> 4); sectionY++) {
@@ -350,8 +327,8 @@ public final class AreaScanner {
         return new ScanCapture(
             Versioned.dimensionId(level),
             blockCounts,
-            blockEntities,
-            totalBlockEntities,
+            blockEntityScan.samples(),
+            blockEntityScan.total(),
             matchedBlocks,
             totalMatchedBlocks,
             entities,

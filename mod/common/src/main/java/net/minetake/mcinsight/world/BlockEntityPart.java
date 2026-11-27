@@ -134,54 +134,12 @@ public final class BlockEntityPart {
     }
 
     private static ScanResult captureAround(ServerPlayer requester, int radius, String filter) {
-        Level level = requester.level();
-        HolderLookup.Provider registries = level.registryAccess();
-        BlockPos center = requester.blockPosition();
-
-        int minX = center.getX() - radius;
-        int maxX = center.getX() + radius;
-        //? if >=26.1 {
-        /*int minY = Math.max(level.getMinY(), center.getY() - radius);
-        int maxY = Math.min(level.getMinY() + level.getHeight() - 1, center.getY() + radius);
-        *///? } else {
-        int minY = Math.max(level.getMinBuildHeight(), center.getY() - radius);
-        int maxY = Math.min(level.getMaxBuildHeight() - 1, center.getY() + radius);
-        //? }
-        int minZ = center.getZ() - radius;
-        int maxZ = center.getZ() + radius;
-
-        List<WorldData.BlockSample> samples = new ArrayList<>();
-        int total = 0;
-        var chunkSource = level.getChunkSource();
-        for (int chunkX = minX >> 4; chunkX <= (maxX >> 4); chunkX++) {
-            int chunkMinX = Math.max(minX, chunkX << 4);
-            int chunkMaxX = Math.min(maxX, (chunkX << 4) + 15);
-            for (int chunkZ = minZ >> 4; chunkZ <= (maxZ >> 4); chunkZ++) {
-                LevelChunk chunk = chunkSource.getChunkNow(chunkX, chunkZ);
-                if (chunk == null) {
-                    continue;
-                }
-                int chunkMinZ = Math.max(minZ, chunkZ << 4);
-                int chunkMaxZ = Math.min(maxZ, (chunkZ << 4) + 15);
-                for (Map.Entry<BlockPos, BlockEntity> entry : chunk.getBlockEntities().entrySet()) {
-                    BlockPos pos = entry.getKey();
-                    if (pos.getX() < chunkMinX || pos.getX() > chunkMaxX
-                        || pos.getY() < minY || pos.getY() > maxY
-                        || pos.getZ() < chunkMinZ || pos.getZ() > chunkMaxZ) {
-                        continue;
-                    }
-                    BlockState state = chunk.getBlockState(pos);
-                    ResourceLocation typeId = BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(entry.getValue().getType());
-                    if (!WorldData.matchesBlockEntityFilter(state, typeId, filter)) {
-                        continue;
-                    }
-                    total++;
-                    if (samples.size() < WorldData.MAX_BLOCK_ENTITIES) {
-                        samples.add(WorldData.block(pos, state, entry.getValue(), registries));
-                    }
-                }
-            }
-        }
-        return new ScanResult(samples, total);
+        WorldData.BlockEntityScan scan = WorldData.blockEntities(
+            requester.level(),
+            requester.blockPosition(),
+            radius,
+            filter
+        );
+        return new ScanResult(scan.samples(), scan.total());
     }
 }
