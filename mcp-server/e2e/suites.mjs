@@ -304,6 +304,8 @@ const SUITES = {
       await r.check('trades are answered locally where the client holds the listings', async () => {
         const res = page(ok(await mcp.call('mc_query_world_data', { kind: 'trades', limit: 5 })), 'trades');
         expect(Array.isArray(res.trades), 'trades page missing');
+        // An empty page would also be an array; the point is that the client rolled offers itself.
+        expect(res.trades.length > 0, 'no trade offers were rolled locally');
       });
     } else {
       await r.check('trades fail with SERVER_MOD_REQUIRED where only the owner can roll them', async () => {
