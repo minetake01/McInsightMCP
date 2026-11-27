@@ -8,7 +8,6 @@ import net.minetake.mcinsight.api.InsightError;
 import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.api.Params;
 import net.minetake.mcinsight.api.RequestContext;
-import net.minetake.mcinsight.cache.CacheGenerations;
 import net.minetake.mcinsight.cache.GenerationalCache;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
 import net.minetake.mcinsight.compat.ViewerRegistry;
@@ -33,7 +32,8 @@ public final class StatusHandler {
 
     private static final long MAIN_THREAD_TIMEOUT_MS = 5_000L;
 
-    private static final GenerationalCache<JsonArray> MODS = new GenerationalCache<>(CacheGenerations::data);
+    private static final GenerationalCache<JsonArray> MODS =
+        new GenerationalCache<>(GenerationalCache.Scope.DATA);
 
     private StatusHandler() {}
 

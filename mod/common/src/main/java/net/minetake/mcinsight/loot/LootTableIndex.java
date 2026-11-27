@@ -6,7 +6,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import net.minetake.mcinsight.api.ItemFilter;
-import net.minetake.mcinsight.cache.CacheGenerations;
 import net.minetake.mcinsight.cache.GenerationalCache;
 import net.minetake.mcinsight.data.DataPackView;
 import net.minetake.mcinsight.data.LootTableSource;
@@ -24,7 +23,8 @@ public final class LootTableIndex {
 
     private static final int MAX_REFERENCE_HOPS = 3;
 
-    private static final GenerationalCache<List<Table>> CACHE = new GenerationalCache<>(CacheGenerations::data);
+    private static final GenerationalCache<List<Table>> CACHE =
+        new GenerationalCache<>(GenerationalCache.Scope.DATA);
 
     /** One loaded table and the drops its JSON declares. */
     public record Table(
