@@ -14,22 +14,36 @@ import net.minecraft.server.MinecraftServer;
  * <p>Reads MinecraftServer.getTickTimesNanos() on demand without registering per-tick listeners.
  * Traces are bound to the thread that started the request, so bridged requests are measured as
  * well as loopback ones.
+ *
+ * <p>Measurements are keyed by endpoint id and split by transport, so "the same endpoint over HTTP"
+ * and "the same endpoint over the bridge" stay separate numbers under one name instead of two
+ * different key spaces (a path and a {@code /bridge/} name).
  */
 public final class PerfMetrics {
 
+    /** How the request reached the mod; the same endpoint is measured separately per transport. */
+    public enum Transport {
+        HTTP,
+        BRIDGE
+    }
+
     public static final class RequestTrace {
-        final String endpoint;
+        final Transport transport;
+        String endpoint;
         final long startNs;
         long mainThreadNs;
         boolean cacheHit;
         boolean knownEndpoint;
 
-        RequestTrace(String endpoint, long startNs) {
+        RequestTrace(Transport transport, String endpoint, long startNs) {
+            this.transport = transport;
             this.endpoint = endpoint;
             this.startNs = startNs;
         }
 
-        public void markKnownEndpoint() {
+        /** Names the endpoint the request resolved to; an unknown path is never recorded. */
+        public void markKnownEndpoint(String endpointId) {
+            this.endpoint = endpointId;
             this.knownEndpoint = true;
         }
 
@@ -47,7 +61,7 @@ public final class PerfMetrics {
         }
     }
 
-    private static final class EndpointStats {
+    private static final class TransportStats {
         final LongAdder count = new LongAdder();
         final LongAdder cacheHits = new LongAdder();
         final LongAdder totalNs = new LongAdder();
@@ -67,6 +81,27 @@ public final class PerfMetrics {
                 maxMainThreadNs.accumulateAndGet(mainElapsedNs, Math::max);
             }
         }
+
+        JsonObject json() {
+            long count = this.count.sum();
+            JsonObject out = new JsonObject();
+            out.addProperty("count", count);
+            out.addProperty("cacheHits", cacheHits.sum());
+            out.addProperty("avgTotalUs", round1((totalNs.sum() / (double) count) / 1_000.0));
+            out.addProperty("maxTotalUs", maxTotalNs.get() / 1_000L);
+            out.addProperty("avgMainThreadUs", round1((mainThreadNs.sum() / (double) count) / 1_000.0));
+            out.addProperty("maxMainThreadUs", maxMainThreadNs.get() / 1_000L);
+            return out;
+        }
+    }
+
+    private static final class EndpointStats {
+        final TransportStats http = new TransportStats();
+        final TransportStats bridge = new TransportStats();
+
+        TransportStats forTransport(Transport transport) {
+            return transport == Transport.BRIDGE ? bridge : http;
+        }
     }
 
     private static final ThreadLocal<RequestTrace> CURRENT_TRACE = new ThreadLocal<>();
@@ -74,8 +109,8 @@ public final class PerfMetrics {
 
     private PerfMetrics() {}
 
-    public static RequestTrace beginRequest(String endpoint) {
-        RequestTrace trace = new RequestTrace(endpoint, System.nanoTime());
+    public static RequestTrace beginRequest(Transport transport, String endpoint) {
+        RequestTrace trace = new RequestTrace(transport, endpoint, System.nanoTime());
         CURRENT_TRACE.set(trace);
         return trace;
     }
@@ -102,7 +137,7 @@ public final class PerfMetrics {
         long totalElapsedNs = Math.max(0L, System.nanoTime() - trace.startNs);
         if (trace.knownEndpoint) {
             EndpointStats stats = STATS.computeIfAbsent(trace.endpoint, k -> new EndpointStats());
-            stats.record(totalElapsedNs, trace.mainThreadNs, trace.cacheHit);
+            stats.forTransport(trace.transport).record(totalElapsedNs, trace.mainThreadNs, trace.cacheHit);
         }
         return totalElapsedNs;
     }
@@ -148,16 +183,16 @@ public final class PerfMetrics {
         JsonObject endpoints = new JsonObject();
         for (Map.Entry<String, EndpointStats> e : STATS.entrySet()) {
             EndpointStats s = e.getValue();
-            long count = s.count.sum();
-            if (count == 0L) continue;
-            JsonObject eo = new JsonObject();
-            eo.addProperty("count", count);
-            eo.addProperty("cacheHits", s.cacheHits.sum());
-            eo.addProperty("avgTotalUs", round1((s.totalNs.sum() / (double) count) / 1_000.0));
-            eo.addProperty("maxTotalUs", s.maxTotalNs.get() / 1_000L);
-            eo.addProperty("avgMainThreadUs", round1((s.mainThreadNs.sum() / (double) count) / 1_000.0));
-            eo.addProperty("maxMainThreadUs", s.maxMainThreadNs.get() / 1_000L);
-            endpoints.add(e.getKey(), eo);
+            JsonObject byTransport = new JsonObject();
+            if (s.http.count.sum() > 0L) {
+                byTransport.add("http", s.http.json());
+            }
+            if (s.bridge.count.sum() > 0L) {
+                byTransport.add("bridge", s.bridge.json());
+            }
+            if (byTransport.size() > 0) {
+                endpoints.add(e.getKey(), byTransport);
+            }
         }
         out.add("endpoints", endpoints);
         return out;

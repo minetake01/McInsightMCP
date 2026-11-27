@@ -93,7 +93,10 @@ public final class ServerPacketHandler {
         }
 
         WORKER.execute(() -> {
-            PerfMetrics.RequestTrace trace = PerfMetrics.beginRequest("/bridge/" + payload.endpoint());
+            PerfMetrics.RequestTrace trace = PerfMetrics.beginRequest(
+                PerfMetrics.Transport.BRIDGE,
+                payload.endpoint()
+            );
             JsonObject response;
             try {
                 if (sender.hasDisconnected()) {
@@ -130,7 +133,7 @@ public final class ServerPacketHandler {
                 "Unsupported McInsight remote endpoint: " + endpointId
             );
         }
-        trace.markKnownEndpoint();
+        trace.markKnownEndpoint(endpoint.id());
         Params params = Params.fromJsonText(paramsJson);
         return InsightDispatcher.dispatch(endpoint, RequestContext.forPlayer(executor, sender), params);
     }

@@ -101,7 +101,7 @@ public final class InsightHttpServer {
 
     private void handleRequest(HttpExchange exchange) throws IOException {
         String path = exchange.getRequestURI().getPath();
-        PerfMetrics.RequestTrace trace = PerfMetrics.beginRequest(path);
+        PerfMetrics.RequestTrace trace = PerfMetrics.beginRequest(PerfMetrics.Transport.HTTP, path);
         try {
             if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
                 sendJson(exchange, JsonCodec.errorObject(InsightError.METHOD_NOT_ALLOWED, null), trace);
@@ -123,7 +123,7 @@ public final class InsightHttpServer {
                     InsightError.UNSUPPORTED_ENDPOINT, "Unknown endpoint: " + path), trace);
                 return;
             }
-            trace.markKnownEndpoint();
+            trace.markKnownEndpoint(endpoint.id());
 
             Params params = Params.fromQueryString(exchange.getRequestURI().getRawQuery());
             JsonObject response = InsightDispatcher.dispatch(
