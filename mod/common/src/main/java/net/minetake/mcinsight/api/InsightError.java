@@ -31,6 +31,7 @@ public enum InsightError {
     DATA_UNAVAILABLE(503, "The requested data is not available in the current session."),
     SERVER_MOD_REQUIRED(503, "The server does not run McInsight, so server-side data cannot be read."),
     VIEWER_UNAVAILABLE(503, "The requested recipe viewer is not active."),
+    VIEWER_CANNOT_RENDER(503, "The requested recipe viewer is active but cannot draw a recipe."),
     REMOTE_TIMEOUT(504, "The server did not answer in time."),
     REMOTE_ERROR(502, "The server failed to answer the request."),
     INTERNAL_ERROR(500, "Unexpected failure.");

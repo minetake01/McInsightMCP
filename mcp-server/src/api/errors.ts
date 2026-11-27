@@ -26,6 +26,7 @@ export const INSIGHT_ERROR_CODES = [
   'DATA_UNAVAILABLE',
   'SERVER_MOD_REQUIRED',
   'VIEWER_UNAVAILABLE',
+  'VIEWER_CANNOT_RENDER',
   'REMOTE_TIMEOUT',
   'REMOTE_ERROR',
   'INTERNAL_ERROR',
@@ -61,4 +62,27 @@ export interface QueryFailure {
 
 export function isInsightErrorCode(value: string): value is InsightErrorCode {
   return (INSIGHT_ERROR_CODES as readonly string[]).includes(value);
+}
+
+/**
+ * Codes that describe the request itself, not the environment it ran in.
+ *
+ * <p>A composite answer reports what it could not read; a malformed request is not something a part
+ * could have read, so every tool must fail the whole call instead of listing the same mistake once
+ * per source.
+ */
+const REQUEST_CODES: ReadonlySet<string> = new Set([
+  'INVALID_PARAMETER',
+  'INVALID_QUERY',
+  'INVALID_ID',
+  'INVALID_KIND',
+  'INVALID_SOURCE',
+  'INVALID_CLASS',
+  'UNSUPPORTED_ENDPOINT',
+  'METHOD_NOT_ALLOWED',
+  'UNAUTHORIZED',
+]);
+
+export function isRequestFailure(code: string): boolean {
+  return REQUEST_CODES.has(code);
 }
