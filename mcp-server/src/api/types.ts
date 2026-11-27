@@ -51,7 +51,6 @@ export interface StatusIntegrations {
   patchouliLoaded: boolean;
   guidemeLoaded: boolean;
   ftbQuestsLoaded: boolean;
-  createLoaded: boolean;
   serverSyncAvailable: boolean;
 }
 

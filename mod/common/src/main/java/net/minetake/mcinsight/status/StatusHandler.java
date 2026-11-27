@@ -134,7 +134,6 @@ public final class StatusHandler {
         integrations.addProperty("patchouliLoaded", Services.PLATFORM.isModLoaded("patchouli"));
         integrations.addProperty("guidemeLoaded", Services.PLATFORM.isModLoaded("guideme"));
         integrations.addProperty("ftbQuestsLoaded", Services.PLATFORM.isModLoaded("ftbquests"));
-        integrations.addProperty("createLoaded", Services.PLATFORM.isModLoaded("create"));
         integrations.addProperty("serverSyncAvailable", ServerSync.isAvailable());
         return integrations;
     }

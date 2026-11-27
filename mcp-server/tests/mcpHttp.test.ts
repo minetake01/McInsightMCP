@@ -97,7 +97,6 @@ const STATUS_BODY = {
     patchouliLoaded: true,
     guidemeLoaded: false,
     ftbQuestsLoaded: false,
-    createLoaded: true,
     serverSyncAvailable: false,
   },
   modCount: 1,

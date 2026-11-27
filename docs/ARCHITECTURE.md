@@ -399,7 +399,7 @@ read, not where the readable parts came from.
 (the language the player at this client reads), and when a world is loaded `dimension`, `difficulty`, `dayTime`, `gameTime`,
 `isRaining`, `isThundering`. `integrations` carries `recipeViewers` (every registered adapter mapped
 to whether it can answer now), `activeRecipeViewers`, `patchouliLoaded`, `guidemeLoaded`,
-`ftbQuestsLoaded`, `createLoaded`, `serverSyncAvailable`. `modCount` is always present; `mods` only
+`ftbQuestsLoaded`, `serverSyncAvailable`. `modCount` is always present; `mods` only
 with `includeMods=true`.
 
 **`mods`** — `modsDir`, `count`, `mods[]` with `id`, `name`, `version`, optional `description`,
