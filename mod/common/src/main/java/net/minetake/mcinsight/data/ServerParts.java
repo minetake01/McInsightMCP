@@ -11,11 +11,14 @@ import net.minetake.mcinsight.api.RequestContext;
 /**
  * Reads the server-owned parts of a composite answer.
  *
- * <p>A composite handler calls this for the fragments only the world owner can see. On a single
- * player world the integrated server is already the source, so nothing is fetched; across a network
- * the fragment comes over the bridge or is reported as missing. Either way the handler keeps one
- * code path, and the caller is told which fragment is absent rather than receiving a silently
- * thinner answer.
+ * <p>A composite handler calls this for what only the world owner can see. On a single player world
+ * the integrated server is already the source, so nothing is fetched; across a network the fragment
+ * comes over the bridge or is reported as missing. Either way the handler keeps one code path, and
+ * the caller is told which fragment is absent rather than receiving a silently thinner answer.
+ *
+ * <p>A part may be the whole answer: a version whose data only exists on the world owner (26.x trade
+ * definitions, for example) answers its endpoint by fetching one fragment. {@link #fetchOrFail} is
+ * for exactly that case, where there is no local half to fall back on.
  */
 public final class ServerParts {
 
@@ -50,5 +53,21 @@ public final class ServerParts {
             partial.add(part.id(), e.error(), e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Fetches a fragment that is the whole answer, so a failure is the answer's failure.
+     *
+     * <p>Without a local half there is nothing to record as missing: an unreachable part means the
+     * request could not be answered at all, and the part's own code is what the caller must see.
+     */
+    public JsonObject fetchOrFail(InsightEndpoint part, Params params) {
+        if (localIsAuthoritative()) {
+            throw new InsightException(
+                InsightError.INTERNAL_ERROR,
+                part.id() + " is a server-owned answer and this side owns the world; it must be built locally."
+            );
+        }
+        return ServerSync.request(part, params);
     }
 }

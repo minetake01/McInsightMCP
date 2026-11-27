@@ -65,5 +65,6 @@ public final class InsightHandlers {
         InsightDispatcher.register(InsightEndpoint.SERVER_RECIPES_TYPES, RecipeCollector::serverTypes);
         InsightDispatcher.register(InsightEndpoint.SERVER_RECIPES_QUERY, RecipeCollector::serverQuery);
         InsightDispatcher.register(InsightEndpoint.SERVER_PLAYER_ENDER_CHEST, PlayerStateCollector::serverEnderChest);
+        InsightDispatcher.register(InsightEndpoint.SERVER_TRADES_QUERY, TradeCollector::serverQuery);
     }
 }

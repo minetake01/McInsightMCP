@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
+import net.minetake.mcinsight.api.InsightDispatcher;
 import net.minetake.mcinsight.api.InsightEndpoint;
 import net.minetake.mcinsight.api.InsightError;
 import net.minetake.mcinsight.api.InsightException;
@@ -69,6 +70,10 @@ import org.apache.commons.lang3.tuple.Pair;
  * and level, rolled against a loot context. That is a replaced subsystem rather than a renamed one,
  * so {@link #readTrades} asks the same question of the two systems and only the matching answer is
  * compiled; everything that reports a trade is shared.
+ *
+ * <p>Where the tables can be rolled differs too: a 1.21.1 client holds the listings itself, while a
+ * 26.x client holds neither the trade sets nor a server level, so that version answers the endpoint
+ * by fetching the whole page from the world owner as one part.
  *
  * <p>Either way the offer is produced by the game, not by reading its fields: those listings and
  * registry entries are the definition of what a trade is, including which variant a villager type
@@ -131,7 +136,16 @@ public final class TradeCollector {
     private record TradeIndex(List<Trade> trades) {}
 
     public static JsonObject query(RequestContext ctx, Params p) throws Exception {
-        int limit = InsightEndpoint.TRADES_QUERY.limit(p);
+        return answer(ctx, p, InsightEndpoint.TRADES_QUERY);
+    }
+
+    /** Answers the bridge-only part: the whole trade page, built where the world lives. */
+    public static JsonObject serverQuery(RequestContext ctx, Params p) throws Exception {
+        return answer(ctx, p, InsightEndpoint.SERVER_TRADES_QUERY);
+    }
+
+    private static JsonObject answer(RequestContext ctx, Params p, InsightEndpoint endpoint) throws Exception {
+        int limit = endpoint.limit(p);
         int offset = p.offset();
         String query = lower(p.string("q"));
         String profession = lower(p.string("profession"));
@@ -143,6 +157,17 @@ public final class TradeCollector {
         }
 
         TradeIndex index = INDEX.get(() -> build(ctx.executor()));
+        if (index == null) {
+            if (endpoint == InsightEndpoint.SERVER_TRADES_QUERY) {
+                throw new InsightException(
+                    InsightError.DATA_UNAVAILABLE,
+                    "Trade definitions require an active server level."
+                );
+            }
+            // 26.x keeps its trade definitions, and the level that rolls them, on the world owner.
+            // There is no local half, so the whole page is the server part.
+            return InsightDispatcher.parts(ctx).fetchOrFail(InsightEndpoint.SERVER_TRADES_QUERY, p);
+        }
 
         JsonArray entries = new JsonArray();
         int total = 0;
@@ -213,9 +238,16 @@ public final class TradeCollector {
 
     private static TradeIndex buildOnGameThread(MainThreadExecutor executor) {
         Level level = GameAccess.getLevel(executor);
+        if (level == null) {
+            throw new InsightException(InsightError.NO_WORLD, "No world is loaded in this session.");
+        }
         HolderLookup.Provider registries = GameAccess.getRegistryAccess(executor);
         RegistryOps<JsonElement> ops = GameAccess.jsonOps(registries);
         List<TradeOffer> offers = readTrades(level, registries, ops);
+        if (offers == null) {
+            // This version rolls trades only where the world lives; the caller fetches the page.
+            return null;
+        }
         List<Trade> trades = new ArrayList<>(offers.size());
         for (TradeOffer offer : offers) {
             trades.add(tradeOf(offer));
@@ -223,7 +255,7 @@ public final class TradeCollector {
         return new TradeIndex(List.copyOf(trades));
     }
 
-    /** Every trade the running game knows about, as offers. */
+    /** Every trade the running game knows about, or null when this version has no local source. */
     private static List<TradeOffer> readTrades(Level level, HolderLookup.Provider registries, RegistryOps<JsonElement> ops) {
         //? if >=26.1 {
         /*return readRegistryTrades(level, registries, ops);
@@ -441,10 +473,9 @@ public final class TradeCollector {
     //? if >=26.1 {
     /*private static List<TradeOffer> readRegistryTrades(Level level, HolderLookup.Provider registries, RegistryOps<JsonElement> ops) {
         if (!(level instanceof ServerLevel serverLevel) || registries == null) {
-            throw new InsightException(
-                InsightError.DATA_UNAVAILABLE,
-                "Trade definitions require an active server level."
-            );
+            // A 26.x client holds neither the trade sets nor the level that rolls them, so there is
+            // no local source at all: the endpoint fetches the whole page as a server part.
+            return null;
         }
         HolderLookup.RegistryLookup<TradeSet> tradeSets = registries.lookupOrThrow(Registries.TRADE_SET);
         List<Holder.Reference<VillagerType>> villagerTypes =
