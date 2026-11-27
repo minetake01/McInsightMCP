@@ -31,6 +31,9 @@ export type PageOf<Key extends string, Item> = PageEnvelope & {
   [P in Key]: Item[];
 };
 
+/** The envelope fields without `ok`, for a page nested inside a larger answer (a recipe bucket). */
+export type PageFields = Omit<PageEnvelope, 'ok'>;
+
 /** What a missing composite part looks like (`PartialData`). */
 export interface PartialResult {
   partial?: true;

@@ -10,6 +10,7 @@
 
 import { limitBounds, requestEndpoint } from '../api/endpoints.js';
 import type {
+  PageFields,
   RecipesQueryResponse,
   RecipesTypesResponse,
   VanillaRecipe,
@@ -32,13 +33,7 @@ export interface EnrichedVanillaRecipe extends VanillaRecipe {
 
 export type EnrichedViewerRecipe = ViewerRecipe;
 
-export interface EnrichedPage {
-  offset: number;
-  totalKnown: boolean;
-  total?: number;
-  returned: number;
-  hasMore: boolean;
-}
+export type EnrichedPage = PageFields;
 
 export interface EnrichedVanillaBucket extends EnrichedPage {
   recipes: EnrichedVanillaRecipe[];

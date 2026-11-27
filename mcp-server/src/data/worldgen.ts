@@ -8,7 +8,14 @@
  */
 
 import { requestEndpoint } from '../api/endpoints.js';
-import type { WorldgenEntry, WorldgenKind, WorldgenResponse, WorldgenSummaryResponse } from '../api/types.js';
+import { carryPage } from '../api/page.js';
+import type {
+  PageEnvelope,
+  WorldgenEntry,
+  WorldgenKind,
+  WorldgenResponse,
+  WorldgenSummaryResponse,
+} from '../api/types.js';
 import type { McHttpClient } from '../client/mcClient.js';
 import { parseNativeWorldgen, type NativeWorldgenSummary } from '../parsers/nativeParsers.js';
 import { retainedRawJson } from '../parsers/retention.js';
@@ -18,14 +25,8 @@ export interface EnrichedWorldgenEntry extends Omit<WorldgenEntry, 'rawJson'> {
   rawJson?: unknown;
 }
 
-export interface EnrichedWorldgenResponse {
-  ok: true;
+export interface EnrichedWorldgenResponse extends PageEnvelope {
   kind: WorldgenKind;
-  offset: number;
-  totalKnown: boolean;
-  total?: number;
-  returned: number;
-  hasMore: boolean;
   entries: EnrichedWorldgenEntry[];
 }
 
@@ -56,16 +57,10 @@ export function enrichWorldgenEntry(entry: WorldgenEntry, includeRaw: boolean): 
 }
 
 export function enrichWorldgenResponse(raw: WorldgenResponse, includeRaw: boolean): EnrichedWorldgenResponse {
-  return {
-    ok: true,
+  return carryPage(raw, {
     kind: raw.kind,
-    offset: raw.offset,
-    totalKnown: raw.totalKnown,
-    ...(raw.totalKnown && raw.total !== undefined ? { total: raw.total } : {}),
-    returned: raw.returned,
-    hasMore: raw.hasMore,
     entries: raw.entries.map((entry) => enrichWorldgenEntry(entry, includeRaw)),
-  };
+  });
 }
 
 /**

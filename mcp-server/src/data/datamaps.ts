@@ -9,7 +9,8 @@
  */
 
 import { requestEndpoint } from '../api/endpoints.js';
-import type { DataMapEntry, DataMapsResponse } from '../api/types.js';
+import { carryPage } from '../api/page.js';
+import type { DataMapEntry, DataMapsResponse, PageEnvelope } from '../api/types.js';
 import type { McHttpClient } from '../client/mcClient.js';
 import { retainedRawJson } from '../parsers/retention.js';
 
@@ -17,13 +18,7 @@ export interface EnrichedDataMapEntry extends Omit<DataMapEntry, 'rawJson'> {
   rawJson?: unknown;
 }
 
-export interface EnrichedDataMapsResponse {
-  ok: true;
-  offset: number;
-  totalKnown: boolean;
-  total?: number;
-  returned: number;
-  hasMore: boolean;
+export interface EnrichedDataMapsResponse extends PageEnvelope {
   entries: EnrichedDataMapEntry[];
 }
 
@@ -58,15 +53,9 @@ export function enrichDataMapEntry(entry: DataMapEntry, includeRaw: boolean): En
 }
 
 export function enrichDataMapsResponse(raw: DataMapsResponse, includeRaw: boolean): EnrichedDataMapsResponse {
-  return {
-    ok: true,
-    offset: raw.offset,
-    totalKnown: raw.totalKnown,
-    ...(raw.totalKnown && raw.total !== undefined ? { total: raw.total } : {}),
-    returned: raw.returned,
-    hasMore: raw.hasMore,
+  return carryPage(raw, {
     entries: raw.entries.map((entry) => enrichDataMapEntry(entry, includeRaw)),
-  };
+  });
 }
 
 export async function fetchDataMaps(

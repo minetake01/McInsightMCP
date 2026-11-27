@@ -7,7 +7,8 @@
  */
 
 import { requestEndpoint } from '../api/endpoints.js';
-import type { LootModifierEntry, LootResponse, LootTableEntry } from '../api/types.js';
+import { carryPage } from '../api/page.js';
+import type { LootModifierEntry, LootResponse, LootTableEntry, PageEnvelope } from '../api/types.js';
 import type { McHttpClient } from '../client/mcClient.js';
 import {
   parseNativeLootModifier,
@@ -27,13 +28,7 @@ export interface EnrichedLootModifier extends Omit<LootModifierEntry, 'rawJson'>
   rawJson?: unknown;
 }
 
-export interface EnrichedLootResponse {
-  ok: true;
-  offset: number;
-  totalKnown: boolean;
-  total?: number;
-  returned: number;
-  hasMore: boolean;
+export interface EnrichedLootResponse extends PageEnvelope {
   entries: EnrichedLootTable[];
   totalModifiers?: number;
   lootModifiers?: EnrichedLootModifier[];
@@ -95,20 +90,14 @@ export function enrichLootModifier(entry: LootModifierEntry, includeRaw: boolean
 }
 
 export function enrichLootResponse(raw: LootResponse, includeRaw: boolean): EnrichedLootResponse {
-  const out: EnrichedLootResponse = {
-    ok: true,
-    offset: raw.offset,
-    totalKnown: raw.totalKnown,
-    ...(raw.totalKnown && raw.total !== undefined ? { total: raw.total } : {}),
-    returned: raw.returned,
-    hasMore: raw.hasMore,
-    entries: raw.entries.map((entry) => enrichLootTable(entry, includeRaw)),
+  const lootModifiers = raw.lootModifiers?.map((entry) => enrichLootModifier(entry, includeRaw));
+  return {
+    ...carryPage(raw, {
+      entries: raw.entries.map((entry) => enrichLootTable(entry, includeRaw)),
+    }),
+    ...(raw.totalModifiers !== undefined ? { totalModifiers: raw.totalModifiers } : {}),
+    ...(lootModifiers !== undefined ? { lootModifiers } : {}),
   };
-  if (raw.totalModifiers !== undefined) out.totalModifiers = raw.totalModifiers;
-  if (raw.lootModifiers !== undefined) {
-    out.lootModifiers = raw.lootModifiers.map((entry) => enrichLootModifier(entry, includeRaw));
-  }
-  return out;
 }
 
 export async function fetchLoot(client: McHttpClient, params: LootQueryParams): Promise<LootResponse> {
