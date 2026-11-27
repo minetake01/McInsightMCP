@@ -7,11 +7,16 @@
  */
 
 import { requestEndpoint } from '../api/endpoints.js';
-import type { ClassIntrospectResponse, McStatusResponse } from '../api/types.js';
+import type { McStatusResponse } from '../api/types.js';
 import type { McHttpClient } from '../client/mcClient.js';
 
 export async function fetchStatus(client: McHttpClient, includeMods: boolean): Promise<McStatusResponse> {
   return requestEndpoint(client, 'status', { includeMods: includeMods || undefined });
+}
+
+/** The mod's own request measurements; `mc_status` attaches them when asked. */
+export async function fetchMetrics(client: McHttpClient): Promise<Record<string, unknown>> {
+  return requestEndpoint(client, 'metrics');
 }
 
 /**
@@ -58,11 +63,4 @@ export async function fetchScan(client: McHttpClient, params: ScanParams): Promi
     radius: params.radius,
     filter: params.filter,
   });
-}
-
-export async function fetchClassIntrospection(
-  client: McHttpClient,
-  className: string,
-): Promise<ClassIntrospectResponse> {
-  return requestEndpoint(client, 'introspect_class', { name: className });
 }

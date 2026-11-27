@@ -1,8 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
-import { requestEndpoint } from '../api/endpoints.js';
 import type { McHttpClient } from '../client/mcClient.js';
-import { fetchLookingAt, fetchPlayer, fetchScan, fetchStatus, filterMods } from '../data/worldState.js';
+import { fetchLookingAt, fetchMetrics, fetchPlayer, fetchScan, fetchStatus, filterMods } from '../data/worldState.js';
 import { toolResult } from './result.js';
 
 const EMPTY_SCHEMA = z.object({});
@@ -19,9 +18,22 @@ const OBSERVE_WORLD_SCHEMA = z.object({
     .optional()
     .default('looking_at')
     .describe('looking_at: raycast crosshair target; area: scan around the player'),
-  maxDistance: z.number().min(1).max(64).optional().default(16).describe('Raycast distance in blocks (mode=looking_at)'),
+  maxDistance: z
+    .number()
+    .min(1)
+    .optional()
+    .default(16)
+    .describe('Raycast distance in blocks (mode=looking_at); the mod clamps to its maximum and reports the applied value'),
   includeFluids: z.boolean().optional().default(false).describe('Include fluid hits in the raycast (mode=looking_at)'),
-  radius: z.number().int().min(1).max(32).optional().default(8).describe('Scan radius in blocks (mode=area)'),
+  radius: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .default(8)
+    .describe(
+      'Scan radius in blocks (mode=area); the mod clamps to the operator maximum and answers the applied radius plus requestedRadius',
+    ),
   filter: z
     .string()
     .optional()
@@ -46,7 +58,7 @@ export function registerWorldStateTools(server: McpServer, mcClient: McHttpClien
       if (!includeMetrics) {
         return filtered;
       }
-      const metrics = await requestEndpoint(mcClient, 'metrics', {});
+      const metrics = await fetchMetrics(mcClient);
       return { ...filtered, metrics };
     }),
   );
