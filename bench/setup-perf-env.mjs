@@ -6,7 +6,24 @@ const repoRoot = path.resolve(import.meta.dirname, '..');
 const require = createRequire(path.join(repoRoot, 'mcp-server', 'package.json'));
 const AdmZip = require('adm-zip');
 
-const PERF_RUN_DIR = path.join(repoRoot, 'mod', 'neoforge', 'runs', 'client');
+/**
+ * The node whose client receives the perf world.
+ *
+ * <p>The datapack below is written in the base version's pack format, so the default is the first
+ * entry of `minecraft_versions` (the version the sources are written in). Benching another node is
+ * allowed, but its pack format may differ, so the version is chosen explicitly rather than guessed.
+ */
+async function baseMinecraftVersion() {
+  const properties = await fs.readFile(path.join(repoRoot, 'mod', 'gradle.properties'), 'utf-8');
+  const match = properties.match(/^minecraft_versions\s*=\s*(.+)$/m);
+  if (!match) {
+    throw new Error('mod/gradle.properties declares no minecraft_versions');
+  }
+  return match[1].split(',').map((value) => value.trim()).filter(Boolean)[0];
+}
+
+const MC_VERSION = process.env.MCINSIGHT_MC_VERSION ?? (await baseMinecraftVersion());
+const PERF_RUN_DIR = path.join(repoRoot, 'mod', 'neoforge', 'versions', MC_VERSION, 'runs', 'client');
 const DATAPACK_DIR = path.join(PERF_RUN_DIR, 'saves', 'perf_world', 'datapacks', 'perf_modpack_sim');
 const FTB_QUESTS_DIR = path.join(PERF_RUN_DIR, 'config', 'ftbquests', 'quests', 'chapters');
 const FIXTURE_MODS_DIR = path.join(repoRoot, 'bench', 'fixtures', 'mods');
