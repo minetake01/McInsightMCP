@@ -7,9 +7,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import net.minetake.mcinsight.api.InsightDispatcher;
+import net.minetake.mcinsight.api.InsightEndpoint;
 import net.minetake.mcinsight.api.InsightError;
 import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.api.Params;
+import net.minetake.mcinsight.api.PartialData;
 import net.minetake.mcinsight.api.RequestContext;
 import net.minetake.mcinsight.client.ClientStateAccessor;
 import net.minetake.mcinsight.game.GameAccess;
@@ -113,7 +116,9 @@ public final class PlayerStateCollector {
     public static JsonObject handle(RequestContext ctx, Params p) throws Exception {
         RawPlayerSnapshot snapshot = capture(ctx);
         JsonObject out = serialize(snapshot);
-        attachEnderChest(ctx, snapshot.uuid(), out);
+        PartialData partial = new PartialData();
+        attachEnderChest(ctx, snapshot.uuid(), out, partial);
+        partial.applyTo(out);
         return out;
     }
 
@@ -128,7 +133,12 @@ public final class PlayerStateCollector {
         ), CAPTURE_TIMEOUT_MS);
     }
 
-    private static void attachEnderChest(RequestContext ctx, UUID playerUuid, JsonObject out) throws Exception {
+    private static void attachEnderChest(
+        RequestContext ctx,
+        UUID playerUuid,
+        JsonObject out,
+        PartialData partial
+    ) throws Exception {
         var server = ctx.executor().getActiveServer();
         if (server != null) {
             JsonObject local = ctx.executor().supplyOnGameThread(() -> {
@@ -143,14 +153,10 @@ public final class PlayerStateCollector {
             }
             return;
         }
-        if (net.minetake.mcinsight.data.ServerSync.isAvailable()) {
-            JsonObject remote = net.minetake.mcinsight.data.ServerSync.request(
-                net.minetake.mcinsight.api.InsightEndpoint.SERVER_PLAYER_ENDER_CHEST,
-                Params.EMPTY
-            );
-            if (remote != null && remote.has("items")) {
-                out.add("enderChest", remote);
-            }
+        JsonObject remote = InsightDispatcher.parts(ctx)
+            .fetch(InsightEndpoint.SERVER_PLAYER_ENDER_CHEST, Params.EMPTY, partial);
+        if (remote != null && remote.has("items")) {
+            out.add("enderChest", remote);
         }
     }
 
