@@ -94,7 +94,15 @@ const SUITES = {
       expect(names.length > 0, 'no viewer answered');
       const p = page(res.viewers[names[0]], 'recipes');
       expect(p.totalKnown === false, 'viewer pages are uncounted');
-      expect(p.recipes.every((rec) => rec.inputs.every((slot) => Array.isArray(slot.alternatives))), 'inputs are not slots');
+      const isSlot = (slot) =>
+        typeof slot.count === 'number' &&
+        (typeof slot.tag === 'string' || slot.explicit === true || Array.isArray(slot.alternatives));
+      expect(p.recipes.every((rec) => rec.inputs.every(isSlot) && rec.outputs.every(isSlot)), 'inputs are not slots');
+      expect(
+        p.recipes.every((rec) => rec.action === undefined || rec.action === 'produce' || rec.action === 'transform'),
+        'a recipe reports an action outside produce/transform',
+      );
+      expect(Number.isInteger(p.nextOffset) && p.nextOffset >= p.returned, 'a viewer page has no usable nextOffset');
       return `${names.join(',')}: ${p.returned}`;
     });
     await r.check('listTypes reports viewer categories', async () => {

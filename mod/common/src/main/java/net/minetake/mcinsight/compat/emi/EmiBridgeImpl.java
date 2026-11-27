@@ -26,6 +26,7 @@ import net.minetake.mcinsight.client.ClientStateAccessor;
 import net.minetake.mcinsight.compat.IRecipePainter;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
 import net.minetake.mcinsight.compat.RecipeGraphics;
+import net.minetake.mcinsight.compat.TagNamer;
 import net.minetake.mcinsight.compat.ViewerModel;
 import net.minetake.mcinsight.game.Versioned;
 import net.minetake.mcinsight.serial.JsonCodec;
@@ -389,7 +390,7 @@ public final class EmiBridgeImpl implements IRecipeViewerBridge {
         }
         List<ViewerModel.Slot> slots = new ArrayList<>(ingredients.size());
         for (EmiIngredient ingredient : ingredients) {
-            slots.add(new ViewerModel.Slot(alternatives(ingredient, ops)));
+            slots.add(TagNamer.slot(alternatives(ingredient, ops)));
         }
         return List.copyOf(slots);
     }
@@ -400,7 +401,7 @@ public final class EmiBridgeImpl implements IRecipeViewerBridge {
         }
         List<ViewerModel.Slot> slots = new ArrayList<>(stacks.size());
         for (EmiStack stack : stacks) {
-            slots.add(new ViewerModel.Slot(alternatives(stack, ops)));
+            slots.add(TagNamer.slot(alternatives(stack, ops)));
         }
         return List.copyOf(slots);
     }

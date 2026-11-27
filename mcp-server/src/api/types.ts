@@ -237,10 +237,24 @@ export interface ViewerIngredient {
 
 /** One choice point: the caller needs any single one of the alternatives. */
 export interface ViewerSlot {
-  alternatives: ViewerIngredient[];
+  /** How many things this slot accepts, whichever shape below carries them. */
+  count: number;
+  /** The tag whose members are exactly this slot's alternatives; the list is not repeated. */
+  tag?: string;
+  /** True when the alternatives are too many to list and no tag names them. */
+  explicit?: boolean;
+  /** The first few alternatives of an `explicit` slot. */
+  sample?: ViewerIngredient[];
+  alternatives?: ViewerIngredient[];
 }
 
 export type SlotGranularity = 'slots' | 'flat';
+
+/** One folded row's varying value (`ViewerJson.group`). */
+export interface ViewerVariant {
+  value: unknown;
+  recipeId?: string;
+}
 
 /** A recipe as a viewer shows it (`ViewerJson.recipe`). */
 export interface ViewerRecipe {
@@ -251,15 +265,30 @@ export interface ViewerRecipe {
   recipeId?: string;
   sourceRecipeIds?: string[];
   recipeClass?: string;
+  /** Absent when no output slot names an item. */
+  action?: RecipeAction;
   slotGranularity: SlotGranularity;
   inputs: ViewerSlot[];
   outputs: ViewerSlot[];
   catalysts: ViewerIngredient[];
   workstations: ViewerIngredient[];
+  /**
+   * `in<slot>/<component>` or `out<slot>/<component>`: the one component the folded recipes disagree
+   * on. That slot is shown without it; its values are in `variants`.
+   */
+  variantAxis?: string;
+  variantCount?: number;
+  variants?: ViewerVariant[];
   description?: string[];
   rawJson?: unknown;
   pojoSnapshot?: unknown;
 }
+
+/**
+ * What a recipe does to its items: `transform` when an input slot accepts exactly the items an
+ * output slot emits (anvil, trim, repair, brewing), `produce` otherwise.
+ */
+export type RecipeAction = 'produce' | 'transform';
 
 /** A vanilla `RecipeManager` recipe (`RecipeCollector`). */
 export interface VanillaRecipe {
@@ -267,6 +296,7 @@ export interface VanillaRecipe {
   recipeType: string;
   modId: string;
   recipeClass: string;
+  action?: RecipeAction;
   serializer?: string;
   rawJson?: unknown;
   pojoSnapshot?: unknown;
@@ -274,7 +304,11 @@ export interface VanillaRecipe {
 }
 
 /** A viewer page (`Page.uncounted`): viewer scans cannot afford a full count. */
-export type ViewerRecipePage = PageOf<'recipes', ViewerRecipe> & { totalKnown: false };
+export type ViewerRecipePage = PageOf<'recipes', ViewerRecipe> & {
+  totalKnown: false;
+  /** The offset that continues this page: a folded row stands for several recipes. */
+  nextOffset: number;
+};
 
 export interface ViewerCategory {
   uid: string;

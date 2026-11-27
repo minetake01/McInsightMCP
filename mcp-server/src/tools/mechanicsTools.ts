@@ -50,7 +50,9 @@ const QUERY_ITEM_FLOW_SCHEMA = z.object({
     .enum(['obtain', 'use', 'both'])
     .optional()
     .default('obtain')
-    .describe('obtain: how to craft, drop, or buy it; use: recipes, trades, or data maps that consume it or use it as a catalyst; both: all'),
+    .describe(
+      'obtain: how to craft, drop, or buy it (recipe rows with action=transform start from the item itself, such as anvil enchanting, armour trimming, or brewing); use: recipes, trades, or data maps that consume it or use it as a catalyst; both: all',
+    ),
   sources: z
     .array(z.enum(ITEM_FLOW_SOURCES))
     .optional()
@@ -80,6 +82,13 @@ const QUERY_RECIPES_SCHEMA = z.object({
     .describe('Role the item must occupy in the recipe (catalyst and workstation are viewer-only)'),
   type: z.string().optional().describe('RecipeType or viewer category UID (e.g. "minecraft:smelting")'),
   modId: z.string().optional().describe('Filter by mod namespace'),
+  action: z
+    .enum(['all', 'produce', 'transform'])
+    .optional()
+    .default('all')
+    .describe(
+      'transform: recipes that consume and re-emit the same item (anvil, armour trim, repair, brewing); produce: every other recipe, including those whose output could not be identified',
+    ),
   source: z
     .string()
     .optional()
@@ -91,8 +100,14 @@ const QUERY_RECIPES_SCHEMA = z.object({
     .int()
     .min(1)
     .optional()
-    .describe(`Maximum recipes to return (default ${RECIPE_LIMITS.defaultLimit}, max ${RECIPE_LIMITS.maxLimit})`),
-  offset: z.number().int().min(0).optional().default(0).describe('Number of matching recipes to skip'),
+    .describe(`Maximum recipe rows to return per source (default ${RECIPE_LIMITS.defaultLimit}, max ${RECIPE_LIMITS.maxLimit})`),
+  offset: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .default(0)
+    .describe('Number of matching recipes to skip; continue a viewer page from its nextOffset, since one folded row stands for several recipes'),
 });
 
 const WORLDGEN_KINDS = [
@@ -195,7 +210,12 @@ const QUERY_ADVANCEMENTS_SCHEMA = z.object({
  */
 async function queryRecipeRole(
   mcClient: McHttpClient,
-  params: { item: string; role: 'input' | 'catalyst' | 'output' | 'any'; limit?: number; source?: string },
+  params: {
+    item: string;
+    role: 'input' | 'catalyst' | 'output' | 'any';
+    limit?: number;
+    source?: string;
+  },
   versions: Map<string, string> | undefined,
   includeRaw: boolean,
 ): Promise<EnrichedRecipesResponse> {
@@ -268,6 +288,8 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
               out.recipes = mergeRecipeResponses(inputs, catalysts);
             } else {
               const role = direction === 'obtain' ? 'output' : 'any';
+              // Not narrowed by action: brewing keeps an item's id while changing what it is, so a
+              // transform can be the only way to obtain it. Each row's `action` says which kind it is.
               out.recipes = await queryRecipeRole(mcClient, { item: cleanItem, role, limit }, versions, includeRaw);
             }
           }),
@@ -323,7 +345,7 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: QUERY_RECIPES_SCHEMA,
     },
-    async ({ listTypes, item, role, type, modId, source, includeRaw, limit, offset }) => toolResult(async () => {
+    async ({ listTypes, item, role, type, modId, action, source, includeRaw, limit, offset }) => toolResult(async () => {
       if (listTypes) {
         const [data, versions] = await Promise.all([
           fetchRecipeTypes(mcClient),
@@ -372,6 +394,7 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
           role,
           type,
           mod: modId,
+          action,
           source,
           limit,
           offset,

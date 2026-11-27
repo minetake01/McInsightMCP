@@ -14,6 +14,7 @@ import type {
   RecipesTypesResponse,
   VanillaRecipe,
   ViewerRecipe,
+  ViewerSlot,
 } from '../api/types.js';
 import type { McHttpClient } from '../client/mcClient.js';
 import { listBuiltinModParsers, parseWithBuiltinModParser } from '../parsers/modParsers/index.js';
@@ -45,6 +46,8 @@ export interface EnrichedVanillaBucket extends EnrichedPage {
 
 export interface EnrichedViewerBucket extends EnrichedPage {
   totalKnown: false;
+  /** Absent on a page merged from two queries, which no single offset continues. */
+  nextOffset?: number;
   recipes: EnrichedViewerRecipe[];
 }
 
@@ -61,6 +64,7 @@ export interface RecipeQueryParams {
   type?: string;
   mod?: string;
   source?: 'all' | 'vanilla' | 'viewer' | (string & {});
+  action?: 'all' | 'produce' | 'transform';
   limit?: number;
   offset?: number;
 }
@@ -164,14 +168,22 @@ export function enrichRecipesResponse(
   return out;
 }
 
+/** One slot's identity: its tag when named, otherwise its size and first member. */
+function slotKey(slot: ViewerSlot): string {
+  if (slot.tag) return slot.tag;
+  const first = slot.alternatives?.[0]?.id ?? slot.sample?.[0]?.id ?? '';
+  return `${slot.count}:${first}`;
+}
+
 function recipeIdentity(recipe: EnrichedVanillaRecipe | EnrichedViewerRecipe): string {
   const id = recipe.recipeId;
   if (id) return id;
   const category = 'categoryUid' in recipe ? recipe.categoryUid : '';
   const slotSig = 'inputs' in recipe
     ? JSON.stringify({
-      inputs: recipe.inputs.map((s) => s.alternatives[0]?.id ?? ''),
-      outputs: recipe.outputs.map((s) => s.alternatives[0]?.id ?? ''),
+      inputs: recipe.inputs.map(slotKey),
+      outputs: recipe.outputs.map(slotKey),
+      axis: recipe.variantAxis ?? '',
     })
     : '';
   return `${category}|${recipe.recipeClass ?? ''}|${slotSig}`;
@@ -190,8 +202,8 @@ function mergePage<P extends EnrichedPage & { recipes: R[] }, R extends Enriched
     seen.add(identity);
     recipes.push(recipe);
   }
-  // Two pages of different queries were joined, so no single count describes the result.
-  const { total: _total, ...rest } = existing;
+  // Two pages of different queries were joined, so no single count or offset describes the result.
+  const { total: _total, nextOffset: _nextOffset, ...rest } = existing as P & { nextOffset?: number };
   return {
     ...rest,
     totalKnown: false,
@@ -240,6 +252,7 @@ export async function fetchRecipes(
     type: params.type,
     mod: params.mod,
     source: params.source,
+    action: params.action,
     limit: params.limit,
     offset: params.offset,
   });

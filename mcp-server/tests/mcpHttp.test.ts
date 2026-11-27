@@ -71,6 +71,11 @@ function uncountedPage<Key extends string>(arrayKey: Key, items: unknown[], hasM
   };
 }
 
+/** A viewer recipe page: uncounted, and continued from `nextOffset` because rows may be folded. */
+function viewerRecipePage(recipes: unknown[]) {
+  return { ...uncountedPage('recipes', recipes), nextOffset: recipes.length };
+}
+
 const STATUS_BODY = {
   ok: true,
   modId: 'mcinsight',
@@ -106,8 +111,9 @@ const VIEWER_RECIPE = {
   modId: 'create',
   recipeId: 'create:pressing/iron',
   slotGranularity: 'slots',
-  inputs: [{ alternatives: [{ type: 'item', id: 'minecraft:iron_ingot', displayName: 'Iron Ingot' }] }],
-  outputs: [{ alternatives: [{ type: 'item', id: 'create:iron_sheet', displayName: 'Iron Sheet' }] }],
+  action: 'produce',
+  inputs: [{ count: 1, alternatives: [{ type: 'item', id: 'minecraft:iron_ingot', displayName: 'Iron Ingot' }] }],
+  outputs: [{ count: 1, alternatives: [{ type: 'item', id: 'create:iron_sheet', displayName: 'Iron Sheet' }] }],
   catalysts: [],
   workstations: [],
 };
@@ -326,7 +332,7 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (12 Semantic Tools)', () => {
               3,
             ),
             // Viewer pages: uncounted, slot-based, keyed by viewer name under `viewers`.
-            viewers: { emi: uncountedPage('recipes', [VIEWER_RECIPE]) },
+            viewers: { emi: viewerRecipePage([VIEWER_RECIPE]) },
           }),
         );
         return;
@@ -768,7 +774,7 @@ describe('MCP 2026-07-28 Stateless Streamable HTTP (12 Semantic Tools)', () => {
         res.end(
           JSON.stringify({
             ok: true,
-            viewers: { emi: uncountedPage('recipes', [VIEWER_RECIPE]), rei: uncountedPage('recipes', []) },
+            viewers: { emi: viewerRecipePage([VIEWER_RECIPE]), rei: viewerRecipePage([]) },
           }),
         );
         return;

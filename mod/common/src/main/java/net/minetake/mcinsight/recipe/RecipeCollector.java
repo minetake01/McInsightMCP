@@ -23,6 +23,7 @@ import net.minetake.mcinsight.api.RequestContext;
 import net.minetake.mcinsight.cache.CacheGenerations;
 import net.minetake.mcinsight.cache.GenerationalCache;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
+import net.minetake.mcinsight.compat.RecipeAction;
 import net.minetake.mcinsight.compat.ViewerRegistry;
 import net.minetake.mcinsight.game.GameAccess;
 import net.minetake.mcinsight.game.MainThreadExecutor;
@@ -95,6 +96,8 @@ public final class RecipeCollector {
         final String[] inputItemIdsLower;
         final String[] inputTagsLower;
         final boolean standardVanillaIo;
+        /** What the recipe does to its items, or null when its inputs or output are unknown. */
+        final RecipeAction action;
 
         IndexedRecipe(
             ResourceLocation id,
@@ -109,7 +112,8 @@ public final class RecipeCollector {
             String[] resultTagsLower,
             String[] inputItemIdsLower,
             String[] inputTagsLower,
-            boolean standardVanillaIo
+            boolean standardVanillaIo,
+            RecipeAction action
         ) {
             this.id = id;
             this.recipeIdStr = id.toString();
@@ -128,6 +132,7 @@ public final class RecipeCollector {
             this.inputItemIdsLower = inputItemIdsLower;
             this.inputTagsLower = inputTagsLower;
             this.standardVanillaIo = standardVanillaIo;
+            this.action = action;
         }
     }
 
@@ -227,10 +232,11 @@ public final class RecipeCollector {
         ItemFilter item = ItemFilter.of(ItemQuery.optional(params.string("item")));
         String type = params.string("type");
         String modId = params.string("mod");
+        ActionFilter action = ActionFilter.parse(params.string("action"));
         JsonObject out = new JsonObject();
         out.addProperty("ok", true);
         out.add("vanilla", role.vanillaHasIt()
-            ? queryIndex(index, item, role, type, modId, limit, offset)
+            ? queryIndex(index, item, role, type, modId, action, limit, offset)
             : Page.of("recipes", new JsonArray(), offset, 0));
         return out;
     }
@@ -247,6 +253,8 @@ public final class RecipeCollector {
         ItemFilter item = ItemFilter.of(ItemQuery.optional(params.string("item")));
         String type = params.string("type");
         String modId = params.string("mod");
+        // Parsed before any source is consulted, so a bad value fails whichever source would answer.
+        ActionFilter action = ActionFilter.parse(params.string("action"));
 
         JsonObject out = new JsonObject();
         out.addProperty("ok", true);
@@ -280,13 +288,13 @@ public final class RecipeCollector {
 
         if (index != null) {
             out.add("vanilla", role.vanillaHasIt()
-                ? queryIndex(index, item, role, type, modId, limit, offset)
+                ? queryIndex(index, item, role, type, modId, action, limit, offset)
                 : Page.of("recipes", new JsonArray(), offset, 0));
         } else if (remoteVanilla != null) {
             out.add("vanilla", remoteVanilla);
         }
         if (!bridges.isEmpty()) {
-            out.add("viewers", ViewerQuery.page(bridges, item, role, type, modId, limit, offset));
+            out.add("viewers", ViewerQuery.page(bridges, item, role, type, modId, action, limit, offset));
         }
         return out;
     }
@@ -349,16 +357,20 @@ public final class RecipeCollector {
 
             Set<String> inputIds = new HashSet<>();
             Set<String> inputTags = new HashSet<>();
+            List<Set<String>> inputSlots = new ArrayList<>();
             try {
                 for (Ingredient ing : ingredientsOf(recipe)) {
+                    Set<String> slotIds = new HashSet<>();
                     for (ItemStack stack : stacksOf(ing)) {
                         if (stack.isEmpty()) {
                             continue;
                         }
-                        inputIds.add(BuiltInRegistries.ITEM.getKey(stack.getItem()).toString().toLowerCase(Locale.ROOT));
+                        slotIds.add(BuiltInRegistries.ITEM.getKey(stack.getItem()).toString().toLowerCase(Locale.ROOT));
                         Versioned.itemTags(stack)
                             .forEach(tk -> inputTags.add(tk.location().toString().toLowerCase(Locale.ROOT)));
                     }
+                    inputIds.addAll(slotIds);
+                    inputSlots.add(slotIds);
                 }
             } catch (Exception ignored) {
                 // Unreadable ingredient lists fall back to the encoded-JSON path.
@@ -378,7 +390,8 @@ public final class RecipeCollector {
                 resultTags.toArray(String[]::new),
                 inputIds.toArray(String[]::new),
                 inputTags.toArray(String[]::new),
-                standardVanillaIo
+                standardVanillaIo,
+                RecipeAction.ofSets(inputSlots, resultIdLower)
             );
 
             addToIndex(index, rec);
@@ -494,18 +507,22 @@ public final class RecipeCollector {
         }
         Set<String> inputIds = new HashSet<>();
         Set<String> inputTags = new HashSet<>();
+        Set<String> baseIds = new HashSet<>();
+        Set<String> reagentIds = new HashSet<>();
         if (!baseStack.isEmpty()) {
-            inputIds.add(BuiltInRegistries.ITEM.getKey(baseStack.getItem()).toString().toLowerCase(Locale.ROOT));
+            baseIds.add(BuiltInRegistries.ITEM.getKey(baseStack.getItem()).toString().toLowerCase(Locale.ROOT));
             Versioned.itemTags(baseStack)
                 .forEach(tk -> inputTags.add(tk.location().toString().toLowerCase(Locale.ROOT)));
         }
         for (ItemStack stack : stacksOf(reagent)) {
             if (!stack.isEmpty()) {
-                inputIds.add(BuiltInRegistries.ITEM.getKey(stack.getItem()).toString().toLowerCase(Locale.ROOT));
+                reagentIds.add(BuiltInRegistries.ITEM.getKey(stack.getItem()).toString().toLowerCase(Locale.ROOT));
                 Versioned.itemTags(stack)
                     .forEach(tk -> inputTags.add(tk.location().toString().toLowerCase(Locale.ROOT)));
             }
         }
+        inputIds.addAll(baseIds);
+        inputIds.addAll(reagentIds);
         addToIndex(index, new IndexedRecipe(
             id,
             "minecraft:brewing",
@@ -519,7 +536,8 @@ public final class RecipeCollector {
             resultTags.toArray(String[]::new),
             inputIds.toArray(String[]::new),
             inputTags.toArray(String[]::new),
-            true
+            true,
+            RecipeAction.ofSets(List.of(baseIds, reagentIds), resultIdLower)
         ));
     }
 
@@ -598,6 +616,7 @@ public final class RecipeCollector {
         ViewerQuery.RoleScope scope,
         String type,
         String modId,
+        ActionFilter action,
         int limit,
         int offset
     ) {
@@ -621,6 +640,9 @@ public final class RecipeCollector {
             if (item != null && !matches(index, rec, item, scope)) {
                 continue;
             }
+            if (!action.accepts(rec.action)) {
+                continue;
+            }
             if (total >= offset && page.size() < limit) {
                 page.add(entry(index, rec));
             }
@@ -635,6 +657,9 @@ public final class RecipeCollector {
         entry.addProperty("recipeType", rec.recipeTypeStr);
         entry.addProperty("modId", rec.modId);
         entry.addProperty("recipeClass", rec.recipeClass);
+        if (rec.action != null) {
+            entry.addProperty("action", rec.action.wire());
+        }
         if (rec.serializerStr != null) {
             entry.addProperty("serializer", rec.serializerStr);
         }

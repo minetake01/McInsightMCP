@@ -37,6 +37,7 @@ import net.minetake.mcinsight.client.ClientStateAccessor;
 import net.minetake.mcinsight.compat.IRecipePainter;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
 import net.minetake.mcinsight.compat.RecipeGraphics;
+import net.minetake.mcinsight.compat.TagNamer;
 import net.minetake.mcinsight.compat.ViewerModel;
 import net.minetake.mcinsight.game.Versioned;
 import net.minetake.mcinsight.serial.JsonCodec;
@@ -475,7 +476,7 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
                     continue;
                 }
                 ViewerModel.Slot slot =
-                    new ViewerModel.Slot(ingredients(slotView.getAllIngredientsList(), ingredientManager, ops));
+                    TagNamer.slot(ingredients(slotView.getAllIngredientsList(), ingredientManager, ops));
                 if (role == RecipeIngredientRole.INPUT) {
                     inputs.add(slot);
                 } else {
@@ -501,7 +502,7 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
         }
         List<ViewerModel.Slot> slots = new ArrayList<>(typedIngredients.size());
         for (ITypedIngredient<?> typed : typedIngredients) {
-            slots.add(new ViewerModel.Slot(alternatives(typed, ingredientManager, ops)));
+            slots.add(TagNamer.slot(alternatives(typed, ingredientManager, ops)));
         }
         return List.copyOf(slots);
     }

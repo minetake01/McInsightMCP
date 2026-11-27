@@ -24,6 +24,7 @@ public final class McInsightConfig {
     static final int HARD_MAX_SCAN_RADIUS = 32;
     static final int HARD_MAX_SYNC_BLOCK_RADIUS = 16;
     static final int HARD_MAX_RECIPE_RESULTS = 100;
+    static final int HARD_MAX_RECIPE_ALTERNATIVES = 256;
     static final int HARD_MAX_RAYCAST_DISTANCE = 64;
 
     public boolean enabled = true;
@@ -33,6 +34,7 @@ public final class McInsightConfig {
     public int maxScanRadius = 16;
     public int maxSyncBlockRadius = 16;
     public int maxRecipeResults = 100;
+    public int maxRecipeAlternatives = 32;
 
     public static McInsightConfig loadOrCreate() {
         Path configPath = Services.PLATFORM.getConfigDir().resolve("mcinsight.json");
@@ -78,6 +80,7 @@ public final class McInsightConfig {
         maxScanRadius = capped("maxScanRadius", maxScanRadius, 1, HARD_MAX_SCAN_RADIUS);
         maxSyncBlockRadius = capped("maxSyncBlockRadius", maxSyncBlockRadius, 1, HARD_MAX_SYNC_BLOCK_RADIUS);
         maxRecipeResults = capped("maxRecipeResults", maxRecipeResults, 1, HARD_MAX_RECIPE_RESULTS);
+        maxRecipeAlternatives = capped("maxRecipeAlternatives", maxRecipeAlternatives, 1, HARD_MAX_RECIPE_ALTERNATIVES);
     }
 
     private static int capped(String name, int value, int min, int max) {

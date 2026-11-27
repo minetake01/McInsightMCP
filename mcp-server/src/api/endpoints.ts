@@ -139,12 +139,12 @@ export const ENDPOINTS = {
   }),
   recipes_query: endpoint<
     'recipes_query',
-    'item' | 'role' | 'type' | 'mod' | 'source' | 'limit' | 'offset',
+    'item' | 'role' | 'type' | 'mod' | 'source' | 'action' | 'limit' | 'offset',
     RecipesQueryResponse
   >({
     id: 'recipes_query',
     path: '/api/v1/recipes/query',
-    params: ['item', 'role', 'type', 'mod', 'source', 'limit', 'offset'],
+    params: ['item', 'role', 'type', 'mod', 'source', 'action', 'limit', 'offset'],
     defaultLimit: 40,
     maxLimit: 100,
   }),

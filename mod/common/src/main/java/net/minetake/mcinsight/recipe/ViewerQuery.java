@@ -1,10 +1,12 @@
 package net.minetake.mcinsight.recipe;
 
 import com.google.gson.JsonObject;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import net.minetake.mcinsight.api.InsightError;
 import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.api.ItemFilter;
@@ -64,6 +66,7 @@ public final class ViewerQuery {
         RoleScope role,
         String categoryUid,
         String modId,
+        ActionFilter action,
         int limit,
         int offset
     ) {
@@ -78,7 +81,10 @@ public final class ViewerQuery {
             if (!bridge.isAvailable()) {
                 continue;
             }
-            pages.put(bridge.viewerName(), pageOf(bridge, item, role, categoryUid, modId, limit, offset));
+            pages.put(
+                bridge.viewerName(),
+                pageOf(bridge, item, role, categoryUid, modId, action, limit, offset)
+            );
         }
         if (pages.isEmpty()) {
             throw new InsightException(InsightError.VIEWER_UNAVAILABLE, "No recipe viewer integration is active.");
@@ -134,20 +140,33 @@ public final class ViewerQuery {
         return List.of(specific);
     }
 
+    /**
+     * One viewer's page.
+     *
+     * <p>{@code limit} bounds the rows returned and {@code offset} counts recipes, because rows that
+     * differ only in one component arrive folded and one row can stand for many recipes. The page
+     * reports {@code nextOffset}, the offset of the first recipe it did not include, so the caller
+     * never has to know how many recipes a row consumed. A run of same-shape recipes is read to its
+     * end before it is folded, so one group is never split across two pages.
+     */
     private static JsonObject pageOf(
         IRecipeViewerBridge bridge,
         ItemFilter item,
         RoleScope role,
         String categoryUid,
         String modId,
+        ActionFilter action,
         int limit,
         int offset
     ) {
         String normCategory = categoryUid == null ? "" : categoryUid.trim().toLowerCase(Locale.ROOT);
         String normMod = modId == null ? "" : modId.trim().toLowerCase(Locale.ROOT);
 
-        com.google.gson.JsonArray page = new com.google.gson.JsonArray();
+        List<VariantFold.Group> rows = new ArrayList<>(limit);
+        List<ViewerModel.Recipe> run = new ArrayList<>();
+        String runShape = null;
         int matched = 0;
+        int consumed = offset;
         boolean hasMore = false;
 
         outer:
@@ -162,19 +181,58 @@ public final class ViewerQuery {
                 if (item != null && !matches(recipe, item, role)) {
                     continue;
                 }
+                if (!action.accepts(recipe.action())) {
+                    continue;
+                }
                 if (matched < offset) {
                     matched++;
                     continue;
                 }
-                if (page.size() >= limit) {
-                    hasMore = true;
-                    break outer;
+                String shape = VariantFold.shape(recipe);
+                if (!run.isEmpty() && !shape.equals(runShape)) {
+                    List<VariantFold.Group> folded = VariantFold.foldRun(run);
+                    if (rows.size() + folded.size() > limit) {
+                        // The run does not fit whole; keep the rows that do and stop before the rest.
+                        int room = limit - rows.size();
+                        for (VariantFold.Group group : folded.subList(0, room)) {
+                            rows.add(group);
+                            consumed += group.members().size();
+                        }
+                        hasMore = true;
+                        run.clear();
+                        break outer;
+                    }
+                    rows.addAll(folded);
+                    consumed += run.size();
+                    run.clear();
+                    if (rows.size() == limit) {
+                        hasMore = true;
+                        break outer;
+                    }
                 }
-                page.add(ViewerJson.recipe(recipe, bridge.viewerName()));
-                matched++;
+                runShape = shape;
+                run.add(recipe);
             }
         }
-        return Page.uncounted("recipes", page, offset, hasMore);
+        if (!run.isEmpty()) {
+            List<VariantFold.Group> folded = VariantFold.foldRun(run);
+            int room = limit - rows.size();
+            for (VariantFold.Group group : folded.subList(0, Math.min(room, folded.size()))) {
+                rows.add(group);
+                consumed += group.members().size();
+            }
+            hasMore = folded.size() > room;
+        }
+
+        com.google.gson.JsonArray array = new com.google.gson.JsonArray();
+        for (VariantFold.Group group : rows) {
+            array.add(group.folded()
+                ? ViewerJson.group(group, bridge.viewerName())
+                : ViewerJson.recipe(group.recipe(), bridge.viewerName()));
+        }
+        JsonObject page = Page.uncounted("recipes", array, offset, hasMore);
+        page.addProperty("nextOffset", consumed);
+        return page;
     }
 
     private static boolean matchesMod(ViewerModel.Category category, String normMod) {
@@ -213,7 +271,36 @@ public final class ViewerQuery {
             return false;
         }
         for (ViewerModel.Slot slot : slots) {
-            if (ingredientsMatch(slot.alternatives(), item)) {
+            if (slotMatches(slot, item)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether one slot accepts the filtered item.
+     *
+     * <p>The slot's id set, its tags, and its tag name were derived when the adapter built the
+     * recipe, so this is a few set lookups instead of a walk over every alternative.
+     */
+    static boolean slotMatches(ViewerModel.Slot slot, ItemFilter item) {
+        if (slot.isEmpty()) {
+            return false;
+        }
+        if (item.isTag()) {
+            if (slot.tag() != null && slot.tag().substring(1).equals(item.tagId().toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+            if (slot.idTags().contains(item.tagId().toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        Set<String> wanted = item.resolvedIds();
+        Set<String> smaller = wanted.size() <= slot.ids().size() ? wanted : slot.ids();
+        Set<String> larger = smaller == wanted ? slot.ids() : wanted;
+        for (String id : smaller) {
+            if (larger.contains(id)) {
                 return true;
             }
         }
@@ -224,7 +311,6 @@ public final class ViewerQuery {
         if (ingredients == null) {
             return false;
         }
-        // Viewers expand a tag slot into its member stacks, so every alternative is a concrete item.
         for (ViewerModel.Ingredient ingredient : ingredients) {
             if (item.matchesItem(ingredient.id(), ingredient.tags())) {
                 return true;

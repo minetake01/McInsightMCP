@@ -25,6 +25,7 @@ import net.minetake.mcinsight.cache.CacheGenerations;
 import net.minetake.mcinsight.client.ClientStateAccessor;
 import net.minetake.mcinsight.compat.IRecipePainter;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
+import net.minetake.mcinsight.compat.TagNamer;
 import net.minetake.mcinsight.compat.ViewerModel;
 import net.minetake.mcinsight.game.Versioned;
 import net.minetake.mcinsight.serial.JsonCodec;
@@ -358,7 +359,7 @@ public final class ReiBridgeImpl implements IRecipeViewerBridge {
     private static List<ViewerModel.Slot> slots(List<EntryIngredient> entries, RegistryOps<JsonElement> ops) {
         List<ViewerModel.Slot> slots = new ArrayList<>(entries.size());
         for (EntryIngredient entry : entries) {
-            slots.add(new ViewerModel.Slot(alternatives(entry, ops)));
+            slots.add(TagNamer.slot(alternatives(entry, ops)));
         }
         return List.copyOf(slots);
     }

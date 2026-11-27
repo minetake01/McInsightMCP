@@ -31,7 +31,7 @@ public enum InsightEndpoint {
 
     RECIPES_TYPES("recipes_types", "/api/v1/recipes/types", DataScope.COMPOSITE, PlayerScope.NONE, 10_000, Set.of()),
     RECIPES_QUERY("recipes_query", "/api/v1/recipes/query", DataScope.COMPOSITE, PlayerScope.NONE, 10_000,
-        Set.of("item", "role", "type", "mod", "source", "limit", "offset"), 40, 100),
+        Set.of("item", "role", "type", "mod", "source", "action", "limit", "offset"), 40, 100),
     RECIPES_RENDER("recipes_render", "/api/v1/recipes/render", DataScope.LOCAL, PlayerScope.NONE, 20_000,
         Set.of("item", "recipeId", "role", "type", "source", "limit", "offset"), 1, 8),
 
@@ -64,7 +64,7 @@ public enum InsightEndpoint {
         PlayerScope.REQUESTER, 5_000, Set.of("radius", "filter")),
     SERVER_RECIPES_TYPES("server_recipes_types", null, DataScope.SERVER_DATA, PlayerScope.NONE, 10_000, Set.of()),
     SERVER_RECIPES_QUERY("server_recipes_query", null, DataScope.SERVER_DATA, PlayerScope.NONE, 10_000,
-        Set.of("item", "role", "type", "mod", "source", "limit", "offset"), 40, 100),
+        Set.of("item", "role", "type", "mod", "source", "action", "limit", "offset"), 40, 100),
     SERVER_PLAYER_ENDER_CHEST("server_player_ender_chest", null, DataScope.SERVER_DATA, PlayerScope.REQUESTER, 5_000,
         Set.of());
 

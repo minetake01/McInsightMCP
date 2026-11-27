@@ -214,7 +214,7 @@ declares page bounds.
 | `registry_inspect` | `/api/v1/registry/inspect` | `kind`, `id` | LOCAL | NONE | — |
 | `registry_tag` | `/api/v1/registry/tag` | `kind`, `id`, `limit`, `offset` | LOCAL | NONE | 200 / 500 |
 | `recipes_types` | `/api/v1/recipes/types` | — | COMPOSITE | NONE | — |
-| `recipes_query` | `/api/v1/recipes/query` | `item`, `role`, `type`, `mod`, `source`, `limit`, `offset` | COMPOSITE | NONE | 40 / 100 |
+| `recipes_query` | `/api/v1/recipes/query` | `item`, `role`, `type`, `mod`, `source`, `action`, `limit`, `offset` | COMPOSITE | NONE | 40 / 100 |
 | `recipes_render` | `/api/v1/recipes/render` | `item`, `recipeId`, `role`, `type`, `source`, `limit`, `offset` | LOCAL | NONE | 1 / 8 |
 | `guides_list` | `/api/v1/guides/list` | `source`, `mod`, `limit`, `offset` | LOCAL | NONE | 50 / 500 |
 | `guides_search` | `/api/v1/guides/search` | `q`, `source`, `mod`, `lang`, `includeAllLang`, `limit`, `offset` | LOCAL | NONE | 20 / 50 |
@@ -448,12 +448,46 @@ manager is `DATA_UNAVAILABLE`; so is `source=all` when neither the recipe manage
 answer.
 
 Viewer recipes use the shared model: `viewer`, `categoryUid`, optional `categoryTitle`/`modId`/
-`recipeId`/`sourceRecipeIds`/`recipeClass`, `slotGranularity: "slots" | "flat"`, `inputs`/`outputs` as
-arrays of slots where a slot is `{alternatives: [ingredient]}`, `catalysts[]`, `workstations[]`,
-optional `description[]`, and `rawJson` or `pojoSnapshot`. Ingredient `type` is `item`, `fluid`, or
-`custom:<kind>`, with `id`, `displayName`, `modId`, `amount`, `tags`, `components` when known. Vanilla
-recipes carry `recipeId`, `recipeType`, `modId`, `recipeClass`, optional `serializer`, `rawJson` or
+`recipeId`/`sourceRecipeIds`/`recipeClass`, `action`, `slotGranularity: "slots" | "flat"`,
+`inputs`/`outputs` as arrays of slots, `catalysts[]`, `workstations[]`, optional `description[]`, and
+`rawJson` or `pojoSnapshot`. Ingredient `type` is `item`, `fluid`, or `custom:<kind>`, with `id`,
+`displayName`, `modId`, `amount`, `tags`, `components` when known. Vanilla recipes carry `recipeId`,
+`recipeType`, `modId`, `recipeClass`, `action`, optional `serializer`, `rawJson` or
 `pojoSnapshot`, and `resultPreview`.
+
+A slot is `{count, ...}` in one of three shapes, because a viewer expands a slot that accepts a tag
+into every member it holds — one armour-trim recipe lists 238 trimmable armour pieces per slot, and
+the same set once per trim pattern:
+
+- `{count, tag}` when a registry tag's members are exactly the alternatives. The name is the answer;
+  the members are not repeated, and matching against the slot looks the item up in that tag.
+- `{count, explicit: true, sample}` when the alternatives exceed `maxRecipeAlternatives` and no tag
+  names them. The count and a sample say what the slot is without listing it.
+- `{count, alternatives}` otherwise.
+
+Naming is proven, never guessed: only a tag whose member set equals the alternatives exactly is
+reported, so a `{count, tag}` slot accepts exactly the items the expanded list held. A slot's id
+set, tags, and name are derived once, when an adapter builds its recipe cache
+(`compat/TagNamer`, memoised per distinct set under the combined cache generation), so a query
+matches a slot with set lookups and a reload that changes tags also changes the names.
+
+`action` is `transform` when an input slot accepts exactly the item set an output slot emits — the
+recipe ends with the item it started from: anvil enchanting, armour trimming, repair, brewing — and
+`produce` otherwise; a slot that merely contains the output among other items (any wool dyed red) is
+a different set, so that recipe produces. It is absent when no output slot names an item.
+`action=transform` keeps the proven transforms, `action=produce` keeps every other recipe (including
+those without an `action`), and `action=all` is the default. `mc_query_item_flow(direction="obtain")`
+does not narrow by action, because a transform such as brewing can be the only way to obtain an item;
+each row's `action` says which kind it is.
+
+Consecutive viewer rows that are identical apart from one component arrive folded: the row carries
+`variantAxis` (`in<slot>/<component>` or `out<slot>/<component>`), `variantCount`, and `variants[]`
+of `{value, recipeId?}`, and the slot the axis names is shown without that component. That is how an
+anvil's per-enchantment rows become one row plus an axis instead of seventeen copies of the same
+slots. For viewer pages `limit` bounds the rows returned, `offset` counts recipes, and every page
+carries `nextOffset` — the offset that continues it — because a folded row stands for as many
+recipes as it has variants. A run of same-shape recipes is read to its end before it is folded, so a
+group is never split across pages.
 
 **`recipes_render`** — draws the recipes that match one exact `item` the way the viewer's own screen
 draws them. `role` defaults to `output` (the recipes that make the item); `type` restricts the
@@ -783,9 +817,11 @@ drawn. A client that does not render images therefore loses nothing but the pict
 | `maxScanRadius` | `16` | Scan radius cap; hard maximum `32` (`HARD_MAX_SCAN_RADIUS`) |
 | `maxSyncBlockRadius` | `16` | Block-entity sync radius cap over the bridge; hard maximum `16` (`HARD_MAX_SYNC_BLOCK_RADIUS`) |
 | `maxRecipeResults` | `100` | Lowers `recipes_query`'s effective page ceiling; hard maximum `500` (`HARD_MAX_RECIPE_RESULTS`) |
+| `maxRecipeAlternatives` | `32` | Alternatives a recipe slot may list before it is reported as a count and a sample; hard maximum `256` (`HARD_MAX_RECIPE_ALTERNATIVES`) |
 
-The three caps are resolved once in `config/Limits` and read through accessors
-(`Limits.scanRadius()`, `Limits.syncBlockRadius()`, `Limits.recipeResults()`), so they are operator
+The four caps are resolved once in `config/Limits` and read through accessors
+(`Limits.scanRadius()`, `Limits.syncBlockRadius()`, `Limits.recipeResults()`,
+`Limits.recipeAlternatives()`), so they are operator
 settings rather than compiled constants and apply wherever the data is served, including the server
 side of a bridged request. Out-of-range values are clamped (with a log line) rather than rejected.
 The raycast ceiling is the exception: no config key exists and `Limits.raycastDistance()` is always

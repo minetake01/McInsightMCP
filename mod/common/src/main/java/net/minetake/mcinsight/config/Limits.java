@@ -13,6 +13,7 @@ public final class Limits {
     private static volatile int raycastDistance = 64;
     private static volatile int syncBlockRadius = 16;
     private static volatile int recipeResults = 100;
+    private static volatile int recipeAlternatives = 32;
 
     private Limits() {}
 
@@ -20,6 +21,11 @@ public final class Limits {
         scanRadius = Math.clamp(config.maxScanRadius, 1, McInsightConfig.HARD_MAX_SCAN_RADIUS);
         syncBlockRadius = Math.clamp(config.maxSyncBlockRadius, 1, McInsightConfig.HARD_MAX_SYNC_BLOCK_RADIUS);
         recipeResults = Math.clamp(config.maxRecipeResults, 1, McInsightConfig.HARD_MAX_RECIPE_RESULTS);
+        recipeAlternatives = Math.clamp(
+            config.maxRecipeAlternatives,
+            1,
+            McInsightConfig.HARD_MAX_RECIPE_ALTERNATIVES
+        );
         raycastDistance = McInsightConfig.HARD_MAX_RAYCAST_DISTANCE;
     }
 
@@ -37,5 +43,10 @@ public final class Limits {
 
     public static int recipeResults() {
         return recipeResults;
+    }
+
+    /** How many alternatives a slot may list before it is reported as a count and a sample. */
+    public static int recipeAlternatives() {
+        return recipeAlternatives;
     }
 }
