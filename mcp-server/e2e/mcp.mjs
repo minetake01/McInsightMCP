@@ -25,6 +25,16 @@ export function freePort() {
   });
 }
 
+/** The JSON envelope a tool answers with, or undefined when the text is not one. */
+function parseEnvelope(text) {
+  try {
+    const value = JSON.parse(text);
+    return value && typeof value === 'object' && 'ok' in value ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export class McpClient {
   constructor(url) {
     this.url = url;
@@ -59,13 +69,23 @@ export class McpClient {
     return parsed.result;
   }
 
-  /** Calls a tool and returns its JSON envelope; schema rejections become `{ok:false, code:'SCHEMA'}`. */
+  /**
+   * Calls a tool and returns its JSON envelope.
+   *
+   * <p>A failed call is an `isError` result whose text is still the `{ok: false, code, error}`
+   * envelope: the server marks failures so a client that never reads the payload treats them as
+   * failures, and keeps the code in the text so a caller that does read it learns why. Only a result
+   * with no envelope at all — an input-schema rejection, which carries prose — has no code of its
+   * own, and that is what `SCHEMA` names.
+   */
   async call(name, args = {}) {
     const result = await this.rpc('tools/call', { name, arguments: args });
     const text = (result.content ?? []).find((part) => part.type === 'text')?.text;
-    if (result.isError) return { ok: false, code: 'SCHEMA', error: text };
     if (text === undefined) throw new Error(`${name} returned no text content`);
-    return JSON.parse(text);
+    const envelope = parseEnvelope(text);
+    if (envelope) return envelope;
+    if (result.isError) return { ok: false, code: 'SCHEMA', error: text };
+    throw new Error(`${name} answered text that is not an envelope: ${text.slice(0, 200)}`);
   }
 }
 

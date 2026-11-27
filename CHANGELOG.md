@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed the `ponder` guide source: Create registers its Ponder scenes in code and ships only structure NBT under `assets/*/ponder/`, so the source could only ever answer `total: 0`. `mc_guides` no longer advertises it.
 - `mc_observe_world`'s `filter` now says it narrows the listings (`matchedBlocks`, `blockEntities`, `nearbyEntities`) while `blockSummary` always counts every block in the radius.
 
+### Fixed
+- `mc_inspect` on any tag failed with `INTERNAL_ERROR`: the auto lookup asked every registry kind for a built-in registry, and `enchantment` and `biome` have none. A kind now answers existence and tag membership from the same index search uses, so inspecting an enchantment or biome by ID or `#tag` works instead of throwing.
+- Villager trades could not be read on `26.x` at all: the wandering trader's offers are not levelled, and attaching one to its level unboxed the absent value while the trade index was being built.
+
 ## [0.1.0-beta.4] - 2026-11-26
 
 ### Added

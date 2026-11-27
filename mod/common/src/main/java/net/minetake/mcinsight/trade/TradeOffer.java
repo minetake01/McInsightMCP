@@ -41,10 +41,15 @@ record TradeOffer(
         );
     }
 
-    /** The same trade, with the registry entry it is defined by and the type it is limited to. */
-    TradeOffer attached(String professionId, int level, boolean experimental, String tradeId, String villagerType) {
+    /**
+     * The same trade, with the registry entry it is defined by and the type it is limited to.
+     *
+     * <p>{@code level} is nullable because the wandering trader's offers are not levelled; passing
+     * one through must not unbox a level the game never assigned.
+     */
+    TradeOffer attached(String professionId, Integer level, boolean experimental, String tradeId, String villagerType) {
         return new TradeOffer(
-            professionId, Integer.valueOf(level), experimental, listingClass, tradeId,
+            professionId, level, experimental, listingClass, tradeId,
             costA, costB, result, maxUses, xp, priceMultiplier, sampled, villagerType, declaration
         );
     }

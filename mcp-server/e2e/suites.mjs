@@ -68,6 +68,16 @@ const SUITES = {
       const res = page(ok(await mcp.call('mc_inspect', { target: '#minecraft:planks', limit: 50 })), 'members');
       expect(res.members.some((m) => m.id === 'minecraft:oak_planks'), 'oak planks missing from #planks');
     });
+    await r.check('dynamic registry kinds inspect by id and by tag', async () => {
+      // enchantment and biome live in the world's dynamic registries rather than a built-in one, so
+      // they are the kinds an index that only knows built-in registries drops.
+      const biome = ok(await mcp.call('mc_inspect', { target: 'minecraft:plains', kind: 'biome' }));
+      expect(biome.kind === 'biome', `kind=${biome.kind}`);
+      expect(typeof biome.displayName === 'string', 'biome has no display name');
+      const tag = page(ok(await mcp.call('mc_inspect', { target: '#minecraft:is_forest', kind: 'biome_tag', limit: 50 })), 'members');
+      expect(tag.members.some((m) => m.id === 'minecraft:forest'), 'forest missing from #is_forest');
+      return `${biome.displayName}, ${tag.total} biomes`;
+    });
     await r.check('an ambiguous id is rejected, not widened', async () => {
       failsWith(await mcp.call('mc_query_world_data', { kind: 'trades', item: 'emerald' }), 'INVALID_ID');
     });

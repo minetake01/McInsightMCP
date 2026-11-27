@@ -64,10 +64,30 @@ public final class DisplayNames {
 
     private static Map<String, String> build(RegistryIndex.Kind kind) {
         Registry<?> registry = RegistryIndex.registry(kind);
+        if (registry == null) {
+            return dynamicNames(kind);
+        }
         Map<String, String> names = new LinkedHashMap<>(registry.size() * 2);
         for (ResourceLocation id : registry.keySet()) {
             String name = resolve(kind, id);
             names.put(id.toString(), name != null && !name.isBlank() ? name : id.toString());
+        }
+        return Map.copyOf(names);
+    }
+
+    /**
+     * The names of a kind backed by a world's dynamic registries.
+     *
+     * <p>Such a kind has no built-in key set to enumerate, but the kind index already enumerates it
+     * through the world's lookup and resolves the same names. Building that index never asks this
+     * table for a name, so the two caches stay acyclic: static kinds name their entries from here,
+     * dynamic kinds from there.
+     */
+    private static Map<String, String> dynamicNames(RegistryIndex.Kind kind) {
+        Map<String, String> names = new LinkedHashMap<>();
+        for (RegistryIndex.Entry entry : RegistryIndex.entries(kind)) {
+            String name = entry.displayName();
+            names.put(entry.id(), name != null && !name.isBlank() ? name : entry.id());
         }
         return Map.copyOf(names);
     }

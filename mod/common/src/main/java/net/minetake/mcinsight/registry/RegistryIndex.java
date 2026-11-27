@@ -23,6 +23,11 @@ import net.minecraft.tags.TagKey;
  * here means one iteration per kind per resource generation, one deterministic ordering (by id),
  * and one place that decides what a registry entry looks like. Display names are resolved through
  * {@link DisplayNames}, never by asking the object itself from a handler.
+ *
+ * <p>A kind is backed either by a built-in registry or, for {@code enchantment} and {@code biome},
+ * by the running world's dynamic registries. The index reads whichever backing the kind has, so a
+ * handler asks the same questions of every kind; nothing outside this class has to know which
+ * backing a kind uses.
  */
 public final class RegistryIndex {
 
@@ -40,6 +45,10 @@ public final class RegistryIndex {
 
         private final String id;
 
+        /** The kinds an error message names, so the list is written once. */
+        private static final String KIND_LIST =
+            "item, block, fluid, entity, potion, mob_effect, attribute, enchantment, or biome";
+
         Kind(String id) {
             this.id = id;
         }
@@ -53,7 +62,7 @@ public final class RegistryIndex {
             if (raw == null || raw.isBlank()) {
                 throw new InsightException(
                     InsightError.INVALID_KIND,
-                    "Parameter 'kind' must be one of item, block, fluid, or entity."
+                    "Parameter 'kind' must be one of " + KIND_LIST + "."
                 );
             }
             String needle = raw.trim().toLowerCase(Locale.ROOT);
@@ -64,7 +73,7 @@ public final class RegistryIndex {
             }
             throw new InsightException(
                 InsightError.INVALID_KIND,
-                "Parameter 'kind' must be one of item, block, fluid, or entity, got: " + raw + "."
+                "Parameter 'kind' must be one of " + KIND_LIST + ", got: " + raw + "."
             );
         }
     }
@@ -104,13 +113,43 @@ public final class RegistryIndex {
     }
 
     public static boolean contains(Kind kind, ResourceLocation id) {
-        return registry(kind).containsKey(id);
+        Registry<?> registry = registry(kind);
+        if (registry != null) {
+            return registry.containsKey(id);
+        }
+        String key = id.toString();
+        for (Entry entry : entries(kind)) {
+            if (entry.id().equals(key)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static boolean hasTag(Kind kind, ResourceLocation id) {
-        return hasTagIn(registry(kind), id);
+        Registry<?> registry = registry(kind);
+        if (registry != null) {
+            return hasTagIn(registry, id);
+        }
+        String key = "#" + id;
+        for (TagName tag : tags(kind)) {
+            if (tag.id().equals(key)) {
+                return true;
+            }
+        }
+        return false;
     }
 
+    /**
+     * The built-in registry for a kind, or {@code null} for a kind that lives in a world's dynamic
+     * registries.
+     *
+     * <p>{@code enchantment} and {@code biome} have no built-in registry to enumerate; their entries
+     * and tags come from the world's lookup, which {@link #index} reads. A caller asking whether a
+     * kind holds an entry or a tag must use {@link #contains} and {@link #hasTag}, which answer for
+     * both kinds of backing; only code that needs the static {@link Registry} itself may call this
+     * and must check for {@code null}.
+     */
     public static Registry<?> registry(Kind kind) {
         return switch (kind) {
             case ITEM -> BuiltInRegistries.ITEM;
