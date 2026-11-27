@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0-beta.5] - 2026-11-27
 
 ### Breaking
 - Endpoints now say where their data can be read instead of assuming one answer for every version: `trades_query` is `COMPOSITE` because a 1.21.1 client holds the trade listings and rolls them itself while 26.x keeps the trade sets and the server level that rolls them on the world owner; that version answers by fetching `server_trades_query` as one part. A composite answer fetches every owner-only fragment through `data/ServerParts`, and bridge exposure is exactly `dataScope == SERVER_DATA` — a composite endpoint is not asked over the bridge, its declared `server_*` parts are.

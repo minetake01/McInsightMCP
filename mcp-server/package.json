@@ -1,6 +1,6 @@
 {
   "name": "mcinsight-mcp-server",
-  "version": "0.1.0-beta.4",
+  "version": "0.1.0-beta.5",
   "description": "MCP 2026-07-28 server connecting AI assistants to live Minecraft worlds via the McInsight mod",
   "license": "MIT",
   "type": "module",
