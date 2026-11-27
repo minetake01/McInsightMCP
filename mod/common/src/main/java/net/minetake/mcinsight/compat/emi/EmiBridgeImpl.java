@@ -373,15 +373,7 @@ public final class EmiBridgeImpl implements IRecipeViewerBridge {
     }
 
     private static JsonElement rawJson(Recipe<?> recipe, RegistryOps<JsonElement> ops) {
-        if (recipe == null || ops == null) {
-            return null;
-        }
-        try {
-            DataResult<JsonElement> encoded = Versioned.recipeCodec().encodeStart(ops, recipe);
-            return encoded.result().orElse(null);
-        } catch (Exception e) {
-            return null;
-        }
+        return net.minetake.mcinsight.recipe.RecipeEncoding.encode(recipe, ops);
     }
 
     private static List<ViewerModel.Slot> slots(List<EmiIngredient> ingredients, RegistryOps<JsonElement> ops) {
@@ -444,12 +436,12 @@ public final class EmiBridgeImpl implements IRecipeViewerBridge {
         ItemStack itemStack = stack.getItemStack();
         Fluid fluid = fluidOf(stack);
         ResourceLocation id = stack.getId();
-        long effectiveAmount = amount > 0 ? amount : stack.getAmount();
+        long stackCount = itemStack.isEmpty() ? 0L : itemStack.getCount();
         return new ViewerModel.Ingredient(
             typeName(stack, itemStack, fluid),
             id != null ? id.toString() : null,
             displayName(stack),
-            effectiveAmount > 0 ? effectiveAmount : null,
+            ViewerModel.amount(amount, stackCount),
             id != null ? id.getNamespace() : null,
             tagsOf(itemStack, fluid),
             componentsOf(itemStack, ops)

@@ -345,15 +345,7 @@ public final class ReiBridgeImpl implements IRecipeViewerBridge {
     }
 
     private static JsonElement rawJson(Recipe<?> recipe, RegistryOps<JsonElement> ops) {
-        if (recipe == null || ops == null) {
-            return null;
-        }
-        try {
-            DataResult<JsonElement> encoded = Versioned.recipeCodec().encodeStart(ops, recipe);
-            return encoded.result().orElse(null);
-        } catch (Exception e) {
-            return null;
-        }
+        return net.minetake.mcinsight.recipe.RecipeEncoding.encode(recipe, ops);
     }
 
     private static List<ViewerModel.Slot> slots(List<EntryIngredient> entries, RegistryOps<JsonElement> ops) {
@@ -386,16 +378,17 @@ public final class ReiBridgeImpl implements IRecipeViewerBridge {
         ResourceLocation id = stack.getIdentifier();
         ItemStack itemStack = itemStackOf(stack);
         JsonElement components = null;
-        Long amount = null;
+        long stackCount = itemStack.isEmpty() ? 0L : itemStack.getCount();
+        // Items answer with their stack count; a non-item entry exposes its amount only through its
+        // value type, so the accessor is probed only when there is no item stack to read.
+        long reported = stackCount > 0L ? -1L : reflectiveAmount(stack.getValue());
+        Long amount = ViewerModel.amount(reported, stackCount);
         List<String> tags;
         if (!itemStack.isEmpty()) {
-            amount = (long) itemStack.getCount();
             tags = Versioned.itemTags(itemStack).map(tag -> tag.location().toString()).sorted().toList();
             var serialized = JsonCodec.serializeItemStack(itemStack, ops);
             components = serialized.has("components") ? serialized.get("components") : null;
         } else {
-            long reflectiveAmount = reflectiveAmount(stack.getValue());
-            amount = reflectiveAmount >= 0 ? reflectiveAmount : null;
             tags = tagsOf(stack);
         }
         return new ViewerModel.Ingredient(

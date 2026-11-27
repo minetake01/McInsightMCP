@@ -32,6 +32,27 @@ public final class ViewerModel {
     ) {}
 
     /**
+     * The number a slot requires, decided once for every viewer.
+     *
+     * <p>A viewer that reports a positive amount for the slot is believed, because that is the
+     * number its own screen shows. Otherwise the stack's own count is the answer, and a slot whose
+     * amount is unknown omits the field rather than guessing one.
+     *
+     * @param reported the amount the viewer reported for the slot, or a non-positive value when it
+     *     reported none
+     * @param stackCount the stack's count, or a non-positive value when there is no single stack
+     */
+    public static Long amount(long reported, long stackCount) {
+        if (reported > 0L) {
+            return reported;
+        }
+        if (stackCount > 0L) {
+            return stackCount;
+        }
+        return null;
+    }
+
+    /**
      * One choice point inside a recipe: the caller needs any single one of the alternatives.
      * A slot with one alternative is a plain ingredient.
      *

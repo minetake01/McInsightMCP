@@ -403,15 +403,7 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
     }
 
     private static JsonElement rawJson(Recipe<?> recipe, RegistryOps<JsonElement> ops) {
-        if (recipe == null || ops == null) {
-            return null;
-        }
-        try {
-            DataResult<JsonElement> encoded = Versioned.recipeCodec().encodeStart(ops, recipe);
-            return encoded.result().orElse(null);
-        } catch (Exception e) {
-            return null;
-        }
+        return net.minetake.mcinsight.recipe.RecipeEncoding.encode(recipe, ops);
     }
 
     private static Recipe<?> vanillaRecipe(Object recipe) {
@@ -578,14 +570,8 @@ public final class JeiBridgeImpl implements IRecipeViewerBridge {
     }
 
     private static <V> Long amountOf(V value, IIngredientHelper<V> helper, Optional<ItemStack> stack) {
-        long amount = helper.getAmount(value);
-        if (amount >= 0) {
-            return amount;
-        }
-        if (stack.isPresent() && !stack.get().isEmpty()) {
-            return (long) stack.get().getCount();
-        }
-        return null;
+        long stackCount = stack.isPresent() && !stack.get().isEmpty() ? stack.get().getCount() : 0L;
+        return ViewerModel.amount(helper.getAmount(value), stackCount);
     }
 
     private static String typeName(IIngredientType<?> type, Object value) {
