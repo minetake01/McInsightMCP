@@ -5,6 +5,7 @@ import type { RegistrySearchKind } from '../api/types.js';
 import type { RegistryKindName } from '../data/registry.js';
 import { inspectRegistryEntry, isTagTarget, queryTag, searchRegistry, tagKindFor } from '../data/registry.js';
 import type { McHttpClient } from '../client/mcClient.js';
+import { ToolError } from '../api/result.js';
 import { toolResult } from './result.js';
 
 const SEARCH_LIMITS = limitBounds('registry_search');
@@ -86,9 +87,10 @@ const INSPECT_SCHEMA = z.object({
     .int()
     .min(1)
     .optional()
-    .default(TAG_LIMITS.defaultLimit)
-    .describe(`Maximum tag members to return when inspecting a tag (default ${TAG_LIMITS.defaultLimit}, max ${TAG_LIMITS.maxLimit})`),
-  offset: z.number().int().min(0).optional().default(0).describe('Number of tag members to skip when inspecting a tag'),
+    .describe(
+      `Maximum tag members to return when inspecting a tag (default ${TAG_LIMITS.defaultLimit}, max ${TAG_LIMITS.maxLimit})`,
+    ),
+  offset: z.number().int().min(0).optional().describe('Number of tag members to skip when inspecting a tag'),
 });
 
 export function registerRegistryTools(server: McpServer, mcClient: McHttpClient): void {
@@ -130,6 +132,14 @@ export function registerRegistryTools(server: McpServer, mcClient: McHttpClient)
           limit,
           offset,
         });
+      }
+      // `registry_inspect` declares neither bound, so sending one would be dropped by the mod.
+      // Rejecting it here keeps "a parameter the endpoint does not declare is an error" true.
+      if (limit !== undefined || offset !== undefined) {
+        throw new ToolError(
+          'INVALID_PARAMETER',
+          `mc_inspect reads limit/offset only for a tag target; '${cleanTarget}' is a registry entry.`,
+        );
       }
       return inspectRegistryEntry(mcClient, cleanTarget, kind as 'auto' | RegistryKindName);
     }),

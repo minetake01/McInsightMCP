@@ -1,7 +1,8 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { limitBounds } from '../api/endpoints.js';
-import { MissingParts, ToolError } from '../api/result.js';
+import { MissingParts, ToolError, toFailure } from '../api/result.js';
+import { isRequestFailure } from '../api/errors.js';
 import type { McHttpClient } from '../client/mcClient.js';
 import {
   describeBuiltinParsers,
@@ -263,6 +264,11 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
         try {
           await fn();
         } catch (error) {
+          // A malformed request is the whole call's failure: the same mistake would be reported
+          // once per source, and the caller cannot fix it by reading fewer parts.
+          if (isRequestFailure(toFailure(error).code)) {
+            throw error;
+          }
           missing.add(part, error);
         }
       };
@@ -402,7 +408,7 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
         mcClient.getLoadedModVersions(),
       ]);
       const enriched = enrichRecipesResponse(rawRes, versions, includeRaw);
-      return { ...enriched, limit, offset };
+      return enriched;
     }),
   );
 
@@ -448,32 +454,23 @@ export function registerMechanicsTools(server: McpServer, mcClient: McHttpClient
       }
 
       if (kind === 'loot') {
-        return {
-          kind,
-          ...(await queryLoot(
-            mcClient,
-            { q: query, item, mod: modId, includeModifiers, limit, offset },
-            includeRaw,
-          )),
-        };
+        return queryLoot(
+          mcClient,
+          { q: query, item, mod: modId, includeModifiers, limit, offset },
+          includeRaw,
+        );
       }
 
       if (kind === 'trades') {
-        return {
-          kind,
-          ...(await queryTrades(mcClient, { item, q: query, profession, mod: modId, limit, offset })),
-        };
+        return queryTrades(mcClient, { item, q: query, profession, mod: modId, limit, offset });
       }
 
       if (kind === 'datamaps') {
-        return {
-          kind,
-          ...(await queryDataMaps(
-            mcClient,
-            { q: query, item, registry, mod: modId, limit, offset },
-            includeRaw,
-          )),
-        };
+        return queryDataMaps(
+          mcClient,
+          { q: query, item, registry, mod: modId, limit, offset },
+          includeRaw,
+        );
       }
 
       return queryWorldgen(

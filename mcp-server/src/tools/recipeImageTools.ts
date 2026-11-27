@@ -1,11 +1,10 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { limitBounds } from '../api/endpoints.js';
-import { toFailure, ToolError } from '../api/result.js';
+import { ToolError } from '../api/result.js';
 import type { McHttpClient } from '../client/mcClient.js';
 import { fetchRecipeImages } from '../data/recipeImages.js';
-import { jsonText } from './helpers.js';
-import { imageResult } from './result.js';
+import { imageToolResult } from './result.js';
 
 const RENDER_LIMITS = limitBounds('recipes_render');
 
@@ -33,9 +32,10 @@ const RENDER_RECIPE_SCHEMA = z.object({
     .number()
     .int()
     .min(1)
-    .max(RENDER_LIMITS.maxLimit)
     .optional()
-    .describe(`Number of recipes to render (default ${RENDER_LIMITS.defaultLimit}, max ${RENDER_LIMITS.maxLimit})`),
+    .describe(
+      `Number of recipes to render (default ${RENDER_LIMITS.defaultLimit}, max ${RENDER_LIMITS.maxLimit}; the mod answers INVALID_PARAMETER above it)`,
+    ),
   offset: z.number().int().min(0).optional().default(0).describe('Number of matching recipes to skip'),
 });
 
@@ -49,28 +49,18 @@ export function registerRecipeImageTools(server: McpServer, mcClient: McHttpClie
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: RENDER_RECIPE_SCHEMA,
     },
-    async ({ item, recipeId, role, type, source, limit, offset }) => {
+    async ({ item, recipeId, role, type, source, limit, offset }) => imageToolResult(async () => {
       if (!item && !recipeId) {
-        return {
-          ...jsonText(toFailure(new ToolError('INVALID_PARAMETER', 'Provide at least one of item or recipeId.'))),
-          isError: true,
-        };
+        throw new ToolError('INVALID_PARAMETER', 'Provide at least one of item or recipeId.');
       }
-      return fetchRecipeImages(mcClient, { item, recipeId, role, type, source, limit, offset }).then(
-        (response) => {
-          // The text block repeats the answer without the picture bytes; the images carry those.
-          const textImages = response.images.map(({ png: _png, ...rest }) => rest);
-          const { images, ...summary } = response;
-          return imageResult(
-            { ...summary, images: textImages },
-            images.map((image) => ({ data: image.png, mimeType: 'image/png' })),
-          );
-        },
-        (error: unknown) => ({
-          ...jsonText(toFailure(error)),
-          isError: true,
-        }),
-      );
-    },
+      const response = await fetchRecipeImages(mcClient, { item, recipeId, role, type, source, limit, offset });
+      // The text block repeats the answer without the picture bytes; the images carry those.
+      const textImages = response.images.map(({ png: _png, ...rest }) => rest);
+      const { images, ...summary } = response;
+      return {
+        summary: { ...summary, images: textImages },
+        images: images.map((image) => ({ data: image.png, mimeType: 'image/png' })),
+      };
+    }),
   );
 }

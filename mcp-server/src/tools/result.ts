@@ -39,20 +39,29 @@ export function toolResult(handler: () => Promise<object>) {
  *
  * <p>The text block keeps the same envelope as every other tool, so a client that does not render
  * images still receives the answer; the image blocks are the same answer in its visual form, never
- * a second source of truth. Image data is never repeated in the text block.
+ * a second source of truth. Image data is never repeated in the text block, and a failure is built
+ * by the same {@link toolResult} boundary, so `ok`/`isError` are decided once for every tool.
  */
-export function imageResult(
-  summary: object,
-  images: readonly { data: string; mimeType: string }[],
-) {
-  return {
-    content: [
-      { type: 'text' as const, text: JSON.stringify({ ...(summary as Record<string, unknown>), ok: true }) },
-      ...images.map((image) => ({
-        type: 'image' as const,
-        data: image.data,
-        mimeType: image.mimeType,
-      })),
-    ],
-  };
+export interface ImageToolAnswer {
+  summary: object;
+  images: readonly { data: string; mimeType: string }[];
+}
+
+export function imageToolResult(handler: () => Promise<ImageToolAnswer>) {
+  return handler().then(
+    ({ summary, images }) => ({
+      content: [
+        { type: 'text' as const, text: JSON.stringify({ ...(summary as Record<string, unknown>), ok: true }) },
+        ...images.map((image) => ({
+          type: 'image' as const,
+          data: image.data,
+          mimeType: image.mimeType,
+        })),
+      ],
+    }),
+    (error: unknown) => ({
+      ...jsonText(toFailure(error)),
+      isError: true,
+    }),
+  );
 }
