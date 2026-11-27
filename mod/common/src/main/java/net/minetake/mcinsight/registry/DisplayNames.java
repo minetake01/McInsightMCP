@@ -142,10 +142,9 @@ public final class DisplayNames {
             return null;
         }
         try {
-            net.minecraft.core.HolderLookup.Provider access = executor.supplyOnGameThread(
-                () -> net.minetake.mcinsight.game.GameAccess.getRegistryAccess(executor),
-                5_000L
-            );
+            net.minecraft.core.HolderLookup.Provider access = net.minetake.mcinsight.data.DataPackView
+                .current(executor)
+                .registries();
             if (access == null) {
                 return null;
             }

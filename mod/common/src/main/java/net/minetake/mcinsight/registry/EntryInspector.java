@@ -389,27 +389,30 @@ public final class EntryInspector {
         return arr;
     }
 
-    private static net.minecraft.core.HolderLookup.Provider requireDynamicRegistries() {
-        var executor = net.minetake.mcinsight.McInsightCommon.getExecutor();
-        net.minecraft.core.HolderLookup.Provider access;
-        try {
-            access = executor.supplyOnGameThread(
-                () -> GameAccess.getRegistryAccess(executor),
-                MAIN_THREAD_TIMEOUT_MS
-            );
-        } catch (Exception e) {
-            throw new InsightException(
-                InsightError.DATA_UNAVAILABLE,
-                "Dynamic registries are unavailable: " + e.getMessage()
-            );
-        }
+    /**
+     * The session's registry view, or the reason this session has none.
+     *
+     * <p>One accessor for both entry points: whether the caller holds a request context or the
+     * global executor, the answer is the same snapshot every other collector reads.
+     */
+    private static net.minecraft.core.HolderLookup.Provider registries(
+        net.minetake.mcinsight.game.MainThreadExecutor executor,
+        String whenNull
+    ) {
+        net.minecraft.core.HolderLookup.Provider access = net.minetake.mcinsight.data.DataPackView
+            .current(executor)
+            .registries();
         if (access == null) {
-            throw new InsightException(
-                InsightError.DATA_UNAVAILABLE,
-                "No world is loaded, so dynamic registry entries cannot be inspected."
-            );
+            throw new InsightException(InsightError.DATA_UNAVAILABLE, whenNull);
         }
         return access;
+    }
+
+    private static net.minecraft.core.HolderLookup.Provider requireDynamicRegistries() {
+        return registries(
+            net.minetake.mcinsight.McInsightCommon.getExecutor(),
+            "No world is loaded, so dynamic registry entries cannot be inspected."
+        );
     }
 
     private static <T extends Comparable<T>> JsonArray possibleValues(Property<T> property) {
@@ -463,16 +466,12 @@ public final class EntryInspector {
     }
 
     private static HolderLookup.Provider getRegistries(RequestContext ctx) {
-        try {
-            return ctx.executor().supplyOnGameThread(() -> GameAccess.getRegistryAccess(ctx.executor()), MAIN_THREAD_TIMEOUT_MS);
-        } catch (Exception e) {
-            // Without the registries the item's components cannot be encoded; an answer missing
-            // them would look like an item that has none.
-            throw new InsightException(
-                InsightError.DATA_UNAVAILABLE,
-                "The game thread did not hand over the registries: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName())
-            );
-        }
+        // Without the registries the item's components cannot be encoded; an answer missing them
+        // would look like an item that has none.
+        return registries(
+            ctx.executor(),
+            "No world is loaded, so registry entries cannot be inspected."
+        );
     }
 
     private static JsonArray kindsOf(List<RegistryIndex.Kind> kinds) {

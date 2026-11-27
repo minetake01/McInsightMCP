@@ -127,18 +127,9 @@ public final class TagQuery {
         int offset
     ) {
         var executor = net.minetake.mcinsight.McInsightCommon.getExecutor();
-        net.minecraft.core.HolderLookup.Provider access;
-        try {
-            access = executor.supplyOnGameThread(
-                () -> net.minetake.mcinsight.game.GameAccess.getRegistryAccess(executor),
-                5_000L
-            );
-        } catch (Exception e) {
-            throw new InsightException(
-                InsightError.DATA_UNAVAILABLE,
-                "Dynamic registry '" + kind.id() + "' is unavailable: " + e.getMessage()
-            );
-        }
+        net.minecraft.core.HolderLookup.Provider access = net.minetake.mcinsight.data.DataPackView
+            .current(executor)
+            .registries();
         if (access == null) {
             throw new InsightException(
                 InsightError.DATA_UNAVAILABLE,

@@ -75,7 +75,7 @@ public final class DataPackView {
      * encoding are done once per reload rather than once per request.
      */
     public static DataPackView current(MainThreadExecutor executor) {
-        return CURRENT.get(() -> {
+        DataPackView view = CURRENT.get(() -> {
             try {
                 return executor.supplyOnGameThread(() -> of(
                     executor.getActiveServer(),
@@ -85,6 +85,12 @@ public final class DataPackView {
                 throw MainThreadExecutor.unwrapInsightException(e, InsightError.DATA_UNAVAILABLE);
             }
         });
+        if (!view.hasRegistries() && !view.hasDataResources()) {
+            // "No world yet" is a transient state, not this generation's answer: drop it so the
+            // next request probes again instead of pinning "unavailable" until the next reload.
+            CURRENT.invalidate();
+        }
+        return view;
     }
 
     /**

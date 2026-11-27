@@ -206,19 +206,9 @@ public final class RegistryIndex {
     }
 
     private static KindIndex buildDynamic(Kind kind) {
-        var executor = net.minetake.mcinsight.McInsightCommon.getExecutor();
-        net.minecraft.core.HolderLookup.Provider access;
-        try {
-            access = executor.supplyOnGameThread(
-                () -> net.minetake.mcinsight.game.GameAccess.getRegistryAccess(executor),
-                5_000L
-            );
-        } catch (Exception e) {
-            throw new net.minetake.mcinsight.api.InsightException(
-                net.minetake.mcinsight.api.InsightError.DATA_UNAVAILABLE,
-                "Dynamic registry '" + kind.id() + "' is unavailable: " + e.getMessage()
-            );
-        }
+        net.minecraft.core.HolderLookup.Provider access = net.minetake.mcinsight.data.DataPackView
+            .current(net.minetake.mcinsight.McInsightCommon.getExecutor())
+            .registries();
         if (access == null) {
             throw new net.minetake.mcinsight.api.InsightException(
                 net.minetake.mcinsight.api.InsightError.DATA_UNAVAILABLE,
