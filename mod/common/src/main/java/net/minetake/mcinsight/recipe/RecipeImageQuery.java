@@ -32,8 +32,10 @@ import net.minetake.mcinsight.render.RecipeCanvas;
  *
  * <p>Only a viewer can draw the GUI its recipes belong to, so this query selects recipes through the
  * same {@link ViewerQuery} semantics {@code recipes_query} uses and then lets the viewer that owns
- * each recipe paint it. A recipe no active viewer can paint is reported per recipe, not by failing
- * the whole request: one undrawable category must not hide the others.
+ * each recipe paint it. A category that cannot be painted is reported as a missing part, not by
+ * failing the whole request: one undrawable category must not hide the others. When nothing can be
+ * painted at all the request fails with the reason, because an empty page must mean "no recipe
+ * matched", never "the picture could not be produced".
  *
  * <p>Drawings are started one at a time, one per client frame. The request thread waits for the
  * bytes; the client render thread only prepares and records a drawing, and on {@code 26.x} the
@@ -86,13 +88,7 @@ public final class RecipeImageQuery {
                 "The vanilla recipe manager has no GUI layout to draw; use source=\"viewer\" for images or mc_query_recipes for text."
             );
         }
-        List<IRecipeViewerBridge> bridges = paintCapable(source);
-        if (bridges.isEmpty()) {
-            throw new InsightException(
-                InsightError.VIEWER_UNAVAILABLE,
-                "No active recipe viewer can draw recipe images (JEI, EMI, and REI are supported). Use mc_query_recipes to fetch recipe data as text instead."
-            );
-        }
+        List<IRecipeViewerBridge> bridges = drawable(source);
 
         List<Candidate> matched = candidates(bridges, item, recipeId, role, type, offset, limit + 1);
         boolean hasMore = matched.size() > limit;
@@ -166,12 +162,34 @@ public final class RecipeImageQuery {
         return raw == null ? ViewerQuery.RoleScope.OUTPUT : ViewerQuery.RoleScope.parse(raw);
     }
 
-    /** The adapters the source selects, narrowed to the ones that can actually paint. */
-    private static List<IRecipeViewerBridge> paintCapable(String source) {
-        List<IRecipeViewerBridge> resolved = "all".equals(source) || "viewer".equals(source)
-            ? ViewerRegistry.active()
-            : ViewerQuery.resolve(source);
-        return resolved.stream().filter(bridge -> bridge.painter() != null).toList();
+    /**
+     * The adapters the source selects, narrowed to the ones that can actually paint.
+     *
+     * <p>"Not active" and "active but unable to draw this version's recipes" are different answers:
+     * the first is fixed by enabling a viewer, the second only by choosing another one. A named
+     * viewer is resolved by the registry, never by a list of viewer names kept here.
+     */
+    private static List<IRecipeViewerBridge> drawable(String source) {
+        boolean any = "all".equals(source) || "viewer".equals(source);
+        List<IRecipeViewerBridge> resolved = any ? ViewerRegistry.active() : ViewerQuery.resolve(source);
+        List<IRecipeViewerBridge> drawable = resolved.stream()
+            .filter(bridge -> bridge.painter() != null)
+            .toList();
+        if (!drawable.isEmpty()) {
+            return drawable;
+        }
+        if (resolved.isEmpty()) {
+            throw new InsightException(
+                InsightError.VIEWER_UNAVAILABLE,
+                "No recipe viewer integration is active. Use mc_query_recipes to fetch recipe data as text instead."
+            );
+        }
+        String names = String.join(", ", resolved.stream().map(IRecipeViewerBridge::viewerName).toList());
+        throw new InsightException(
+            InsightError.VIEWER_CANNOT_RENDER,
+            "The active recipe viewer(s) cannot draw recipe images here (" + names
+                + "). Use another active viewer or mc_query_recipes to fetch recipe data as text instead."
+        );
     }
 
     private static List<Candidate> candidates(
