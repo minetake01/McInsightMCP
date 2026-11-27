@@ -584,9 +584,11 @@ neither `q` nor `item` is set, or when the definition holds at most 100 values.
 
 **`trades_query`** — offers come from the version's own trade system: up to 1.21.1 each profession
 holds a table of `ItemListing` objects, and from 26.1 the trades are named registry entries grouped
-into a `TradeSet` per profession and level. A 1.21.1 client rolls the listings itself; a 26.x client
-holds neither the sets nor the level that rolls them, so that version answers the page by fetching
-`server_trades_query` as one part, and reports it as missing when the server cannot answer. Either way the offer is produced by the game —
+into a `TradeSet` per profession and level. A 1.21.1 client rolls the listings itself (the
+`multiplayer-nomod` e2e scenario on that version asserts that a page of offers comes back without the
+server mod); a 26.x client holds neither the sets nor the level that rolls them, so that version
+answers the page by fetching `server_trades_query` as one part, and reports it as missing when the
+server cannot answer. Either way the offer is produced by the game —
 `ItemListing.getOffer` against a detached villager, or `VillagerTrade.getOffer` against the same loot
 context a villager builds — so price and enchantment randomness land the way the game applies them. A
 listing holding a villager-type map is expanded per type (a biome wrapper is unwrapped first, so the
@@ -964,11 +966,11 @@ node e2e/run.mjs --extra-mods ~/my-mods # local only
   contract. This document therefore does not claim that every `SERVER_DATA` kind is unreadable on a
   client connected to a server without McInsight; it states the routing rule and the codes each
   collector actually throws (section 2.2).
-- Whether a 1.21.1 client can roll the villager trade listings itself is not verified here. The
-  endpoint's local path is written as if it can (it creates a detached villager on the client level
-  and lets the game's own listing produce the offer), and the `multiplayer-nomod` scenario on that
-  version is where the claim is observed. If it cannot, the correct shape is a `SERVER_DATA`
-  `trades_query` on every version, not a composite.
+- Whether a 1.21.1 client can roll the villager trade listings itself is observed by the
+  `multiplayer-nomod` scenario (section 12), not by reading the code: it creates a detached villager
+  on the client level and lets the game's own listing produce the offer, and the scenario asserts a
+  page of offers comes back without the server mod. Whether every offer matches what the owner's
+  server would roll is not compared; the scenario checks the local path produces offers at all.
 - There is no compatibility shim for the older response shapes. This is a beta-stage breaking change:
   endpoints, parameters, page fields, error codes, and viewer metadata changed together, and old
   clients/tools must be updated rather than tolerated.
