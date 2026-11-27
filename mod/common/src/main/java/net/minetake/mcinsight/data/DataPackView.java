@@ -82,25 +82,26 @@ public final class DataPackView {
                     GameAccess.getRegistryAccess(executor)
                 ), 10_000);
             } catch (Exception e) {
-                throw MainThreadExecutor.unwrapInsightException(e, InsightError.INTERNAL_ERROR);
+                throw MainThreadExecutor.unwrapInsightException(e, InsightError.DATA_UNAVAILABLE);
             }
         });
     }
 
     /**
-     * Rejects a request whose data only the world owner holds.
+     * Rejects a request whose definitions this session cannot read.
      *
-     * <p>Called by handlers behind the dispatcher's server-data route; reaching it without a view
-     * means the client is connected to a server that cannot answer, which is a distinct condition
-     * from "this pack has no such file".
+     * <p>A view without registries and without datapack resources means the session holds neither
+     * copy — no world is loaded, or the loader exposes neither — so the data is unavailable here.
+     * That is not the same condition as "the connected server does not run McInsight", which the
+     * bridge reports as {@link InsightError#SERVER_MOD_REQUIRED}.
      */
     public void requireAvailable() {
         if (registries != null || dataResources != null) {
             return;
         }
         throw new InsightException(
-            InsightError.SERVER_MOD_REQUIRED,
-            "This data lives on the server and the connected server does not run McInsight."
+            InsightError.DATA_UNAVAILABLE,
+            "This session has no registry or datapack view, so the requested data cannot be read here."
         );
     }
 
