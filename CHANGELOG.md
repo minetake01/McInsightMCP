@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bundled production `node_modules/` in release MCP server archives (`mcinsight-mcp-server-*`) for offline execution and deduplicated `sync-modrinth-metadata` in the release workflow.
 
 ### Changed & Security
+- Registry reads, viewer cache invalidation, and block-entity enumeration each go through one path: every collector reads the same session snapshot (a session with no view is re-probed rather than cached), the three viewer adapters share one cache epoch, and a block-entity scan applies one filter and one cap whether the integrated server or the bridge answers it.
 - Hardened mod and MCP HTTP servers (loopback `Host`, `Origin`, and `Sec-Fetch-Site` validation on mod endpoints and MCP `/mcp` & `/health`, constant-time bearer comparison, packet-bridge exposure restricted to `SERVER_DATA` endpoints, per-player concurrency limits, and disconnect cleanup).
 - Fixed atomic `GenerationalCache` entry updates, active reload purging via `CacheGenerations`, render-thread cancellation & GPU readback buffer leaks, integrated-server dimension detection, and Vineflower ZIP extraction containment / `realpath` boundary checks.
 - Removed `modsDir`/`gameDir` parameters from `mc_inspect_code` (startup `--mods-dir`/`--game-dir` flags or live mod discovery only) and pruned redundant generic machine recipe parsers so only non-obvious custom formats (`create:sequenced_assembly`, `ae2:inscriber`, `ars_nouveau:imbuement`, `ars_nouveau:enchanting_apparatus`) are pre-parsed.
