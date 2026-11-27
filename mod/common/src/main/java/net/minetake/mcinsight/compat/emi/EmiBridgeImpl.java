@@ -27,6 +27,7 @@ import net.minetake.mcinsight.compat.IRecipePainter;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
 import net.minetake.mcinsight.compat.RecipeGraphics;
 import net.minetake.mcinsight.compat.TagNamer;
+import net.minetake.mcinsight.compat.ViewerCache;
 import net.minetake.mcinsight.compat.ViewerModel;
 import net.minetake.mcinsight.game.Versioned;
 import net.minetake.mcinsight.serial.JsonCodec;
@@ -45,7 +46,7 @@ public final class EmiBridgeImpl implements IRecipeViewerBridge {
 
     private static volatile List<Field> infoTextFields;
 
-    private volatile long cachedGeneration = Long.MIN_VALUE;
+    private final ViewerCache cache = new ViewerCache();
     private volatile List<ViewerModel.Category> cachedCategories;
     private final ConcurrentHashMap<String, EmiRecipeCategory> categoriesByUid = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, List<ViewerModel.Ingredient>> cachedWorkstations =
@@ -68,7 +69,11 @@ public final class EmiBridgeImpl implements IRecipeViewerBridge {
 
     @Override
     public synchronized void invalidateCache() {
-        cachedGeneration = CacheGenerations.combined();
+        cache.reset();
+        clearCaches();
+    }
+
+    private void clearCaches() {
         cachedCategories = null;
         categoriesByUid.clear();
         cachedWorkstations.clear();
@@ -76,8 +81,8 @@ public final class EmiBridgeImpl implements IRecipeViewerBridge {
     }
 
     private void ensureFreshCache() {
-        if (cachedGeneration != CacheGenerations.combined()) {
-            invalidateCache();
+        if (cache.stale()) {
+            clearCaches();
         }
     }
 

@@ -26,6 +26,7 @@ import net.minetake.mcinsight.client.ClientStateAccessor;
 import net.minetake.mcinsight.compat.IRecipePainter;
 import net.minetake.mcinsight.compat.IRecipeViewerBridge;
 import net.minetake.mcinsight.compat.TagNamer;
+import net.minetake.mcinsight.compat.ViewerCache;
 import net.minetake.mcinsight.compat.ViewerModel;
 import net.minetake.mcinsight.game.Versioned;
 import net.minetake.mcinsight.serial.JsonCodec;
@@ -41,7 +42,7 @@ public final class ReiBridgeImpl implements IRecipeViewerBridge {
 
     private static final ConcurrentHashMap<Class<?>, Optional<Method>> AMOUNT_METHODS = new ConcurrentHashMap<>();
 
-    private volatile long cachedGeneration = Long.MIN_VALUE;
+    private final ViewerCache cache = new ViewerCache();
     private volatile List<ViewerModel.Category> cachedCategories;
     private final ConcurrentHashMap<String, CategoryRegistry.CategoryConfiguration<?>> categoriesByUid =
         new ConcurrentHashMap<>();
@@ -65,7 +66,11 @@ public final class ReiBridgeImpl implements IRecipeViewerBridge {
 
     @Override
     public synchronized void invalidateCache() {
-        cachedGeneration = CacheGenerations.combined();
+        cache.reset();
+        clearCaches();
+    }
+
+    private void clearCaches() {
         cachedCategories = null;
         categoriesByUid.clear();
         cachedWorkstations.clear();
@@ -73,8 +78,8 @@ public final class ReiBridgeImpl implements IRecipeViewerBridge {
     }
 
     private void ensureFreshCache() {
-        if (cachedGeneration != CacheGenerations.combined()) {
-            invalidateCache();
+        if (cache.stale()) {
+            clearCaches();
         }
     }
 
