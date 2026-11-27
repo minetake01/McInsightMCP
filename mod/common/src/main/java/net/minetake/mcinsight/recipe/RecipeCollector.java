@@ -13,12 +13,15 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import net.minetake.mcinsight.api.InsightDispatcher;
+import net.minetake.mcinsight.api.InsightEndpoint;
 import net.minetake.mcinsight.api.InsightError;
 import net.minetake.mcinsight.api.InsightException;
 import net.minetake.mcinsight.api.ItemFilter;
 import net.minetake.mcinsight.api.ItemQuery;
 import net.minetake.mcinsight.api.Page;
 import net.minetake.mcinsight.api.Params;
+import net.minetake.mcinsight.api.PartialData;
 import net.minetake.mcinsight.api.RequestContext;
 import net.minetake.mcinsight.cache.CacheGenerations;
 import net.minetake.mcinsight.cache.GenerationalCache;
@@ -83,9 +86,11 @@ public final class RecipeCollector {
         final String recipeIdStr;
         final String recipeTypeStr;
         final String recipeTypeLower;
+        /** The namespace of the recipe's own id, which is what a row's {@code modId} names. */
         final String modId;
         final String modIdLower;
-        final String idNamespaceLower;
+        /** The recipe type's namespace; only the {@code mod} filter reads it. */
+        final String typeNamespaceLower;
         final String serializerStr;
         final String recipeClass;
         final Recipe<?> recipe;
@@ -102,7 +107,7 @@ public final class RecipeCollector {
         IndexedRecipe(
             ResourceLocation id,
             String recipeTypeStr,
-            String modId,
+            String typeNamespace,
             String serializerStr,
             Recipe<?> recipe,
             String recipeClass,
@@ -119,9 +124,9 @@ public final class RecipeCollector {
             this.recipeIdStr = id.toString();
             this.recipeTypeStr = recipeTypeStr;
             this.recipeTypeLower = recipeTypeStr.toLowerCase(Locale.ROOT);
-            this.modId = modId;
-            this.modIdLower = modId.toLowerCase(Locale.ROOT);
-            this.idNamespaceLower = id.getNamespace().toLowerCase(Locale.ROOT);
+            this.modId = id.getNamespace();
+            this.modIdLower = this.modId.toLowerCase(Locale.ROOT);
+            this.typeNamespaceLower = typeNamespace.toLowerCase(Locale.ROOT);
             this.serializerStr = serializerStr;
             this.recipeClass = recipeClass;
             this.recipe = recipe;
@@ -166,12 +171,8 @@ public final class RecipeCollector {
                 return null;
             }
             return encodedJson.computeIfAbsent(rec.id, id -> {
-                try {
-                    return Versioned.recipeCodec().encodeStart(jsonOps, rec.recipe).result();
-                } catch (Exception ignored) {
-                    // Falls back to a reflective snapshot at the call site.
-                    return Optional.empty();
-                }
+                // A recipe the codec cannot encode is cached as empty, so it is not retried per request.
+                return Optional.ofNullable(RecipeEncoding.encode(rec.recipe, jsonOps));
             }).orElse(null);
         }
 
@@ -182,33 +183,41 @@ public final class RecipeCollector {
 
     public static JsonObject listTypes(RequestContext ctx, Params params) throws Exception {
         RecipeIndex index = INDEX.get(() -> buildIndex(ctx.executor()));
+        PartialData partial = new PartialData();
         JsonObject out = new JsonObject();
         out.addProperty("ok", true);
-        if (index != null) {
-            out.addProperty("recipeManagerAvailable", true);
-            out.add("recipeTypes", index.recipeTypesArray.deepCopy());
-        } else if (net.minetake.mcinsight.data.ServerSync.isAvailable()) {
-            JsonObject remote = net.minetake.mcinsight.data.ServerSync.request(
-                net.minetake.mcinsight.api.InsightEndpoint.SERVER_RECIPES_TYPES,
-                Params.EMPTY
-            );
-            out.addProperty(
-                "recipeManagerAvailable",
-                remote.has("recipeManagerAvailable") && remote.get("recipeManagerAvailable").getAsBoolean()
-            );
-            out.add("recipeTypes", remote.has("recipeTypes") ? remote.getAsJsonArray("recipeTypes") : new JsonArray());
-        } else {
-            out.addProperty("recipeManagerAvailable", false);
-            out.add("recipeTypes", new JsonArray());
+        boolean recipeManagerAvailable = index != null;
+        JsonArray recipeTypes = index != null ? index.recipeTypesArray.deepCopy() : new JsonArray();
+        if (index == null) {
+            // The manager belongs to the world owner wherever this client lacks it, so the types
+            // travel as one server part; a viewer-only answer reports that part as missing.
+            JsonObject remote = InsightDispatcher.parts(ctx)
+                .fetch(InsightEndpoint.SERVER_RECIPES_TYPES, Params.EMPTY, partial);
+            if (remote != null) {
+                recipeManagerAvailable =
+                    remote.has("recipeManagerAvailable") && remote.get("recipeManagerAvailable").getAsBoolean();
+                if (remote.has("recipeTypes") && remote.get("recipeTypes").isJsonArray()) {
+                    recipeTypes = remote.getAsJsonArray("recipeTypes");
+                }
+            }
         }
 
         List<IRecipeViewerBridge> bridges = ViewerRegistry.active();
+        if (!recipeManagerAvailable && bridges.isEmpty()) {
+            throw new InsightException(
+                InsightError.DATA_UNAVAILABLE,
+                "Neither the recipe manager nor any recipe viewer integration is available."
+            );
+        }
+        out.addProperty("recipeManagerAvailable", recipeManagerAvailable);
+        out.add("recipeTypes", recipeTypes);
         JsonArray activeViewers = new JsonArray();
         for (IRecipeViewerBridge bridge : bridges) {
             activeViewers.add(bridge.viewerName());
         }
         out.add("activeViewers", activeViewers);
         out.add("viewers", ViewerQuery.categories(bridges));
+        partial.applyTo(out);
         return out;
     }
 
@@ -226,7 +235,7 @@ public final class RecipeCollector {
         if (index == null) {
             throw new InsightException(InsightError.DATA_UNAVAILABLE, "The server recipe manager is not available.");
         }
-        int limit = net.minetake.mcinsight.api.InsightEndpoint.SERVER_RECIPES_QUERY.limit(params);
+        int limit = InsightEndpoint.SERVER_RECIPES_QUERY.limit(params);
         int offset = params.offset();
         ViewerQuery.RoleScope role = ViewerQuery.RoleScope.parse(params.string("role"));
         ItemFilter item = ItemFilter.of(ItemQuery.optional(params.string("item")));
@@ -247,7 +256,7 @@ public final class RecipeCollector {
         String source = params.stringOr("source", "all").toLowerCase(Locale.ROOT);
         boolean wantVanilla = "all".equals(source) || "vanilla".equals(source);
         boolean wantViewers = !"vanilla".equals(source);
-        int limit = net.minetake.mcinsight.api.InsightEndpoint.RECIPES_QUERY.limit(params);
+        int limit = InsightEndpoint.RECIPES_QUERY.limit(params);
         int offset = params.offset();
         ViewerQuery.RoleScope role = ViewerQuery.RoleScope.parse(params.string("role"));
         ItemFilter item = ItemFilter.of(ItemQuery.optional(params.string("item")));
@@ -258,15 +267,15 @@ public final class RecipeCollector {
 
         JsonObject out = new JsonObject();
         out.addProperty("ok", true);
+        PartialData partial = new PartialData();
 
         RecipeIndex index = wantVanilla ? INDEX.get(() -> buildIndex(ctx.executor())) : null;
         JsonObject remoteVanilla = null;
-        if (wantVanilla && index == null && net.minetake.mcinsight.data.ServerSync.isAvailable()) {
-            JsonObject remote = net.minetake.mcinsight.data.ServerSync.request(
-                net.minetake.mcinsight.api.InsightEndpoint.SERVER_RECIPES_QUERY,
-                params
-            );
-            if (remote.has("vanilla") && remote.get("vanilla").isJsonObject()) {
+        if (wantVanilla && index == null) {
+            // This version's client holds no manager, so the manager's half is one server part.
+            JsonObject remote = InsightDispatcher.parts(ctx)
+                .fetch(InsightEndpoint.SERVER_RECIPES_QUERY, params, partial);
+            if (remote != null && remote.has("vanilla") && remote.get("vanilla").isJsonObject()) {
                 remoteVanilla = remote.getAsJsonObject("vanilla");
             }
         }
@@ -296,6 +305,7 @@ public final class RecipeCollector {
         if (!bridges.isEmpty()) {
             out.add("viewers", ViewerQuery.page(bridges, item, role, type, modId, action, limit, offset));
         }
+        partial.applyTo(out);
         return out;
     }
 
@@ -315,7 +325,10 @@ public final class RecipeCollector {
                 );
             }, 10000);
         } catch (Exception e) {
-            throw new InsightException(InsightError.INTERNAL_ERROR, e.getMessage());
+            throw new InsightException(
+                InsightError.DATA_UNAVAILABLE,
+                "The recipe manager did not answer: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName())
+            );
         }
         if (bootstrap == null) {
             return null;
@@ -333,7 +346,7 @@ public final class RecipeCollector {
             Recipe<?> recipe = holder.value();
             ResourceLocation typeRl = BuiltInRegistries.RECIPE_TYPE.getKey(recipe.getType());
             String typeStr = typeRl != null ? typeRl.toString() : recipe.getType().toString();
-            String recipeMod = typeRl != null ? typeRl.getNamespace() : Versioned.recipeId(holder).getNamespace();
+            String typeNamespace = typeRl != null ? typeRl.getNamespace() : Versioned.recipeId(holder).getNamespace();
             counts.merge(typeStr, 1, Integer::sum);
 
             ResourceLocation serRl = BuiltInRegistries.RECIPE_SERIALIZER.getKey(recipe.getSerializer());
@@ -380,7 +393,7 @@ public final class RecipeCollector {
             IndexedRecipe rec = new IndexedRecipe(
                 Versioned.recipeId(holder),
                 typeStr,
-                recipeMod,
+                typeNamespace,
                 serStr,
                 recipe,
                 recipe.getClass().getName(),
@@ -425,8 +438,9 @@ public final class RecipeCollector {
         index.allRecipes.add(rec);
         index.byType.computeIfAbsent(rec.recipeTypeLower, k -> new ArrayList<>()).add(rec);
         index.byMod.computeIfAbsent(rec.modIdLower, k -> new ArrayList<>()).add(rec);
-        if (!rec.idNamespaceLower.equals(rec.modIdLower)) {
-            index.byMod.computeIfAbsent(rec.idNamespaceLower, k -> new ArrayList<>()).add(rec);
+        if (!rec.typeNamespaceLower.equals(rec.modIdLower)) {
+            // A mod filter matches the recipe id's namespace or the recipe type's namespace.
+            index.byMod.computeIfAbsent(rec.typeNamespaceLower, k -> new ArrayList<>()).add(rec);
         }
         if (rec.resultItemIdLower != null) {
             index.byOutputItemId.computeIfAbsent(rec.resultItemIdLower, k -> new ArrayList<>()).add(rec);
@@ -634,7 +648,7 @@ public final class RecipeCollector {
             if (!normType.isEmpty() && !rec.recipeTypeLower.equals(normType)) {
                 continue;
             }
-            if (!normMod.isEmpty() && !rec.modIdLower.equals(normMod) && !rec.idNamespaceLower.equals(normMod)) {
+            if (!normMod.isEmpty() && !rec.modIdLower.equals(normMod) && !rec.typeNamespaceLower.equals(normMod)) {
                 continue;
             }
             if (item != null && !matches(index, rec, item, scope)) {
