@@ -346,7 +346,7 @@ export interface RecipesRenderResponse {
  * Guides
  * ------------------------------------------------------------------------- */
 
-export type GuideSource = 'patchouli' | 'guideme' | 'ftbquests' | 'ponder' | 'oracle' | 'lang';
+export type GuideSource = 'patchouli' | 'guideme' | 'ftbquests' | 'oracle' | 'lang';
 
 export interface GuideRow {
   id: string;

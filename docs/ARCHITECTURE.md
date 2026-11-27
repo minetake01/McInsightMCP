@@ -552,7 +552,7 @@ gets `SERVER_MOD_REQUIRED` rather than a definitions-only page that would read a
 completed". Recipe-unlock advancements under `recipes/` are excluded unless `includeRecipes=true`.
 
 **`guides_list` / `guides_search` / `guides_page`** — sources are `patchouli`, `guideme`,
-`ftbquests`, `ponder`, `oracle`, `lang`; `source=all` is the default and an unknown value is
+`ftbquests`, `oracle`, `lang`; `source=all` is the default and an unknown value is
 `INVALID_SOURCE`. Rows carry `id`, `source`, `modId`, `path`; a language hit adds `lang`, `key`, and a
 `snippet`, while a document hit adds a `snippet` taken around the match (or its path when only the id
 matched). Search requires `q` (`INVALID_QUERY` when absent or blank), defaults to the active client
@@ -758,7 +758,7 @@ The 12 tools (names unchanged):
 | `mc_render_recipe` | Draw recipes matching an exact `item` or `recipeId`, as the viewer draws them, returning one MCP image block per recipe beside the same JSON text envelope |
 | `mc_query_world_data` | Worldgen kinds (including `structure_set`, `level_stem`, and biome temperature filters), loot, trades, and NeoForge data maps |
 | `mc_query_advancements` | Advancement definitions, triggers, rewards, and live progress when the world owner allows it |
-| `mc_guides` | Search, list, or read Patchouli/GuideME/FTB Quests/Ponder/Oracle/lang documents |
+| `mc_guides` | Search, list, or read Patchouli/GuideME/FTB Quests/Oracle/lang documents |
 | `mc_inspect_code` | ID tracing, JAR/pack-script search, resource or pack-script/config reading (with line slicing), decompilation (with line slicing), and JVM class reflection |
 
 Tool arguments are MCP-facing names (`query`, `modId`, `target`, `direction`, …); each data module maps

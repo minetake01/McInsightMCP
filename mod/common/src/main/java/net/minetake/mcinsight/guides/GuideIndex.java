@@ -32,10 +32,11 @@ import net.minecraft.server.packs.resources.ResourceManager;
 /**
  * The cached index of every guide-like document a pack ships.
  *
- * <p>Patchouli books, GuideME pages, FTB Quests chapters, Create Ponder entries, Oracle Index books,
- * and language files are indexed once here and keyed by a lowercase id, so listing, searching, and
- * reading agree about what an id is. Text is read lazily and cached per entry; the whole index is
- * rebuilt when the resource generation changes.
+ * <p>Patchouli books, GuideME pages, FTB Quests chapters, Oracle Index books, and language files are
+ * indexed once here and keyed by a lowercase id, so listing, searching, and reading agree about what
+ * an id is. Text is read lazily and cached per entry; the whole index is rebuilt when the resource
+ * generation changes. Create's Ponder scenes are not indexable this way: they are registered in code,
+ * and the only resource a pack ships for them is the structure NBT, so there is no page to read.
  */
 public final class GuideIndex {
 
@@ -207,14 +208,12 @@ public final class GuideIndex {
             scanPrefix(session.assets(), Layout.ASSET, "ae2guide", "guideme", guides);
             scanPrefix(session.assets(), Layout.ASSET, "guides", "guideme", guides);
             scanPrefix(session.assets(), Layout.ASSET, "books", "oracle", guides);
-            scanPrefix(session.assets(), Layout.ASSET, "ponder", "ponder", guides);
         }
         if (session.data() != null) {
             scanPrefix(session.data(), Layout.DATA, "patchouli_books", "patchouli", guides);
             scanPrefix(session.data(), Layout.DATA, "ae2guide", "guideme", guides);
             scanPrefix(session.data(), Layout.DATA, "guides", "guideme", guides);
             scanPrefix(session.data(), Layout.DATA, "books", "oracle", guides);
-            scanPrefix(session.data(), Layout.DATA, "ponder", "ponder", guides);
         }
         scanQuests(questsDirectory, guides);
 

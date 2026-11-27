@@ -17,7 +17,7 @@ const GUIDES_SCHEMA = z.object({
   query: z.string().optional().describe('Search keyword (required when action=search)'),
   guideId: z.string().optional().describe('Guide ID from action=search or action=list (required when action=read)'),
   source: z
-    .enum(['all', 'patchouli', 'guideme', 'ftbquests', 'ponder', 'oracle', 'lang'])
+    .enum(['all', 'patchouli', 'guideme', 'ftbquests', 'oracle', 'lang'])
     .optional()
     .default('all')
     .describe('Filter by documentation source (action=search or action=list)'),
@@ -47,7 +47,7 @@ export function registerGuideTools(server: McpServer, mcClient: McHttpClient): v
     {
       title: 'Search, List & Read Mod Guides, Quests & Lang Docs',
       description:
-        'Search, list, or read in-game documentation from Patchouli books, GuideME pages, FTB Quests chapters, Create Ponder entries, Oracle Index books, and mod lang files.',
+        'Search, list, or read in-game documentation from Patchouli books, GuideME pages, FTB Quests chapters, Oracle Index books, and mod lang files.',
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: GUIDES_SCHEMA,
     },

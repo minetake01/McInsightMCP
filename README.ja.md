@@ -14,7 +14,7 @@ McInsightMCP を使うと、Claude Desktop、Cursor、Claude Code、VS Code な�
 - 「`minecraft:oak_planks` のクラフトレシピを画像で見せて」
 - 「今見ている機械は何のブロックで、なぜ動いていないのか確認して」
 - 「この環境のオスミウム鉱石やプラチナ鉱石はどの高さとバイオームで生成される？」
-- 「Patchouli、FTB Quests、Create Ponder、GuideME からこの素材の自動化方法を調べて」
+- 「Patchouli、FTB Quests、Oracle Index、GuideME からこの素材の自動化方法を調べて」
 - 「Wiki に載っていない MOD アイテムの仕組みを、MOD 本体から読み解いて説明して」
 
 ## 主な特徴
@@ -38,7 +38,7 @@ McInsightMCP を使うと、Claude Desktop、Cursor、Claude Code、VS Code な�
 ### 自動連携するオプション MOD
 
 - レシピビューア: JEI、REI、EMI（EMI は `1.21.1` のみ対応）
-- ゲーム内ガイドとクエスト: Patchouli、GuideME、FTB Quests、Create Ponder、Oracle Index、MOD の言語ファイル
+- ゲーム内ガイドとクエスト: Patchouli、GuideME、FTB Quests、Oracle Index、MOD の言語ファイル
 - レシピの整形出力: すべての MOD のレシピを生データで取得できるほか、Create、Mekanism、Applied Energistics 2、Oritech、Farmer's Delight、Ars Nouveau、TofuCraftReload については構造化して見やすく出力します
 
 ## 導入手順

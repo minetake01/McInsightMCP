@@ -24,7 +24,7 @@ public final class GuideQuery {
 
     /** The guide systems this mod indexes; {@code all} is a filter value, not a source. */
     private static final Set<String> SOURCES = Set.of(
-        "patchouli", "guideme", "ftbquests", "ponder", "oracle", "lang"
+        "patchouli", "guideme", "ftbquests", "oracle", "lang"
     );
 
     private static final int SNIPPET_RADIUS = 240;

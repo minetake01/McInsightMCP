@@ -14,7 +14,7 @@ McInsightMCP connects MCP-compatible AI assistants (Claude Desktop, Cursor, Clau
 - *"Show me the crafting recipe for `minecraft:oak_planks` as a picture."*
 - *"What is this machine I'm looking at, and why isn't it running?"*
 - *"At what Y-level and in which biomes does osmium or platinum ore generate in this pack?"*
-- *"Search Patchouli, FTB Quests, Create Ponder, or GuideME for how to automate this resource."*
+- *"Search Patchouli, FTB Quests, Oracle Index, or GuideME for how to automate this resource."*
 - *"There's no wiki page for this modded item—check the mod itself and explain how it works."*
 
 ## Features
@@ -38,7 +38,7 @@ McInsightMCP connects MCP-compatible AI assistants (Claude Desktop, Cursor, Clau
 ### Optional Integrations (Auto-Detected)
 
 - **Recipe Viewers**: JEI, REI, and EMI (`1.21.1` only)
-- **Guides & Quests**: Patchouli, GuideME, FTB Quests, Create Ponder, Oracle Index, and mod language files
+- **Guides & Quests**: Patchouli, GuideME, FTB Quests, Oracle Index, and mod language files
 - **Enhanced Recipe Formatting**: Works with any modpack via raw recipe data, with dedicated structured formatting for Create, Mekanism, Applied Energistics 2, Oritech, Farmer's Delight, Ars Nouveau, and TofuCraftReload
 
 ## Setup

@@ -1,7 +1,7 @@
 /**
  * The guides data kind.
  *
- * <p>Patchouli, GuideME, FTB Quests, Ponder, Oracle Index, and language entries all answer through
+ * <p>Patchouli, GuideME, FTB Quests, Oracle Index, and language entries all answer through
  * the same three endpoints and the same page shape. This module names that one contract; a tool
  * dispatching on `action` does not need to know which paths exist.
  */
