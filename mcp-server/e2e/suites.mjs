@@ -288,13 +288,26 @@ const SUITES = {
 
   /** Multiplayer without the server mod: server data must fail honestly. */
   async nomod(r, { mcp }) {
+    const version = ok(await mcp.call('mc_status', {}))?.minecraftVersion ?? '';
+    // Up to 1.21.1 the client holds the trade listings and rolls them itself; 26.x keeps both the
+    // trade sets and the server level that rolls them on the world owner.
+    const tradesAreLocal = version.startsWith('1.21');
     for (const [what, args] of [
       ['loot', { kind: 'loot', limit: 5 }],
-      ['trades', { kind: 'trades', limit: 5 }],
       ['worldgen', { kind: 'worldgen_summary' }],
     ]) {
       await r.check(`${what} fails with SERVER_MOD_REQUIRED`, async () => {
         failsWith(await mcp.call('mc_query_world_data', args), 'SERVER_MOD_REQUIRED');
+      });
+    }
+    if (tradesAreLocal) {
+      await r.check('trades are answered locally where the client holds the listings', async () => {
+        const res = page(ok(await mcp.call('mc_query_world_data', { kind: 'trades', limit: 5 })), 'trades');
+        expect(Array.isArray(res.trades), 'trades page missing');
+      });
+    } else {
+      await r.check('trades fail with SERVER_MOD_REQUIRED where only the owner can roll them', async () => {
+        failsWith(await mcp.call('mc_query_world_data', { kind: 'trades', limit: 5 }), 'SERVER_MOD_REQUIRED');
       });
     }
     await r.check('advancements fail with SERVER_MOD_REQUIRED', async () => {
@@ -304,7 +317,12 @@ const SUITES = {
       const res = ok(await mcp.call('mc_query_item_flow', { item: 'minecraft:emerald', direction: 'obtain' }));
       expect(res.partial === true, 'answer is not marked partial');
       const parts = new Map(res.missing.map((m) => [m.part, m.code]));
-      expect(parts.get('loot') === 'SERVER_MOD_REQUIRED' && parts.get('trades') === 'SERVER_MOD_REQUIRED', JSON.stringify(res.missing));
+      expect(parts.get('loot') === 'SERVER_MOD_REQUIRED', JSON.stringify(res.missing));
+      if (tradesAreLocal) {
+        expect(!parts.has('trades'), 'trades are local on this version and must not be missing');
+      } else {
+        expect(parts.get('trades') === 'SERVER_MOD_REQUIRED', JSON.stringify(res.missing));
+      }
       expect(res.recipes !== undefined, 'recipes are client data and must still be answered');
     });
   },
