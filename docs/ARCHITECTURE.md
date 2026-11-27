@@ -56,7 +56,7 @@ Every endpoint declares two scopes:
 
 | Scope | Meaning |
 |---|---|
-| `LOCAL` | Answerable from the client alone (registries, recipes, guides, trades table, player, target). |
+| `LOCAL` | Answerable from the client alone (registries, recipes, guides, player, target). |
 | `SERVER_DATA` | Only the world owner has the data (worldgen definitions, loot tables, data maps, advancement progress). |
 | `COMPOSITE` | Built from local data plus optional server-owned parts; a part that cannot be read is reported, not dropped (`looking_at`, `scan`). |
 
@@ -68,13 +68,19 @@ Every endpoint declares two scopes:
 | `LOCAL` | The player at this client. |
 | `REQUESTER` | The player who issued a bridged request. |
 
-`InsightDispatcher.exposedToRemoteClients(endpoint)` is true when the scope is not `LOCAL` **or** the
-player scope is `REQUESTER`. That predicate is what the packet bridge allowlists, and it is what the
-server advertises in its hello packet; it is a derived rule, not a second hand-maintained list.
+`InsightDispatcher.exposedToRemoteClients(endpoint)` is true exactly when the scope is
+`SERVER_DATA`: a whole endpoint is delegated only when the owner holds all of it. A `COMPOSITE`
+answer never travels as an endpoint; its owner-only fragments travel as the `server_*` parts
+declared for them, and the handler fetches those through `data/ServerParts`. That predicate is what
+the packet bridge allowlists, and it is what the server advertises in its hello packet; it is a
+derived rule, not a second hand-maintained list.
 
 ### 2.2 How server-owned data reaches a client
 
-`InsightDispatcher` is the only place that knows a client may have to ask the owner of the world:
+`InsightDispatcher` is the only place that delegates a whole endpoint to the owner of the world.
+A composite handler does not delegate itself: it asks `data/ServerParts` for the fragment it cannot
+read here, and that one class decides between "the integrated server already is the source",
+"fetch the part over the bridge", and "record the part as missing".
 
 1. If an endpoint is `SERVER_DATA` and this client hosts the world (an integrated server is active),
    the integrated server is authoritative and the handler runs locally.
@@ -82,7 +88,7 @@ server advertises in its hello packet; it is a derived rule, not a second hand-m
    delegated over the packet bridge and the answer is returned as if it had been local.
 3. Otherwise the handler runs against what this client itself holds, and an input it cannot reach is
    reported instead of being papered over. The code paths that do this:
-   - `DataPackView.requireAvailable()` fails `SERVER_MOD_REQUIRED` when the session has neither a
+   - `DataPackView.requireAvailable()` fails `DATA_UNAVAILABLE` when the session has neither a
      registry view nor a data resource manager (for example, no world loaded).
    - `LootTableSource` fails `DATA_UNAVAILABLE` when the loot-table registry is not visible in this
      session or the `LOOT_TABLE` lookup is absent.
@@ -97,8 +103,11 @@ server advertises in its hello packet; it is a derived rule, not a second hand-m
    - Guide list and search answers add a `missing` entry `datapack_guides` (`DATA_UNAVAILABLE`) when
      the session cannot read datapack files, because books shipped as data would otherwise be absent
      without a trace.
-   - Composite parts (`looking_at` block-entity contents, `scan` block-entity contents) add a
-     `missing` entry with `SERVER_MOD_REQUIRED` when no bridge is available.
+   - Composite parts (`looking_at` / `scan` block-entity contents, `recipes_types` and
+     `recipes_query`'s manager half, `player`'s ender chest, and a 26.x `trades_query` page) add a
+     `missing` entry with the part's own code when it cannot be fetched. When a part is the whole
+     answer and nothing else could be read, the request fails with that code instead of returning an
+     empty page.
 
    `InsightDispatcher` delegates only once `ServerSync.isAvailable()` is true (a `hello` carrying the
    same protocol version arrived). Before that point the handler runs locally, which is why the
@@ -223,21 +232,30 @@ declares page bounds.
 | `worldgen_query` | `/api/v1/worldgen/query` | `kind`, `q`, `mod`, `searchContent`, `minTemp`, `maxTemp`, `summaryOnly`, `limit`, `offset` | SERVER_DATA | NONE | 30 / 100 |
 | `loot_query` | `/api/v1/loot/query` | `q`, `item`, `mod`, `includeModifiers`, `limit`, `offset` | SERVER_DATA | NONE | 30 / 100 |
 | `datamaps_query` | `/api/v1/datamaps/query` | `q`, `registry`, `mod`, `includeRaw`, `limit`, `offset` | SERVER_DATA | NONE | 30 / 100 |
-| `trades_query` | `/api/v1/trades/query` | `item`, `q`, `profession`, `mod`, `limit`, `offset` | LOCAL | NONE | 40 / 200 |
+| `trades_query` | `/api/v1/trades/query` | `item`, `side`, `q`, `profession`, `mod`, `limit`, `offset` | COMPOSITE | NONE | 40 / 200 |
 | `advancements_query` | `/api/v1/advancements/query` | `q`, `mod`, `status`, `includeRecipes`, `limit`, `offset` | SERVER_DATA | REQUESTER | 40 / 200 |
 | `introspect_class` | `/api/v1/introspect/class` | `name` | LOCAL | NONE | — |
 
-Two endpoints exist for the bridge only and carry no HTTP path. Both are `SERVER_DATA` and scoped to
-the `REQUESTER`:
+Two kinds of endpoint exist for the bridge only and carry no HTTP path. A whole-answer part is
+`SERVER_DATA` and scoped to the `REQUESTER` where it is player-relative; a fragment part is what a
+composite handler fetches through `data/ServerParts`:
 
 | Id | Parameters | Data scope | Player scope | Purpose |
 |---|---|---|---|---|
 | `server_looking_at_block_entity` | `x`, `y`, `z` | SERVER_DATA | REQUESTER | One block position's block entity contents, for a `looking_at` composite answer |
 | `server_scan_block_entities` | `radius`, `filter` | SERVER_DATA | REQUESTER | Block entity contents around the requesting player, for a `scan` composite answer |
+| `server_recipes_types` | — | SERVER_DATA | NONE | The world owner's recipe type table, for a `recipes_types` answer |
+| `server_recipes_query` | `item`, `role`, `type`, `mod`, `source`, `action`, `limit`, `offset` | SERVER_DATA | NONE | The world owner's vanilla recipe page, for a `recipes_query` answer |
+| `server_player_ender_chest` | — | SERVER_DATA | REQUESTER | The requesting player's ender chest, for a `player` answer |
+| `server_trades_query` | `item`, `side`, `q`, `profession`, `mod`, `limit`, `offset` | SERVER_DATA | NONE | The whole trade page, for a version whose trade tables exist only on the world owner |
 
 `trades_query` accepts both `item` (exact id or `#tag`, matched on either side of the offer) and `q`
-(free text over the materialized offer). `trades_query` is `LOCAL`: offers are materialized from the
-game's own `ItemListing` implementations, which the client also has.
+(free text over the materialized offer), and `side` (`cost` or `result`) narrows which side `item`
+must match. It is `COMPOSITE` because where the trades can be rolled depends on the version: up to
+1.21.1 a client holds the listings itself and answers locally, while 26.x keeps the trade sets and
+the server level that rolls them on the world owner, so that version fetches the whole page as
+`server_trades_query`. A missing page is reported as a missing part, and with nothing readable at
+all the request fails with the part's code.
 
 The caps below are **operator settings, not compiled constants**: `McInsightConfig.loadOrCreate()`
 validates `mcinsight.json` and hands the values to `config/Limits`, and every collector reads its bound
@@ -246,7 +264,7 @@ request). `Limits.apply` clamps each value to its own hard maximum and the colle
 an accessor:
 
 - `InsightEndpoint.effectiveMaxLimit()` caps `recipes_query` at `min(endpoint max 100,
-  Limits.recipeResults())` — i.e. `maxRecipeResults` (default 100, hard max 500) can only lower the
+  Limits.recipeResults())` — i.e. `maxRecipeResults` (default 100, hard max 100) can only lower the
   endpoint ceiling, never raise it above 100.
 - `AreaScanner.maxScanRadius()` is `Limits.scanRadius()` — `maxScanRadius` (default 16, hard max 32).
   A request above it is clamped and answers the clamped `radius`, plus `requestedRadius` and a `missing`
@@ -286,6 +304,7 @@ status is the code's declared status; `HttpServer` looks it up rather than decid
 | `DATA_UNAVAILABLE` | 503 | The requested data is not available in the current session. |
 | `SERVER_MOD_REQUIRED` | 503 | The server does not run McInsight, so server-side data cannot be read. |
 | `VIEWER_UNAVAILABLE` | 503 | The requested recipe viewer is not active. |
+| `VIEWER_CANNOT_RENDER` | 503 | The viewer is active but cannot draw this version's recipes. |
 | `REMOTE_ERROR` | 502 | The server failed to answer a bridged request. |
 | `REMOTE_TIMEOUT` | 504 | The server did not answer in time. |
 | `INTERNAL_ERROR` | 500 | Unexpected failure. |
@@ -387,16 +406,19 @@ with `includeMods=true`.
 optional `jarPath` (nested Jar-in-Jar paths included).
 
 **`metrics`** — `serverTick` (`sampleTicks`, `avgMspt`, `p95Mspt`, `maxMspt`, `estimatedTps`) when a
-server is active, and `endpoints` keyed by path with `count`, `cacheHits`, `avgTotalUs`,
-`maxTotalUs`, `avgMainThreadUs`, `maxMainThreadUs`.
+server is active, and `endpoints` keyed by endpoint id. Each endpoint holds `http` and/or `bridge`,
+each with `count`, `cacheHits`, `avgTotalUs`, `maxTotalUs`, `avgMainThreadUs`, `maxMainThreadUs`;
+the transport is a separate axis so the same endpoint over each path stays comparable.
 
 **`player`** — identity, `dimension`, `biome`, `environment` (`biomeBaseTemperature`, `canSeeSky`,
 `skyLight`, `blockLight`, `precipitation`), `pos`, `blockPos`, `rotation`, vitals
 (`health`/`maxHealth`/`absorptionAmount`/`foodLevel`/`saturation`/`airSupply`/`maxAirSupply`/
 `xpLevel`/`experienceProgress`), `gameMode` where known, `isCreative`, `isSpectator`, optional
-`vehicle`, `effects[]`, `mainHand`, `offHand`, `armor`, `selectedHotbarSlot`, `inventory[]` (non-empty
-main-inventory slots with their slot index), and `openScreen` with `containerSlots` when a container
-screen is open. A missing player is `NO_WORLD`.
+`vehicle`, `effects[]`, `mainHand`, `offHand`, `armor`, `attributes[]`, `selectedHotbarSlot`, `inventory[]` (non-empty
+main-inventory slots with their slot index), `enderChest` (`size`, non-empty `items`) when the world
+owner can read it, and `openScreen` with `containerSlots` when a container screen is open. A missing
+player is `NO_WORLD`. The ender chest is a composite part: when it cannot be read, the answer is
+returned without it and a `missing` entry names it.
 
 **`looking_at`** — `hitType` is `miss`, `block`, or `entity`, plus `maxDistance` and `dimension`. A
 block answer adds the block's `id`, `modId`, `displayName`, `blockClass`, `pos`, `properties`, `fluid`
@@ -444,8 +466,10 @@ type's namespace or the recipe id's namespace. The answer carries `vanilla` when
 was asked and `viewers` keyed by viewer name when at least one viewer answered. Each is the page shape
 with key `recipes`; viewer pages are uncounted (`totalKnown: false`). Catalysts and workstations exist
 only in viewers, so for those roles `vanilla` is an empty counted page. `source=vanilla` with no recipe
-manager is `DATA_UNAVAILABLE`; so is `source=all` when neither the recipe manager nor any viewer can
-answer.
+manager is `DATA_UNAVAILABLE`. When the manager's half cannot be read but a viewer answered, `vanilla`
+is omitted and the answer is `partial` with a `missing` entry naming `server_recipes_query`; only when
+nothing at all could be read does the request fail, and an empty `recipes` page always means "no
+recipe matched", never "the manager was unavailable".
 
 Viewer recipes use the shared model: `viewer`, `categoryUid`, optional `categoryTitle`/`modId`/
 `recipeId`/`sourceRecipeIds`/`recipeClass`, `action`, `slotGranularity: "slots" | "flat"`,
@@ -499,7 +523,10 @@ row is `viewer`, `categoryUid`, optional `categoryTitle`/`recipeId`, `width`/`he
 and `png` (base64 PNG bytes). `width`/`height` are the layout size; the image is
 `width*scale` by `height*scale`. A category the viewer cannot paint is a `missing` entry, and when
 nothing at all could be drawn the first failure is returned as the response error — an empty
-`images` page must mean "no recipe matched", never "rendering is broken".
+`images` page must mean "no recipe matched", never "rendering is broken". A viewer that is active but
+cannot draw this version's recipes is `VIEWER_CANNOT_RENDER`, distinct from `VIEWER_UNAVAILABLE`
+(nothing is active), because the caller's next move differs: choose another viewer or ask for text,
+versus enable a viewer.
 
 The image is produced without reading the player's screen. On `1.21.x` the GUI is drawn immediately,
 so the viewer paints into a dedicated off-screen target and only that target's colour texture is
@@ -557,7 +584,9 @@ neither `q` nor `item` is set, or when the definition holds at most 100 values.
 
 **`trades_query`** — offers come from the version's own trade system: up to 1.21.1 each profession
 holds a table of `ItemListing` objects, and from 26.1 the trades are named registry entries grouped
-into a `TradeSet` per profession and level. Either way the offer is produced by the game —
+into a `TradeSet` per profession and level. A 1.21.1 client rolls the listings itself; a 26.x client
+holds neither the sets nor the level that rolls them, so that version answers the page by fetching
+`server_trades_query` as one part, and reports it as missing when the server cannot answer. Either way the offer is produced by the game —
 `ItemListing.getOffer` against a detached villager, or `VillagerTrade.getOffer` against the same loot
 context a villager builds — so price and enchantment randomness land the way the game applies them. A
 listing holding a villager-type map is expanded per type (a biome wrapper is unwrapped first, so the
@@ -612,6 +641,9 @@ JEI, EMI, and REI are adapters over `ViewerModel`:
 - The model states what a viewer cannot express: `slotGranularity` is `slots` when the viewer keeps
   slot boundaries and `flat` when it only supplies ingredient lists (JEI's rendering path can do the
   latter), so a caller compares structure explicitly instead of inferring it from the viewer name.
+- `amount` has one meaning for every adapter: the number of that stack the slot requires. A viewer's
+  own reported amount wins; otherwise the stack's count answers; a slot whose amount is unknown omits
+  the field rather than guessing (`ViewerModel.amount`).
 - `ViewerRegistry` holds the adapters and knows no viewer names; adapters announce theirs. The status
   endpoint and `recipes/types` enumerate whatever registered.
 - An adapter is compiled only into the versions whose build pins its dependency: EMI has no `26.x`
@@ -713,29 +745,28 @@ Payloads (`mcinsight:hello`, `mcinsight:request`, `mcinsight:response`):
 - **Request metrics** — `metrics/PerfMetrics` counts per endpoint: request count, cache hits, average
   and maximum total time, and average and maximum main-thread time. It reads
   `MinecraftServer.getTickTimesNanos()` on demand for MSPT/TPS; it does not register per-tick
-  listeners. A trace is opened and closed by the loopback HTTP transport, so the per-endpoint
-  `count`/`avgTotalUs` figures describe HTTP traffic; main-thread time is attributed to the active
-  trace on the calling thread, and a bridged request opened from `ServerPacketHandler`'s worker
-  currently has no trace of its own.
+  listeners. Both transports open and close a trace, and the trace names the endpoint the request
+  resolved to, so `count`/`avgTotalUs` are keyed by endpoint id and split into `http` and `bridge`;
+  main-thread time is attributed to the active trace on the calling thread.
 
 ---
 
 ## 9. MCP Server (`mcp-server/`)
 
-The server is a Node.js (>= 20) TypeScript MCP server implementing spec `2026-07-28` over stateless
+The server is a Node.js (>= 22.12, declared by `mcp-server/package.json`) TypeScript MCP server implementing spec `2026-07-28` over stateless
 Streamable HTTP or stdio.
 
 Package map:
 
 ```text
 mcp-server/src/
-├── api/            # Contract mirror: ENDPOINTS, error codes, result envelope/types, wire types
+├── api/            # Contract mirror: ENDPOINTS, error codes, the page envelope, result types
 ├── data/           # One module per data kind (worldState, registry, recipes, loot, worldgen,
-│                   #   datamaps, trades, advancements, guides)
+│                   #   datamaps, trades, advancements, guides, code)
 ├── parsers/        # nativeParsers, modParsers/, shared/, retention.ts, modVersion.ts
 ├── jar/ bytecode/ decompiler/ metadata/   # Primary evidence: JAR/JiJ, bytecode, decompile, metadata
 ├── client/         # McHttpClient (discovery, typed errors, metadata cache)
-├── tools/          # The 11 agent-facing tools
+├── tools/          # The 12 agent-facing tools
 ├── transports/     # Streamable HTTP and stdio
 ├── server.ts       # Server assembly (version read from package.json via version.ts)
 ├── version.ts      # The package version, read where it is declared
@@ -816,7 +847,7 @@ drawn. A client that does not render images therefore loses nothing but the pict
 | `authToken` | `""` | Required Bearer token when non-empty |
 | `maxScanRadius` | `16` | Scan radius cap; hard maximum `32` (`HARD_MAX_SCAN_RADIUS`) |
 | `maxSyncBlockRadius` | `16` | Block-entity sync radius cap over the bridge; hard maximum `16` (`HARD_MAX_SYNC_BLOCK_RADIUS`) |
-| `maxRecipeResults` | `100` | Lowers `recipes_query`'s effective page ceiling; hard maximum `500` (`HARD_MAX_RECIPE_RESULTS`) |
+| `maxRecipeResults` | `100` | Lowers `recipes_query`'s effective page ceiling; hard maximum `100` (`HARD_MAX_RECIPE_RESULTS`) |
 | `maxRecipeAlternatives` | `32` | Alternatives a recipe slot may list before it is reported as a count and a sample; hard maximum `256` (`HARD_MAX_RECIPE_ALTERNATIVES`) |
 
 The four caps are resolved once in `config/Limits` and read through accessors
@@ -837,7 +868,10 @@ MCP server flags and environment variables: `--stdio`/`--http`, `--port`/`MCP_PO
 ## 11. Benchmark Harness (`bench/`)
 
 - `setup-perf-env.mjs` generates a synthetic perf datapack (5000 recipes, 150 loot tables), 80 FTB
-  Quests chapters, and 60 fixture JARs under `mod/neoforge/runs/client` / `bench/fixtures/mods`.
+  Quests chapters, and 60 fixture JARs. The game directory is the base version's node
+  (`mod/neoforge/versions/<version>/runs/client`, chosen by `MCINSIGHT_MC_VERSION` or the first
+  `minecraft_versions` entry, whose pack format the datapack is written in); fixture JARs go to
+  `bench/fixtures/mods`.
 - `run-perf-bench.mjs` measures per-endpoint cold and warm latency plus main-thread microseconds from
   the diagnostic headers, a parallel stress pass (concurrency 8, 160 requests), and MCP-server E2E
   latency plus JAR-index and port-discovery timings. The measurement approach is unchanged from one
@@ -930,6 +964,11 @@ node e2e/run.mjs --extra-mods ~/my-mods # local only
   contract. This document therefore does not claim that every `SERVER_DATA` kind is unreadable on a
   client connected to a server without McInsight; it states the routing rule and the codes each
   collector actually throws (section 2.2).
+- Whether a 1.21.1 client can roll the villager trade listings itself is not verified here. The
+  endpoint's local path is written as if it can (it creates a detached villager on the client level
+  and lets the game's own listing produce the offer), and the `multiplayer-nomod` scenario on that
+  version is where the claim is observed. If it cannot, the correct shape is a `SERVER_DATA`
+  `trades_query` on every version, not a composite.
 - There is no compatibility shim for the older response shapes. This is a beta-stage breaking change:
   endpoints, parameters, page fields, error codes, and viewer metadata changed together, and old
   clients/tools must be updated rather than tolerated.
